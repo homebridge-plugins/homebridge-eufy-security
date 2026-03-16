@@ -174,29 +174,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
         errorName: ['bold', 'bgRedBright', 'whiteBright'], // Style for error names
         fileName: ['yellow'], // Style for file names
       },
-      maskValuesOfKeys: [ // Keys whose values should be masked in logs
-        'username',
-        'password',
-        'token',
-        'clientPrivateKey',
-        'private_key',
-        'login_hash',
-        'serverPublicKey',
-        'cloud_token',
-        'refreshToken',
-        'p2p_conn',
-        'app_conn',
-        'address',
-        'latitude',
-        'longitude',
-        'serialnumber',
-        'serialNumber',
-        'stationSerialNumber',
-        'data',
-        'ignoreStations',
-        'ignoreDevices',
-        'pincode',
-      ],
     };
 
     // Modify log options if detailed logging is enabled
