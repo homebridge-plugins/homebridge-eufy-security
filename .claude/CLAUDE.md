@@ -155,7 +155,7 @@ For issue triage, use the `support` skill with an issue number (e.g. `/support 4
 
 - Diagnostics archives are encrypted (RSA-4096 + AES-256-GCM); decrypt with `node scripts/decrypt-diagnostics.mjs <file>.tar.gz.enc`
 - Always check archive completeness before analysis -- missing runtime logs means the plugin wasn't running
-- Check if debug mode is enabled (`enableDetailedLogging`); if disabled, ask the user to enable it and re-export
+- When diagnostics are incomplete or debug is disabled, ask the user to upgrade to the latest [beta](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV)) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to enable Detailed Logging, reproduce the issue, and re-export diagnostics
 - Narrow down whether the issue is in `homebridge-eufy-security` (accessory registration, HomeKit mapping, config handling) or in `eufy-security-client` (device discovery, property events, P2P, push notifications)
 - If the environment indicates HOOBS: label `hoobs` + `wontfix` and close -- HOOBS is not supported
 
