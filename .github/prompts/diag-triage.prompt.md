@@ -50,7 +50,7 @@ There are two categories of logs depending on the area of the issue:
 
 Before any analysis, check which files are present:
 
-- **If runtime logs (`eufy-security.log`, `eufy-lib.log`) are missing**: the plugin was not running when diagnostics were exported. Stop analysis — reply to the user asking to restart Homebridge, wait for the plugin to fully load, then re-export diagnostics.
+- **If runtime logs (`eufy-security.log`, `eufy-lib.log`) are missing**: the plugin was not running when diagnostics were exported. Stop analysis — ask the user to upgrade to the latest beta ([Beta Versions](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV))) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to restart Homebridge, reproduce the issue, and re-export diagnostics.
 - **If UI logs (`configui-server.log`, `configui-lib.log`) are missing**: the UI server wasn't active. These are only needed for UI-related issues.
 - **If only `accessories.json` is present**: the archive is incomplete. Only device presence can be confirmed, not runtime behavior.
 
@@ -68,7 +68,7 @@ In `eufy-security.log`, check the first few lines for indicators:
 
 You can also confirm from the config dump in the log: `"enableDetailedLogging":true` or `false`.
 
-**If debug is disabled**, the logs will lack critical details (no `DEBUG` entries for device discovery, characteristic registration, property changes). Ask the user to enable `Detailed Logging` in the plugin settings and re-export diagnostics.
+**If debug is disabled**, the logs will lack critical details (no `DEBUG` entries for device discovery, characteristic registration, property changes). Ask the user to upgrade to the latest beta ([Beta Versions](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV))) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to enable Detailed Logging, reproduce the issue, and export diagnostics.
 
 ### 3. Extract environment info
 
