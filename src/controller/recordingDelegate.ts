@@ -20,6 +20,8 @@ import { snapshotDelegate } from './snapshotDelegate.js';
 const MAX_RECORDING_MINUTES = 1; // should never be used
 /** Max time (ms) to wait for the next fMP4 box before considering the stream stalled. */
 const SEGMENT_HEARTBEAT_TIMEOUT_MS = 10_000;
+/** Minimum moof+mdat fragments before honouring motion-stopped to avoid ultra-short recordings. */
+const MIN_FRAGMENTS_BEFORE_STOP = 2;
 
 const HKSVQuitReason = [
   'Normal',
@@ -212,6 +214,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     let moofBuffer: Buffer | null = null;
     let isInit = true;
     let fragmentCount = 0;
+    let sentLast = false;
 
     let heartbeatTimer: NodeJS.Timeout | undefined;
     const resetHeartbeat = () => {
@@ -251,14 +254,24 @@ export class RecordingDelegate implements CameraRecordingDelegate {
           const fragment = Buffer.concat([moofBuffer, header, data]);
           moofBuffer = null;
           fragmentCount++;
-          log.debug(cameraName, `HKSV: Fragment #${fragmentCount}, size: ${fragment.length}`);
-          yield { data: fragment, isLast: false };
 
-          if (!this.isMotionDetected()) {
-            log.debug(cameraName, 'Ending recording session due to motion stopped.');
+          const motionStopped = !this.isMotionDetected() && fragmentCount >= MIN_FRAGMENTS_BEFORE_STOP;
+          const isLast = motionStopped || !this.handlingStreamingRequest;
+
+          log.debug(cameraName, `HKSV: Fragment #${fragmentCount}, size: ${fragment.length}${isLast ? ' (final)' : ''}`);
+          yield { data: fragment, isLast };
+
+          if (isLast) {
+            sentLast = true;
+            log.debug(cameraName, motionStopped
+              ? 'Ending recording session due to motion stopped.'
+              : 'Ending recording session due to stream close.');
             break;
           }
         }
+      }
+      if (!sentLast && !isInit) {
+        log.warn(cameraName, `HKSV: Recording ended after ${fragmentCount} fragment(s) without signalling end-of-stream to HomeKit.`);
       }
     } finally {
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
