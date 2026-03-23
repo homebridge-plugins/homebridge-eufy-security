@@ -7,7 +7,7 @@ import type { Characteristic, Service } from 'homebridge';
 
 import { CameraConfig } from './configTypes.js';
 import { AudioCodec, Camera, PropertyName } from 'eufy-security-client';
-import { FFmpegParameters } from './ffmpeg.js';
+import { FFmpegParameters, hasFdkAac } from './ffmpeg.js';
 
 export let HAP!: HAPHB;
 export let SERV!: typeof Service;
@@ -249,6 +249,11 @@ export function applyP2PAudioFormat(params: FFmpegParameters, codec: AudioCodec)
     case AudioCodec.AAC:
     case AudioCodec.AAC_LC:
       params.setInputFormat('aac');
+      // Some cameras (e.g. SoloCam E42) send multi-RDB ADTS frames that the
+      // native FFmpeg AAC decoder cannot parse.  libfdk_aac handles them fine.
+      if (hasFdkAac()) {
+        params.setInputCodec('libfdk_aac');
+      }
       break;
     case AudioCodec.AAC_ELD:
       params.setInputFormat('aac');
