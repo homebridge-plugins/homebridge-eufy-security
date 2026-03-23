@@ -153,7 +153,7 @@ Typical flow: **planner** -> **developer** -> **qa**. Use **architect** for expl
 
 For issue triage, use the `support` skill with an issue number (e.g. `/support 423`). For the full triage reference, see `.github/prompts/diag-triage.prompt.md`. For adding new device types, use the `new-device-support` skill. Key points:
 
-- Diagnostics archives are encrypted (RSA-4096 + AES-256-GCM); decrypt with `node scripts/decrypt-diagnostics.mjs <file>.tar.gz.enc`
+- Diagnostics archives are encrypted (RSA-4096 + AES-256-GCM); decrypt with `node scripts/decrypt-diagnostics.mjs <file>.tar.gz`
 - Always check archive completeness before analysis -- missing runtime logs means the plugin wasn't running
 - When diagnostics are incomplete or debug is disabled, ask the user to upgrade to the latest [beta](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV)) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to enable Detailed Logging, reproduce the issue, and re-export diagnostics
 - Narrow down whether the issue is in `homebridge-eufy-security` (accessory registration, HomeKit mapping, config handling) or in `eufy-security-client` (device discovery, property events, P2P, push notifications)

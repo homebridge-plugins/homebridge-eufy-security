@@ -8,10 +8,10 @@ This prompt is used to triage issues reported by users of the homebridge-eufy-se
 
 ## Diagnostics Archive Structure
 
-Diagnostics archives are **encrypted** (RSA-4096 + AES-256-GCM) and include a creation timestamp in the header. The downloaded file has a `.tar.gz.enc` extension. Before analysis, decrypt it:
+Diagnostics archives are **encrypted** (RSA-4096 + AES-256-GCM) and include a creation timestamp in the header. The downloaded file has a `.tar.gz` extension (the content is encrypted despite the extension — this allows direct upload to GitHub). Before analysis, decrypt it:
 
 ```bash
-node scripts/decrypt-diagnostics.mjs <file>.tar.gz.enc
+node scripts/decrypt-diagnostics.mjs <file>.tar.gz
 ```
 
 The script prints the archive creation date and warns if the archive is older than 90 days.

@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Decrypt and extract an encrypted diagnostics archive (.enc) produced by the plugin.
+ * Decrypt and extract an encrypted diagnostics archive produced by the plugin.
  *
  * Usage:
- *   node decrypt-diagnostics.mjs <encrypted-file.enc> [private-key.pem]
+ *   node decrypt-diagnostics.mjs <encrypted-file.tar.gz> [private-key.pem]
  *
  * If the private key is omitted, the script looks for it in the keys/
  * directory next to itself (keys/diagnostics_private.pem).
  *
- * The archive is decrypted and extracted into a folder next to the .enc file,
+ * The archive is decrypted and extracted into a folder next to the input file,
  * named after the archive (e.g. diagnostics-2026-03-02-11-25-31/).
  *
- * File format of the .enc file:
+ * File format (the .tar.gz is actually encrypted, not a plain gzip):
  *   [4 bytes]  – magic: "DIAG"
  *   [1 byte]   – format version (currently 0x01)
  *   [8 bytes]  – creation timestamp (BigUInt64BE, ms since Unix epoch)
@@ -51,7 +51,7 @@ function main() {
   const args = process.argv.slice(2);
 
   if (args.length < 1) {
-    console.error('Usage: node decrypt-diagnostics.mjs <encrypted-file.enc> [private-key.pem]');
+    console.error('Usage: node decrypt-diagnostics.mjs <encrypted-file.tar.gz> [private-key.pem]');
     process.exit(1);
   }
 
@@ -176,8 +176,7 @@ function main() {
   // Determine output directory next to the .enc file
   const encDir = path.dirname(encFile);
   const baseName = path.basename(encFile)
-    .replace(/\.tar\.gz\.enc$/, '')
-    .replace(/\.enc$/, '');
+    .replace(/\.tar\.gz(?:\.enc)?$/, '');
   const outDir = path.join(encDir, baseName);
 
   // --- Safety: inspect tar contents before extracting (piped via stdin, no temp file) ---
