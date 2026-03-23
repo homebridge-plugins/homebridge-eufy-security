@@ -1213,8 +1213,7 @@ class UiServer extends HomebridgePluginUiServer {
       const encryptedBuffer = encryptDiagnostics(fileBuffer);
 
       this.pushEvent('diagnosticsProgress', { progress: 90, status: 'Returning encrypted archive' });
-      const encFilename = archiveName + '.enc';
-      return { buffer: encryptedBuffer, filename: encFilename };
+      return { buffer: encryptedBuffer, filename: archiveName };
     } catch (error) {
       this.log.error('Error while generating diagnostics archive: ' + error);
       throw error;

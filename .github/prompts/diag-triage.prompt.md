@@ -8,10 +8,10 @@ This prompt is used to triage issues reported by users of the homebridge-eufy-se
 
 ## Diagnostics Archive Structure
 
-Diagnostics archives are **encrypted** (RSA-4096 + AES-256-GCM) and include a creation timestamp in the header. The downloaded file has a `.tar.gz.enc` extension. Before analysis, decrypt it:
+Diagnostics archives are **encrypted** (RSA-4096 + AES-256-GCM) and include a creation timestamp in the header. The downloaded file has a `.tar.gz` extension (the content is encrypted despite the extension — this allows direct upload to GitHub). Before analysis, decrypt it:
 
 ```bash
-node scripts/decrypt-diagnostics.mjs <file>.tar.gz.enc
+node scripts/decrypt-diagnostics.mjs <file>.tar.gz
 ```
 
 The script prints the archive creation date and warns if the archive is older than 90 days.
@@ -52,7 +52,7 @@ Before any analysis, check which files are present:
 
 - **If runtime logs (`eufy-security.log`, `eufy-lib.log`) are missing**: the plugin was not running when diagnostics were exported. Stop analysis — ask the user to upgrade to the latest beta ([Beta Versions](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV))) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to restart Homebridge, reproduce the issue, and re-export diagnostics.
 - **If UI logs (`configui-server.log`, `configui-lib.log`) are missing**: the UI server wasn't active. These are only needed for UI-related issues.
-- **If only `accessories.json` is present**: the archive is incomplete. Only device presence can be confirmed, not runtime behavior.
+- **If only `accessories.json` is present**: the archive is incomplete. Only device presence can be confirmed, not runtime behavior. Same guidance as above — ask the user to upgrade to the latest beta and follow the Basic Troubleshooting steps.
 
 Do **not** attempt further analysis without the relevant logs for the reported issue area.
 
