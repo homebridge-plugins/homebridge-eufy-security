@@ -177,7 +177,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
 
       await this.startFFmpegProcesses(activeSession, videoParams, audioParams, request, callback, isP2P);
 
-      await this.setupTalkback(activeSession, sessionInfo);
+      await this.setupTalkback(activeSession, sessionInfo, request);
 
       this.finalizeSession(request.sessionID, activeSession);
 
@@ -390,20 +390,31 @@ export class StreamingDelegate implements CameraStreamingDelegate {
 
   /**
    * Sets up talkback (return audio) if enabled in the camera config.
+   *
+   * The pipeline: HomeKit SRTP → FFmpeg (decode & re-encode to AAC ADTS)
+   * → TalkbackStream → eufy P2P talkback channel.
    */
-  private async setupTalkback(activeSession: ActiveSession, sessionInfo: SessionInfo): Promise<void> {
+  private async setupTalkback(
+    activeSession: ActiveSession,
+    sessionInfo: SessionInfo,
+    request: StartStreamRequest,
+  ): Promise<void> {
     if (!this.camera.cameraConfig.talkback) {
       return;
     }
 
     const talkbackParams = await FFmpegParameters.forAudio(this.videoConfig.debug);
-    await talkbackParams.setTalkbackInput(sessionInfo);
+    await talkbackParams.setTalkbackInput(sessionInfo, request);
 
     if (this.camera.cameraConfig.talkbackChannels) {
       talkbackParams.setTalkbackChannels(this.camera.cameraConfig.talkbackChannels);
     }
 
-    activeSession.talkbackStream = new TalkbackStream(this.camera.platform, this.device);
+    activeSession.talkbackStream = new TalkbackStream(
+      this.camera.platform,
+      this.device,
+      this.log,
+    );
     activeSession.returnProcess = new FFmpeg('[Talkback Process]', talkbackParams, this.ffmpegLog);
     activeSession.returnProcess.on('error', (error) => {
       this.log.error('Talkback process ended with error: ' + error);
