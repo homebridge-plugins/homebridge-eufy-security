@@ -157,6 +157,10 @@ export class RecordingDelegate implements CameraRecordingDelegate {
         ffmpegLoggerFactory.forCamera(this.camera.getSerial()),
       );
 
+      ffmpeg.on('error', (error) => {
+        log.error(this.camera.getName(), 'HKSV recording FFmpeg error: ' + error);
+      });
+
       this.session = await ffmpeg.startFragmentedMP4Session();
 
       const maxDuration = Math.min(
