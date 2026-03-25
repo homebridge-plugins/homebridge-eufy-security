@@ -158,7 +158,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       );
 
       ffmpeg.on('error', (error) => {
-        log.error(this.camera.getName(), 'HKSV recording FFmpeg error: ' + error);
+        log.debug(this.camera.getName(), 'HKSV recording FFmpeg error: ' + error);
       });
 
       this.session = await ffmpeg.startFragmentedMP4Session();

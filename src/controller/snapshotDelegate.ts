@@ -409,7 +409,7 @@ export class snapshotDelegate {
     await configure(params);
     const ffmpeg = new FFmpeg(label, params, ffmpegLoggerFactory.forSnapshots());
     ffmpeg.on('error', (error) => {
-      this.log.error('Snapshot FFmpeg error: ' + error);
+      this.log.debug('Snapshot FFmpeg error: ' + error);
     });
     return ffmpeg.getResult(input);
   }
