@@ -365,7 +365,7 @@ function buildOpusSdp(
         `b=AS:${maxBitrate}\r\n` +
         `a=rtpmap:${payloadType} opus/${clockRate}/${channels}\r\n` +
         'a=rtcp-mux\r\n' +
-        `a=fmtp:${payloadType} minptime=10;useinbandfec=1;sprop-maxcapturerate=${sampleRateKHz * 1000}\r\n` +
+        `a=fmtp:${payloadType} minptime=10;useinbandfec=1;sprop-maxcapturerate=${sampleRateKHz * 1000}${channels === 2 ? ';sprop-stereo=1' : ''}\r\n` +
         `a=crypto:1 ${srtpSuite} inline:${sessionInfo.audioSRTP.toString('base64')}\r\n`
     );
 }

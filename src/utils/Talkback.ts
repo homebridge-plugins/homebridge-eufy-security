@@ -144,12 +144,16 @@ export class TalkbackStream extends Writable {
   }
 
   private bufferChunk(chunk: Buffer): void {
-    if (this.startupBufferSize + chunk.length > STARTUP_BUFFER_MAX) {
-      // Drop oldest data to make room
-      while (this.startupBuffer.length > 0 && this.startupBufferSize + chunk.length > STARTUP_BUFFER_MAX) {
-        const dropped = this.startupBuffer.shift()!;
-        this.startupBufferSize -= dropped.length;
-      }
+    if (chunk.length >= STARTUP_BUFFER_MAX) {
+      // Single chunk exceeds buffer — keep only this chunk
+      this.clearStartupBuffer();
+      this.startupBuffer.push(chunk);
+      this.startupBufferSize = chunk.length;
+      return;
+    }
+    while (this.startupBuffer.length > 0 && this.startupBufferSize + chunk.length > STARTUP_BUFFER_MAX) {
+      const dropped = this.startupBuffer.shift()!;
+      this.startupBufferSize -= dropped.length;
     }
     this.startupBuffer.push(chunk);
     this.startupBufferSize += chunk.length;
