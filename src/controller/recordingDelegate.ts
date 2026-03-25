@@ -1,5 +1,6 @@
  
 import { ChildProcessWithoutNullStreams } from 'child_process';
+import { Readable } from 'stream';
 import { Camera, PropertyName } from 'eufy-security-client';
 import {
   CameraController,
@@ -22,6 +23,20 @@ const MAX_RECORDING_MINUTES = 1; // should never be used
 const SEGMENT_HEARTBEAT_TIMEOUT_MS = 10_000;
 /** Minimum moof+mdat fragments before honouring motion-stopped to avoid ultra-short recordings. */
 const MIN_FRAGMENTS_BEFORE_STOP = 2;
+/**
+ * Max time (ms) to wait for the first audio chunk from a P2P stream before
+ * falling back to video-only HKSV recording.  Some cameras (e.g. SoloCam E42)
+ * advertise an audio codec but never deliver audio data, which blocks the
+ * single-process HKSV FFmpeg indefinitely.
+ *
+ * This MUST be short: HomeKit has an approximate 5-second timeout for the
+ * first recording data, and FFmpeg startup adds ~1-2s on top.  With motion-
+ * triggered pre-warming (PR #878), audio data is already buffered in the
+ * forked stream when it exists, so a working audio stream resolves the probe
+ * almost instantly.  The timeout only fires for cameras that never deliver
+ * audio.
+ */
+const AUDIO_PROBE_TIMEOUT_MS = 2_000;
 
 const HKSVQuitReason = [
   'Normal',
@@ -102,21 +117,82 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       .getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected).value;
   }
 
+  /**
+   * Configure FFmpeg input sources.  Returns true if audio is available.
+   *
+   * For P2P streams, the audio stream is probed for up to
+   * {@link AUDIO_PROBE_TIMEOUT_MS}.  If no data arrives the audio input is
+   * skipped entirely so that the HKSV FFmpeg process is not blocked by a
+   * stalled audio pipe.
+   */
   private async configureInputSource(
     videoParams: FFmpegParameters,
     audioParams: FFmpegParameters,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (isRtspReady(this.camera, this.cameraConfig)) {
       const url = this.camera.getPropertyValue(PropertyName.DeviceRTSPStreamUrl) as string;
       log.debug(this.camera.getName(), 'RTSP URL: ' + url);
       videoParams.setInputSource(url);
       audioParams.setInputSource(url);
-    } else {
-      const streamData = await this.localLivestreamManager.getLocalLiveStream();
-      await videoParams.setInputStream(streamData.videostream);
-      applyP2PAudioFormat(audioParams, streamData.metadata.audioCodec);
-      await audioParams.setInputStream(streamData.audiostream);
+      return true;
     }
+
+    const streamData = await this.localLivestreamManager.getLocalLiveStream();
+    await videoParams.setInputStream(streamData.videostream);
+
+    const audioCodec = streamData.metadata.audioCodec;
+    if (audioCodec === 0 /* NONE */ || audioCodec === -1 /* UNKNOWN */) {
+      log.debug(this.camera.getName(), 'P2P stream reports no audio codec — skipping audio input.');
+      streamData.audiostream.destroy();
+      return false;
+    }
+
+    const hasAudio = await this.probeAudioStream(streamData.audiostream);
+    if (!hasAudio) {
+      log.warn(
+        this.camera.getName(),
+        `No audio data received within ${AUDIO_PROBE_TIMEOUT_MS / 1000}s — ` +
+        'recording will continue without audio.',
+      );
+      streamData.audiostream.destroy();
+      return false;
+    }
+
+    applyP2PAudioFormat(audioParams, audioCodec);
+    await audioParams.setInputStream(streamData.audiostream);
+    return true;
+  }
+
+  /**
+   * Wait for the first chunk of audio data on the stream.  Returns true if
+   * data arrives within {@link AUDIO_PROBE_TIMEOUT_MS}, false otherwise.
+   * The stream is left in its original state (paused/flowing) so that all
+   * data — including the probed chunk — is still available for FFmpeg.
+   */
+  private probeAudioStream(audiostream: Readable): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+
+      const onData = (chunk: Buffer) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        audiostream.removeListener('data', onData);
+        // Pause and push the consumed chunk back so FFmpeg receives it.
+        audiostream.pause();
+        audiostream.unshift(chunk);
+        resolve(true);
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        audiostream.removeListener('data', onData);
+        resolve(false);
+      }, AUDIO_PROBE_TIMEOUT_MS);
+
+      audiostream.on('data', onData);
+    });
   }
 
   async * handleRecordingStreamRequest(): AsyncGenerator<RecordingPacket, any, unknown> {
@@ -142,7 +218,8 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       videoParams.setupForRecording(videoConfig, this.configuration);
       audioParams.setupForRecording(videoConfig, this.configuration);
 
-      await this.configureInputSource(videoParams, audioParams);
+      const audioAvailable = await this.configureInputSource(videoParams, audioParams);
+      const useAudio = audioEnabled && audioAvailable;
 
       // Opportunistically capture a snapshot from the HKSV recording stream
       setTimeout(() => {
@@ -153,7 +230,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
 
       const ffmpeg = new FFmpeg(
         `[${this.camera.getName()}] [HSV Recording Process]`,
-        audioEnabled ? [videoParams, audioParams] : videoParams,
+        useAudio ? [videoParams, audioParams] : videoParams,
         ffmpegLoggerFactory.forCamera(this.camera.getSerial()),
       );
 
