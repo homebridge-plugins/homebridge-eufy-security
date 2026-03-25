@@ -1263,13 +1263,16 @@ export class FFmpeg extends EventEmitter {
     private onProcessExit(code: number, signal: NodeJS.Signals) {
         this.emit('exit');
 
+        const wasStopRequested = !!this.killTimeout;
         if (this.killTimeout) {
             clearTimeout(this.killTimeout);
         }
 
         const message = 'FFmpeg exited with code: ' + code + ' and signal: ' + signal;
-        if (this.killTimeout && code === 0) {
-            this.log.info(this.name, message + ' (Expected)');
+        if (wasStopRequested) {
+            // stop() was called — any exit code is expected (non-zero typically
+            // means broken pipe from socket teardown during HKSV recording close).
+            this.log.debug(this.name, message + ' (Expected)');
         } else if (code === null || code === 255) {
             if (this.process?.killed) {
                 this.log.info(this.name, message + ' (Forced)');
