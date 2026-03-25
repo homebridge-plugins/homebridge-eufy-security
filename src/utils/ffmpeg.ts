@@ -19,6 +19,7 @@ import {
     ReconfigureStreamRequest,
     SnapshotRequest,
     StartStreamRequest,
+    SRTPCryptoSuites,
 } from 'homebridge';
 import { pickPort } from 'pick-port';
 
@@ -275,6 +276,98 @@ class FFmpegProgress extends EventEmitter {
             }
         }
     }
+}
+
+/**
+ * Build an AAC AudioSpecificConfig hex string for the SDP fmtp line.
+ * This replaces the previously hardcoded `F8F0212C00BC00` which was
+ * only valid for AAC-ELD at 16 kHz mono.
+ *
+ * AudioSpecificConfig structure (ISO 14496-3):
+ *   audioObjectType (5 bits) — 39 for AAC-ELD
+ *   samplingFrequencyIndex (4 bits)
+ *   channelConfiguration (4 bits)
+ *   ELD-specific config follows
+ */
+function buildAacEldAudioSpecificConfig(sampleRateKHz: number, channels: number): string {
+    // Sampling frequency index lookup (ISO 14496-3 Table 1.18)
+    const sampleRateHz = sampleRateKHz * 1000;
+    // AAC-ELD = audioObjectType 39 (5-bit overflow: write 31 then 8 more bits for 39-32=7)
+    // Bit layout: 11111 | 00000111 | freqIndex(4) | channels(4) | ELD-specific...
+    // The ELD-specific config for basic ELD (no SBR): frameLengthFlag=0, aacSectionDataResilienceFlag=0, etc.
+    // For simplicity and compatibility, use known-good configs per sample rate
+    const configs: Record<number, Record<number, string>> = {
+        8000: { 1: 'F8E85C00' },
+        16000: { 1: 'F8F0212C00BC00', 2: 'F8F0612C00BC00' },
+        24000: { 1: 'F8EC212C00BC00', 2: 'F8EC612C00BC00' },
+    };
+
+    const config = configs[sampleRateHz]?.[channels];
+    if (!config) {
+        ffmpegLogger.warn(
+            `No AAC-ELD AudioSpecificConfig for ${sampleRateKHz} kHz / ${channels} ch — ` +
+            'falling back to 16 kHz mono. Return audio may not work correctly.',
+        );
+    }
+    return config ?? configs[16000][1];
+}
+
+/** Build an SDP session description for AAC-ELD return audio from HomeKit. */
+function buildAacEldSdp(
+    ipVer: string,
+    sessionInfo: SessionInfo,
+    payloadType: number,
+    sampleRateKHz: number,
+    channels: number,
+    maxBitrate: number,
+    srtpSuite: string,
+): string {
+    const sampleRateHz = sampleRateKHz * 1000;
+    const config = buildAacEldAudioSpecificConfig(sampleRateKHz, channels);
+
+    return (
+        'v=0\r\n' +
+        `o=- 0 0 IN ${ipVer} ${sessionInfo.address}\r\n` +
+        's=Talk\r\n' +
+        `c=IN ${ipVer} ${sessionInfo.address}\r\n` +
+        't=0 0\r\n' +
+        `m=audio ${sessionInfo.audioReturnPort} RTP/AVP ${payloadType}\r\n` +
+        `b=AS:${maxBitrate}\r\n` +
+        `a=rtpmap:${payloadType} MPEG4-GENERIC/${sampleRateHz}/${channels}\r\n` +
+        'a=rtcp-mux\r\n' +
+        `a=fmtp:${payloadType} ` +
+        `profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3; ` +
+        `config=${config}\r\n` +
+        `a=crypto:1 ${srtpSuite} inline:${sessionInfo.audioSRTP.toString('base64')}\r\n`
+    );
+}
+
+/** Build an SDP session description for Opus return audio from HomeKit. */
+function buildOpusSdp(
+    ipVer: string,
+    sessionInfo: SessionInfo,
+    payloadType: number,
+    sampleRateKHz: number,
+    channels: number,
+    maxBitrate: number,
+    srtpSuite: string,
+): string {
+    // Opus in RTP always uses 48000 Hz clock rate (RFC 7587), regardless of actual sample rate
+    const clockRate = 48000;
+
+    return (
+        'v=0\r\n' +
+        `o=- 0 0 IN ${ipVer} ${sessionInfo.address}\r\n` +
+        's=Talk\r\n' +
+        `c=IN ${ipVer} ${sessionInfo.address}\r\n` +
+        't=0 0\r\n' +
+        `m=audio ${sessionInfo.audioReturnPort} RTP/AVP ${payloadType}\r\n` +
+        `b=AS:${maxBitrate}\r\n` +
+        `a=rtpmap:${payloadType} opus/${clockRate}/${channels}\r\n` +
+        'a=rtcp-mux\r\n' +
+        `a=fmtp:${payloadType} minptime=10;useinbandfec=1;sprop-maxcapturerate=${sampleRateKHz * 1000}\r\n` +
+        `a=crypto:1 ${srtpSuite} inline:${sessionInfo.audioSRTP.toString('base64')}\r\n`
+    );
 }
 
 export class FFmpegParameters {
@@ -639,33 +732,54 @@ export class FFmpegParameters {
         }
     }
 
-    public async setTalkbackInput(sessionInfo: SessionInfo) {
+    /**
+     * Configure this FFmpegParameters instance to receive return audio from
+     * HomeKit via SRTP, decode it, and re-encode to AAC ADTS for the eufy
+     * P2P talkback channel.
+     *
+     * The SDP is generated dynamically based on the codec and sample rate
+     * that HomeKit negotiated during the stream setup.
+     */
+    public async setTalkbackInput(
+        sessionInfo: SessionInfo,
+        request?: StartStreamRequest,
+    ): Promise<void> {
         this.useWallclockAsTimestamp = false;
         this.protocolWhitelist = 'pipe,udp,rtp,file,crypto,tcp';
         this.inputFormat = 'sdp';
-        const talkbackCodec = hasFdkAac() ? 'libfdk_aac' : 'aac';
-        this.inputCodec = talkbackCodec;
-        this.codec = talkbackCodec;
+
+        // Output: always AAC ADTS — this is what the eufy P2P layer expects
+        const outputCodec = hasFdkAac() ? 'libfdk_aac' : 'aac';
+        this.codec = outputCodec;
         this.sampleRate = 16;
         this.channels = 1;
         this.bitrate = 20;
         this.format = 'adts';
 
+        // Determine input codec from HomeKit's negotiated parameters
+        const audioCodec = request?.audio.codec ?? AudioStreamingCodecType.AAC_ELD;
+        const sampleRateKHz = request?.audio.sample_rate ?? 16;
+        const channels = request?.audio.channel ?? 1;
+        const payloadType = request?.audio.pt ?? 110;
+        const maxBitrate = request?.audio.max_bit_rate ?? 24;
+
+        const isOpus = audioCodec === AudioStreamingCodecType.OPUS;
+
+        // Set the input decoder to match what HomeKit is sending
+        if (isOpus) {
+            this.inputCodec = 'libopus';
+        } else {
+            this.inputCodec = hasFdkAac() ? 'libfdk_aac' : 'aac';
+        }
+
         const ipVer = sessionInfo.ipv6 ? 'IP6' : 'IP4';
-        const sdpInput =
-            'v=0\r\n' +
-            'o=- 0 0 IN ' + ipVer + ' ' + sessionInfo.address + '\r\n' +
-            's=Talk\r\n' +
-            'c=IN ' + ipVer + ' ' + sessionInfo.address + '\r\n' +
-            't=0 0\r\n' +
-            'm=audio ' + sessionInfo.audioReturnPort + ' RTP/AVP 110\r\n' +
-            'b=AS:24\r\n' +
-            'a=rtpmap:110 MPEG4-GENERIC/16000/1\r\n' +
-            'a=rtcp-mux\r\n' + // FFmpeg ignores this, but might as well
-            'a=fmtp:110 ' +
-            'profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3; ' +
-            'config=F8F0212C00BC00\r\n' +
-            'a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:' + sessionInfo.audioSRTP.toString('base64') + '\r\n';
+        const srtpSuite = sessionInfo.audioCryptoSuite === SRTPCryptoSuites.AES_CM_256_HMAC_SHA1_80
+            ? 'AES_CM_256_HMAC_SHA1_80'
+            : 'AES_CM_128_HMAC_SHA1_80';
+
+        const sdpInput = isOpus
+            ? buildOpusSdp(ipVer, sessionInfo, payloadType, sampleRateKHz, channels, maxBitrate, srtpSuite)
+            : buildAacEldSdp(ipVer, sessionInfo, payloadType, sampleRateKHz, channels, maxBitrate, srtpSuite);
 
         const { port } = await createOneShotTcpServer((socket) => {
             socket.end(sdpInput);
