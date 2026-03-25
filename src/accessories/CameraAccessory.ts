@@ -498,11 +498,11 @@ export class CameraAccessory extends DeviceAccessory {
       this.log.debug(`recordingDelegate.setController`);
       this.recordingDelegate.setController(controller);
 
-      this.log.debug(`configureController`);
+      this.log.debug(`configureController (${this.accessory.services.length} cached services)`);
       this.accessory.configureController(controller);
 
     } catch (error) {
-      this.log.error(`while happending Delegate ${error}`);
+      this.log.error(`configureController failed: ${error}`);
     }
     return true;
   }
