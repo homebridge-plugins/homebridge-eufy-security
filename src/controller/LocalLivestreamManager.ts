@@ -3,6 +3,7 @@ import { Station, Device, StreamMetadata, EufySecurity } from 'eufy-security-cli
 import { CameraAccessory } from '../accessories/CameraAccessory.js';
 import { Deferred } from '../utils/utils.js';
 import { ILogObj, Logger } from 'tslog';
+import { PREBUFFER_DURATION_MS, PREBUFFER_ESTIMATED_BYTE_RATE } from '../settings.js';
 
 /** Internal state: streams plus a timestamp for dedup/reuse logic. */
 interface ActiveStream {
@@ -23,6 +24,50 @@ const MAX_RETRY_DELAY_MS = 10_000;
 /** Grace period before actually stopping a P2P stream after the last consumer releases. */
 const STOP_GRACE_MS = 5_000;
 
+/**
+ * Fixed-capacity ring buffer that stores raw P2P video chunks (H.264 NALUs).
+ *
+ * When a P2P stream is pre-warmed on motion detection, data flows but has no
+ * consumer.  This buffer captures the last {@link PREBUFFER_DURATION_MS} of
+ * video so that when HKSV requests a recording, the buffered data can be
+ * drained into FFmpeg's input immediately — eliminating the probe/analysis
+ * delay that normally occurs while FFmpeg waits for the first bytes.
+ */
+class StreamBuffer {
+  private chunks: Buffer[] = [];
+  private totalBytes = 0;
+  private readonly maxBytes: number;
+
+  constructor(durationMs: number, byteRate: number) {
+    this.maxBytes = Math.ceil(durationMs * byteRate);
+  }
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.totalBytes += chunk.length;
+    while (this.totalBytes > this.maxBytes && this.chunks.length > 0) {
+      const removed = this.chunks.shift()!;
+      this.totalBytes -= removed.length;
+    }
+  }
+
+  /** Return all buffered chunks and reset. */
+  drain(): Buffer[] {
+    const buffered = this.chunks;
+    this.chunks = [];
+    this.totalBytes = 0;
+    return buffered;
+  }
+
+  get isEmpty(): boolean {
+    return this.chunks.length === 0;
+  }
+
+  get byteLength(): number {
+    return this.totalBytes;
+  }
+}
+
 export class LocalLivestreamManager {
   private stationStream: ActiveStream | null = null;
   private pending: { deferred: Deferred<LivestreamData>; timer: NodeJS.Timeout } | null = null;
@@ -30,6 +75,13 @@ export class LocalLivestreamManager {
   private stopGraceTimer: NodeJS.Timeout | null = null;
   /** Number of consumers currently holding a forked copy of the stream. */
   private activeConsumers = 0;
+
+  /** Ring buffer for raw video data captured during pre-warm (no consumers). */
+  private videoBuffer: StreamBuffer | null = null;
+  /** Listener reference for cleaning up the buffer tap on the video stream. */
+  private bufferListener: ((chunk: Buffer) => void) | null = null;
+  /** The videostream the buffer listener is attached to (for reliable cleanup). */
+  private bufferedVideoStream: Readable | null = null;
 
   private readonly eufyClient: EufySecurity;
   private readonly log: Logger<ILogObj>;
@@ -48,6 +100,7 @@ export class LocalLivestreamManager {
 
   /** Destroy active streams and reset state. */
   private destroyStreams(): void {
+    this.stopBuffering();
     if (this.stationStream) {
       this.stationStream.audiostream.unpipe();
       this.stationStream.audiostream.destroy();
@@ -56,6 +109,30 @@ export class LocalLivestreamManager {
       this.stationStream = null;
       this.activeConsumers = 0;
     }
+  }
+
+  /**
+   * Start capturing raw video chunks into the ring buffer.
+   * Called when a stream is established with no consumers (pre-warm scenario).
+   * The buffer is drained into the first consumer fork via {@link forkStream}.
+   */
+  private startBuffering(videostream: Readable): void {
+    this.stopBuffering();
+    this.videoBuffer = new StreamBuffer(PREBUFFER_DURATION_MS, PREBUFFER_ESTIMATED_BYTE_RATE);
+    this.bufferListener = (chunk: Buffer) => this.videoBuffer?.push(chunk);
+    this.bufferedVideoStream = videostream;
+    videostream.on('data', this.bufferListener);
+    this.log.debug(`Prebuffer started (max ${PREBUFFER_DURATION_MS}ms / ${((PREBUFFER_DURATION_MS * PREBUFFER_ESTIMATED_BYTE_RATE) / 1024).toFixed(0)} KB).`);
+  }
+
+  /** Stop buffering and detach the listener from the video stream. */
+  private stopBuffering(): void {
+    if (this.bufferListener && this.bufferedVideoStream) {
+      this.bufferedVideoStream.removeListener('data', this.bufferListener);
+    }
+    this.bufferListener = null;
+    this.bufferedVideoStream = null;
+    this.videoBuffer = null;
   }
 
   /**
@@ -93,10 +170,31 @@ export class LocalLivestreamManager {
   /**
    * Create PassThrough forks of the video and audio streams.  The forks
    * automatically unpipe when closed so the originals stay healthy.
+   *
+   * If a prebuffer has accumulated (from a pre-warmed stream with no consumers),
+   * the buffered video data is drained into the fork first so that FFmpeg
+   * receives data immediately without waiting for new P2P frames.
    */
   private forkStream(source: ActiveStream): LivestreamData {
     const videoFork = new PassThrough();
     const audioFork = new PassThrough();
+
+    // Drain any prebuffered video data into the fork before piping live data.
+    // This eliminates FFmpeg's probe delay by providing immediate input.
+    // Backpressure note: at 4s / ~1 MB the PassThrough internal buffer
+    // handles this comfortably. If PREBUFFER_DURATION_MS is increased
+    // significantly, consider making this drain async with drain events.
+    if (this.videoBuffer && !this.videoBuffer.isEmpty) {
+      const buffered = this.videoBuffer.drain();
+      const totalBytes = buffered.reduce((sum, c) => sum + c.length, 0);
+      this.log.debug(`Draining ${buffered.length} prebuffered chunks (${(totalBytes / 1024).toFixed(1)} KB) into video fork.`);
+      for (const chunk of buffered) {
+        videoFork.write(chunk);
+      }
+    }
+
+    // Stop buffering — live data now flows directly to the consumer.
+    this.stopBuffering();
 
     source.videostream.pipe(videoFork);
     source.audiostream.pipe(audioFork);
@@ -311,6 +409,12 @@ export class LocalLivestreamManager {
     this.log.debug('Stream metadata:', JSON.stringify(metadata));
 
     this.stationStream = { videostream, audiostream, metadata, createdAt: Date.now() };
+
+    // Start prebuffering video data. If a consumer is already waiting (pending
+    // resolve), forkStream will drain the buffer immediately. If this is a
+    // pre-warm with no consumers, the buffer accumulates until one arrives.
+    this.startBuffering(videostream);
+
     this.settlePending('resolve', this.stationStream);
   };
 }
