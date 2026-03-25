@@ -1196,13 +1196,29 @@ class UiServer extends HomebridgePluginUiServer {
 
       this.pushEvent('diagnosticsProgress', { progress: 45, status: `Compressing ${filesToArchive.length} files` });
 
-      // Stream tar+gzip into memory — no unencrypted file touches disk
-      const tarStream = tarCreate({ gzip: true, cwd: this.storagePath }, filesToArchive);
-      const chunks = [];
-      for await (const chunk of tarStream) {
-        chunks.push(chunk);
+      // Snapshot files to a temp directory before archiving.
+      // Log files are actively written to — reading them directly with tar
+      // causes "did not encounter expected EOF" when file size changes mid-read.
+      const os = await import('os');
+      const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'eufy-diag-'));
+      let fileBuffer;
+      try {
+        await Promise.all(filesToArchive.map((file) =>
+          fs.promises.copyFile(
+            path.join(this.storagePath, file),
+            path.join(tmpDir, file),
+          ),
+        ));
+
+        const tarStream = tarCreate({ gzip: true, cwd: tmpDir }, filesToArchive);
+        const chunks = [];
+        for await (const chunk of tarStream) {
+          chunks.push(chunk);
+        }
+        fileBuffer = Buffer.concat(chunks);
+      } finally {
+        fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
       }
-      const fileBuffer = Buffer.concat(chunks);
 
       if (skipEncryption) {
         this.pushEvent('diagnosticsProgress', { progress: 90, status: 'Returning plain archive' });
