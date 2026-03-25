@@ -542,7 +542,7 @@ export class CameraAccessory extends DeviceAccessory {
             EventTriggerOption.MOTION,
             EventTriggerOption.DOORBELL,
           ],
-          prebufferLength: PREBUFFER_DURATION_MS,
+          prebufferLength: isRtspReady(this.device, this.cameraConfig) ? 0 : PREBUFFER_DURATION_MS,
           mediaContainerConfiguration: [
             {
               type: MediaContainerType.FRAGMENTED_MP4,
