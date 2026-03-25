@@ -27,6 +27,7 @@ import { probeHardwareEncoder } from '../utils/ffmpeg.js';
 import { CHAR, SERV, isRtspReady } from '../utils/utils.js';
 import { StreamingDelegate } from '../controller/streamingDelegate.js';
 import { RecordingDelegate } from '../controller/recordingDelegate.js';
+import { PREBUFFER_DURATION_MS } from '../settings.js';
 
 // A semi-complete description of the UniFi Protect camera channel JSON.
 export interface ProtectCameraChannelConfig {
@@ -541,7 +542,7 @@ export class CameraAccessory extends DeviceAccessory {
             EventTriggerOption.MOTION,
             EventTriggerOption.DOORBELL,
           ],
-          prebufferLength: 0, // prebufferLength always remains 4s ?
+          prebufferLength: (isRtspReady(this.device, this.cameraConfig) || this.device.hasBattery()) ? 0 : PREBUFFER_DURATION_MS,
           mediaContainerConfiguration: [
             {
               type: MediaContainerType.FRAGMENTED_MP4,
