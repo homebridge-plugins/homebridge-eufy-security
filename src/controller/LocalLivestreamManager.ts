@@ -111,9 +111,35 @@ export class LocalLivestreamManager {
     };
   }
 
-  /** True when a P2P livestream is currently active. */
+  /** True when a P2P livestream is currently active or starting. */
   public isStreamActive(): boolean {
-    return this.stationStream !== null;
+    return this.stationStream !== null || this.pending !== null;
+  }
+
+  /**
+   * Pre-warm the P2P livestream without creating a consumer fork.
+   * The stream will be kept alive by the STOP_GRACE_MS timer once established.
+   * If a consumer calls getLocalLiveStream() while the stream is warm,
+   * it will reuse the existing connection instantly.
+   */
+  public async preWarmStream(): Promise<void> {
+    if (this.isStreamActive()) {
+      return;
+    }
+    await this.startLocalLiveStream();
+    // Stream is now active but has zero consumers.
+    // Schedule a grace-period stop so it doesn't run forever if unused.
+    if (this.activeConsumers === 0 && !this.stopGraceTimer) {
+      this.log.debug(`Pre-warmed stream has no consumers — scheduling ${STOP_GRACE_MS / 1000}s grace stop.`);
+      this.stopGraceTimer = setTimeout(() => {
+        this.stopGraceTimer = null;
+        if (this.activeConsumers > 0) {
+          return;
+        }
+        this.log.debug('Pre-warm grace period expired — stopping stream.');
+        this.forceStopLocalLiveStream();
+      }, STOP_GRACE_MS);
+    }
   }
 
   /**

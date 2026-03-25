@@ -279,7 +279,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   }
 
   updateRecordingActive(active: boolean): void {
-    log.debug(`Recording: ${active}`, this.accessory.displayName);
+    log.info(this.camera.getName(), `HKSV recording ${active ? 'enabled' : 'disabled'} by HomeKit.`);
   }
 
   updateRecordingConfiguration(configuration: CameraRecordingConfiguration | undefined): void {
