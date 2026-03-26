@@ -6,6 +6,9 @@ import { ILogObj, Logger } from 'tslog';
 import { PREBUFFER_DURATION_MS, PREBUFFER_ESTIMATED_BYTE_RATE } from '../settings.js';
 import { DebugRecordingManager } from './DebugRecordingManager.js';
 
+/** What triggered the P2P livestream — used to tag debug recordings. */
+export type StreamTrigger = 'hksv' | 'livestream';
+
 /** Internal state: streams plus a timestamp for dedup/reuse logic. */
 interface ActiveStream {
   videostream: Readable;
@@ -14,6 +17,8 @@ interface ActiveStream {
   createdAt: number;
   /** Shared ID linking raw + processed debug recordings from the same session. */
   sessionId: string;
+  /** What triggered this P2P stream (HKSV motion or manual livestream). */
+  trigger: StreamTrigger;
 }
 
 /** Data returned to consumers — only the streams they need. */
@@ -78,6 +83,8 @@ export class LocalLivestreamManager {
   private stopGraceTimer: NodeJS.Timeout | null = null;
   /** Number of consumers currently holding a forked copy of the stream. */
   private activeConsumers = 0;
+  /** Trigger that started (or will start) the current P2P stream. */
+  private streamTrigger: StreamTrigger = 'livestream';
 
   /** Ring buffer for raw video data captured during pre-warm (no consumers). */
   private videoBuffer: StreamBuffer | null = null;
@@ -151,7 +158,7 @@ export class LocalLivestreamManager {
    * for other consumers.  A consumer count tracks active forks so the P2P
    * session is only stopped when the last consumer calls stopLocalLiveStream().
    */
-  public async getLocalLiveStream(): Promise<LivestreamData> {
+  public async getLocalLiveStream(trigger?: StreamTrigger): Promise<LivestreamData> {
     if (this.stopGraceTimer) {
       clearTimeout(this.stopGraceTimer);
       this.stopGraceTimer = null;
@@ -159,6 +166,7 @@ export class LocalLivestreamManager {
     }
 
     if (!this.stationStream) {
+      if (trigger) this.streamTrigger = trigger;
       await this.startLocalLiveStream();
     }
 
@@ -238,6 +246,7 @@ export class LocalLivestreamManager {
     if (this.isStreamActive()) {
       return;
     }
+    this.streamTrigger = 'hksv';
     await this.startLocalLiveStream();
     // Stream is now active but has zero consumers.
     // Schedule a grace-period stop so it doesn't run forever if unused.
@@ -423,7 +432,9 @@ export class LocalLivestreamManager {
     this.log.debug('Stream metadata:', JSON.stringify(metadata));
 
     const sessionId = new Date().toISOString().replace(/[:.]/g, '-');
-    this.stationStream = { videostream, audiostream, metadata, createdAt: Date.now(), sessionId };
+    const trigger = this.streamTrigger;
+    this.streamTrigger = 'livestream'; // reset for next stream
+    this.stationStream = { videostream, audiostream, metadata, createdAt: Date.now(), sessionId, trigger };
 
     // Start prebuffering video data. If a consumer is already waiting (pending
     // resolve), forkStream will drain the buffer immediately. If this is a
@@ -438,7 +449,7 @@ export class LocalLivestreamManager {
       const rawVideoFork = new PassThrough();
       const rawAudioFork = new PassThrough();
       this.debugRecordingManager.startRawRecording(
-        this.serialNumber, rawVideoFork, rawAudioFork, metadata, sessionId,
+        this.serialNumber, rawVideoFork, rawAudioFork, metadata, sessionId, trigger,
       ).then(() => {
         videostream.pipe(rawVideoFork);
         audiostream.pipe(rawAudioFork);

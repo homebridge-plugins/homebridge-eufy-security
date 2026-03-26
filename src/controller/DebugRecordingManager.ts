@@ -4,6 +4,7 @@ import { mkdirSync, readdirSync, statSync, unlinkSync, createReadStream, openSyn
 import * as path from 'path';
 import * as net from 'net';
 import { StreamMetadata, AudioCodec } from 'eufy-security-client';
+import type { StreamTrigger } from './LocalLivestreamManager.js';
 import { ILogObj, Logger } from 'tslog';
 import { pickPort } from 'pick-port';
 
@@ -32,7 +33,7 @@ export interface DebugRecordingFile {
   filename: string;
   serial: string;
   timestamp: string;
-  type: 'raw' | 'processed';
+  type: 'hksv' | 'livestream' | 'processed';
   sizeBytes: number;
   createdAt: number;
 }
@@ -84,6 +85,7 @@ export class DebugRecordingManager {
     audiostream: Readable,
     metadata: StreamMetadata,
     sessionId?: string,
+    trigger?: StreamTrigger,
   ): Promise<string | null> {
     const sanitizedSerial = serial.replace(/[^A-Za-z0-9_-]/g, '');
 
@@ -93,7 +95,8 @@ export class DebugRecordingManager {
     }
 
     const ts = sessionId ?? new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `${sanitizedSerial}_${ts}_raw.mp4`;
+    const type = trigger ?? 'livestream';
+    const filename = `${sanitizedSerial}_${ts}_${type}.mp4`;
     const outputPath = path.join(this.recordingsDir, filename);
 
     const audioFormat = audioFormatForCodec(metadata.audioCodec);
@@ -419,11 +422,23 @@ export class DebugRecordingManager {
     }
   }
 
+  /** Map legacy type strings to current ones. */
+  private normalizeRecordingType(raw?: string): DebugRecordingFile['type'] {
+    switch (raw) {
+      case 'hksv': return 'hksv';
+      case 'livestream': return 'livestream';
+      case 'raw': return 'livestream'; // legacy
+      case 'processed': return 'processed';
+      default: return 'processed'; // legacy files without type suffix
+    }
+  }
+
   private parseRecordingFilename(filename: string): DebugRecordingFile | null {
     // Expected format: <serial>_<ISO-timestamp>_<type>.mp4
+    // Types: hksv, livestream (current), raw, processed (legacy)
     // or legacy: <serial>_<ISO-timestamp>.mp4 (processed, from existing debug recording)
     // Timestamp in filename: 2024-03-26T14-30-00-000Z (colons and dots replaced with hyphens)
-    const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)(?:_(raw|processed))?\.mp4$/);
+    const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)(?:_(hksv|livestream|raw|processed))?\.mp4$/);
     if (!match) return null;
 
     const filePath = path.join(this.recordingsDir, filename);
@@ -444,7 +459,7 @@ export class DebugRecordingManager {
         filename,
         serial: match[1],
         timestamp,
-        type: (match[3] as 'raw' | 'processed') ?? 'processed',
+        type: this.normalizeRecordingType(match[3]),
         sizeBytes: stats.size,
         createdAt: stats.mtimeMs,
       };
