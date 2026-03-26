@@ -12,6 +12,8 @@ interface ActiveStream {
   audiostream: Readable;
   metadata: StreamMetadata;
   createdAt: number;
+  /** Shared ID linking raw + processed debug recordings from the same session. */
+  sessionId: string;
 }
 
 /** Data returned to consumers — only the streams they need. */
@@ -221,6 +223,11 @@ export class LocalLivestreamManager {
     return this.stationStream !== null || this.pending !== null;
   }
 
+  /** Session ID for the current debug recording pair (raw + processed). */
+  public getSessionId(): string | null {
+    return this.stationStream?.sessionId ?? null;
+  }
+
   /**
    * Pre-warm the P2P livestream without creating a consumer fork.
    * The stream will be kept alive by the STOP_GRACE_MS timer once established.
@@ -415,7 +422,8 @@ export class LocalLivestreamManager {
     this.log.debug(`${station.getName()} P2P livestream for ${device.getName()} started.`);
     this.log.debug('Stream metadata:', JSON.stringify(metadata));
 
-    this.stationStream = { videostream, audiostream, metadata, createdAt: Date.now() };
+    const sessionId = new Date().toISOString().replace(/[:.]/g, '-');
+    this.stationStream = { videostream, audiostream, metadata, createdAt: Date.now(), sessionId };
 
     // Start prebuffering video data. If a consumer is already waiting (pending
     // resolve), forkStream will drain the buffer immediately. If this is a
@@ -423,15 +431,17 @@ export class LocalLivestreamManager {
     this.startBuffering(videostream);
 
     // Start raw debug recording if enabled — captures the P2P feed before any FFmpeg processing.
+    // Large highWaterMark lets the fork buffer data while FFmpeg starts up,
+    // preventing backpressure from stalling the source P2P stream.
     if (this.debugEnabled && this.debugRecordingManager) {
-      const rawVideoFork = new PassThrough();
-      const rawAudioFork = new PassThrough();
+      const rawVideoFork = new PassThrough({ highWaterMark: 4 * 1024 * 1024 });
+      const rawAudioFork = new PassThrough({ highWaterMark: 256 * 1024 });
       videostream.pipe(rawVideoFork);
       audiostream.pipe(rawAudioFork);
       rawVideoFork.on('close', () => videostream.unpipe(rawVideoFork));
       rawAudioFork.on('close', () => audiostream.unpipe(rawAudioFork));
       this.debugRecordingManager.startRawRecording(
-        this.serialNumber, rawVideoFork, rawAudioFork, metadata,
+        this.serialNumber, rawVideoFork, rawAudioFork, metadata, sessionId,
       ).catch((err) => this.log.warn(`Raw debug recording failed to start: ${err}`));
     }
 

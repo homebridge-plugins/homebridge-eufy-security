@@ -95,16 +95,16 @@ const RecordingsView = {
 
       if (btnDeleteAll) btnDeleteAll.style.display = '';
 
-      // Group by serial
-      const grouped = {};
+      // Group by serial, then by session (recordings sharing a timestamp are a pair)
+      const bySerial = {};
       for (const rec of recordings) {
-        if (!grouped[rec.serial]) grouped[rec.serial] = [];
-        grouped[rec.serial].push(rec);
+        if (!bySerial[rec.serial]) bySerial[rec.serial] = [];
+        bySerial[rec.serial].push(rec);
       }
 
       listContainer.innerHTML = '';
 
-      for (const [serial, recs] of Object.entries(grouped)) {
+      for (const [serial, recs] of Object.entries(bySerial)) {
         const section = document.createElement('div');
         section.className = 'settings-section';
 
@@ -113,73 +113,84 @@ const RecordingsView = {
         sectionTitle.textContent = serial;
         section.appendChild(sectionTitle);
 
-        const table = document.createElement('table');
-        table.className = 'table table-sm';
-        table.style.fontSize = '0.85rem';
+        // Group into sessions: recordings with matching timestamp are paired
+        const sessions = this._groupIntoSessions(recs);
 
-        const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>Type</th><th>Date</th><th>Size</th><th></th></tr>';
-        table.appendChild(thead);
+        for (const session of sessions) {
+          const sessionDiv = document.createElement('div');
+          sessionDiv.className = 'mb-3';
 
-        const tbody = document.createElement('tbody');
+          // Session header with date
+          const sessionHeader = document.createElement('div');
+          sessionHeader.className = 'text-muted mb-1';
+          sessionHeader.style.fontSize = '0.8rem';
+          const firstRec = session[0];
+          const dateStr = firstRec.createdAtISO
+            ? new Date(firstRec.createdAtISO).toLocaleString()
+            : firstRec.timestamp || 'Unknown';
+          sessionHeader.textContent = dateStr;
+          sessionDiv.appendChild(sessionHeader);
 
-        for (const rec of recs) {
-          const tr = document.createElement('tr');
+          const table = document.createElement('table');
+          table.className = 'table table-sm mb-0';
+          table.style.fontSize = '0.85rem';
 
-          // Type badge
-          const tdType = document.createElement('td');
-          const badge = document.createElement('span');
-          badge.className = rec.type === 'raw'
-            ? 'badge bg-success'
-            : 'badge bg-primary';
-          badge.textContent = rec.type === 'raw' ? 'Raw' : 'Processed';
-          tdType.appendChild(badge);
-          tr.appendChild(tdType);
+          const tbody = document.createElement('tbody');
 
-          // Date
-          const tdDate = document.createElement('td');
-          tdDate.textContent = rec.createdAtISO
-            ? new Date(rec.createdAtISO).toLocaleString()
-            : rec.timestamp || 'Unknown';
-          tr.appendChild(tdDate);
+          for (const rec of session) {
+            const tr = document.createElement('tr');
 
-          // Size
-          const tdSize = document.createElement('td');
-          tdSize.textContent = rec.sizeMB + ' MB';
-          tr.appendChild(tdSize);
+            // Type badge
+            const tdType = document.createElement('td');
+            tdType.style.width = '90px';
+            const badge = document.createElement('span');
+            badge.className = rec.type === 'raw'
+              ? 'badge bg-success'
+              : 'badge bg-primary';
+            badge.textContent = rec.type === 'raw' ? 'Raw' : 'Processed';
+            tdType.appendChild(badge);
+            tr.appendChild(tdType);
 
-          // Actions
-          const tdActions = document.createElement('td');
-          tdActions.className = 'text-end';
+            // Size
+            const tdSize = document.createElement('td');
+            tdSize.textContent = rec.sizeMB + ' MB';
+            tr.appendChild(tdSize);
 
-          const btnDownload = document.createElement('button');
-          btnDownload.className = 'btn btn-outline-primary btn-sm me-1';
-          btnDownload.title = 'Download';
-          btnDownload.appendChild(Helpers.icon('download.svg'));
-          btnDownload.addEventListener('click', () => this._downloadRecording(container, rec.filename, rec.sizeBytes));
-          tdActions.appendChild(btnDownload);
+            // Actions
+            const tdActions = document.createElement('td');
+            tdActions.className = 'text-end';
 
-          const btnDelete = document.createElement('button');
-          btnDelete.className = 'btn btn-outline-danger btn-sm';
-          btnDelete.title = 'Delete';
-          btnDelete.appendChild(Helpers.icon('delete.svg'));
-          btnDelete.addEventListener('click', async () => {
-            try {
-              await Api.deleteDebugRecording(rec.filename);
-              homebridge.toast.success('Deleted ' + rec.filename);
-              await this._loadRecordings(container);
-            } catch (e) {
-              homebridge.toast.error('Delete failed: ' + (e.message || e));
-            }
-          });
-          tdActions.appendChild(btnDelete);
+            const btnDownload = document.createElement('button');
+            btnDownload.className = 'btn btn-outline-primary btn-sm me-1';
+            btnDownload.title = 'Download';
+            btnDownload.appendChild(Helpers.icon('download.svg'));
+            btnDownload.addEventListener('click', () => this._downloadRecording(container, rec.filename, rec.sizeBytes));
+            tdActions.appendChild(btnDownload);
 
-          tr.appendChild(tdActions);
-          tbody.appendChild(tr);
+            const btnDelete = document.createElement('button');
+            btnDelete.className = 'btn btn-outline-danger btn-sm';
+            btnDelete.title = 'Delete';
+            btnDelete.appendChild(Helpers.icon('delete.svg'));
+            btnDelete.addEventListener('click', async () => {
+              try {
+                await Api.deleteDebugRecording(rec.filename);
+                homebridge.toast.success('Deleted ' + rec.filename);
+                await this._loadRecordings(container);
+              } catch (e) {
+                homebridge.toast.error('Delete failed: ' + (e.message || e));
+              }
+            });
+            tdActions.appendChild(btnDelete);
+
+            tr.appendChild(tdActions);
+            tbody.appendChild(tr);
+          }
+
+          table.appendChild(tbody);
+          sessionDiv.appendChild(table);
+          section.appendChild(sessionDiv);
         }
 
-        table.appendChild(tbody);
-        section.appendChild(table);
         listContainer.appendChild(section);
       }
     } catch (e) {
@@ -262,6 +273,25 @@ const RecordingsView = {
       this._downloadInProgress = false;
       if (progressArea) progressArea.innerHTML = '';
     }
+  },
+
+  /**
+   * Group recordings into sessions by extracting the timestamp portion from
+   * the filename. Recordings sharing a timestamp are a raw/processed pair.
+   */
+  _groupIntoSessions(recs) {
+    const map = {};
+    for (const rec of recs) {
+      // Filename: <serial>_<timestamp>_<type>.mp4 — extract timestamp as session key
+      const match = rec.filename.match(/^[A-Za-z0-9_-]+?_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)_/);
+      const key = match ? match[1] : rec.filename;
+      if (!map[key]) map[key] = [];
+      map[key].push(rec);
+    }
+    // Sort sessions by newest first, within each session: raw before processed
+    return Object.values(map)
+      .sort((a, b) => (b[0].createdAt || 0) - (a[0].createdAt || 0))
+      .map(session => session.sort((a) => (a.type === 'raw' ? -1 : 1)));
   },
 
   _confirmDeleteAll(container) {

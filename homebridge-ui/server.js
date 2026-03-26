@@ -1328,6 +1328,7 @@ class UiServer extends HomebridgePluginUiServer {
             return {
               filename,
               serial: match ? match[1] : 'unknown',
+              timestamp: match ? match[2] : '',
               type: match && match[3] ? match[3] : 'processed',
               sizeBytes: stats.size,
               sizeMB: (stats.size / (1024 * 1024)).toFixed(1),
