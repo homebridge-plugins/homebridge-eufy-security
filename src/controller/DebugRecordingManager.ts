@@ -121,9 +121,11 @@ export class DebugRecordingManager {
       };
       this.sessions.set(sanitizedSerial, session);
 
+      let stderrLines = 0;
       ffmpeg.stderr.on('data', (data: Buffer) => {
         const line = data.toString().trim();
-        if (line) {
+        if (line && stderrLines < 5) {
+          stderrLines++;
           this.log.debug(`[Raw Recording ${sanitizedSerial}] ${line}`);
         }
       });
@@ -289,7 +291,7 @@ export class DebugRecordingManager {
     // PTS. Initial frames before SPS/PPS are discarded by FFmpeg (harmless).
     const args: string[] = [
       '-hide_banner',
-      '-loglevel', 'warning',
+      '-loglevel', 'error',
       '-use_wallclock_as_timestamps', '1',
       '-f', 'h264',
       '-i', `tcp://127.0.0.1:${videoPort}`,
