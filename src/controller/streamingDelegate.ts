@@ -176,7 +176,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       if (this.camera.platform.config.debugLivestream && !isP2P) {
         const recDir = this.camera.platform.eufyPath + '/recordings';
         const recPath = videoParams.setFileRecording(recDir, this.device.getSerial());
-        this.log.info(`Recording RTSP stream to ${recPath}`);
+        this.log.debug(`Recording RTSP stream to ${recPath}`);
       }
 
       await this.startFFmpegProcesses(activeSession, videoParams, audioParams, request, callback, isP2P);

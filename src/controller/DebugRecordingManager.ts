@@ -107,7 +107,7 @@ export class DebugRecordingManager {
 
       const args = this.buildRawMuxArgs(videoPort, audioPort, audioFormat, outputPath);
 
-      this.log.info(`Starting raw debug recording: ${filename}`);
+      this.log.debug(`Starting raw debug recording: ${filename}`);
       this.log.debug(`FFmpeg raw mux args: ffmpeg ${args.join(' ')}`);
 
       const ffmpeg = spawn('ffmpeg', args, { env: process.env });
@@ -134,7 +134,7 @@ export class DebugRecordingManager {
       });
 
       ffmpeg.on('exit', (code) => {
-        this.log.info(`Raw recording for ${sanitizedSerial} stopped (exit code: ${code ?? 'signal'}).`);
+        this.log.debug(`Raw recording for ${sanitizedSerial} stopped (exit code: ${code ?? 'signal'}).`);
         this.cleanupSession(sanitizedSerial);
         this.enforceRetentionPolicy(sanitizedSerial);
       });
@@ -255,7 +255,7 @@ export class DebugRecordingManager {
     const session = this.sessions.get(serial);
     if (!session) return;
 
-    this.log.info(`Stopping raw debug recording for ${serial}...`);
+    this.log.debug(`Stopping raw debug recording for ${serial}...`);
 
     // Close TCP sockets to signal EOF to FFmpeg. This is the only reliable
     // way to stop FFmpeg when it reads from TCP — stdin 'q' is ignored
