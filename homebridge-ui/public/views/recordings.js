@@ -250,17 +250,15 @@ const RecordingsView = {
         pos += chunk.length;
       }
 
-      let binary = '';
-      for (let i = 0; i < combined.length; i++) {
-        binary += String.fromCharCode(combined[i]);
-      }
-      const base64 = btoa(binary);
+      const blob = new Blob([combined], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = 'data:application/octet-stream;base64,' + base64;
+      a.href = url;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
       homebridge.toast.success('Downloaded: ' + filename);
     } catch (e) {

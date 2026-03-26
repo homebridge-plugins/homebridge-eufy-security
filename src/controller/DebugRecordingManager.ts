@@ -259,7 +259,7 @@ export class DebugRecordingManager {
 
     // Send 'q' to FFmpeg for graceful shutdown (finalizes MP4 container)
     if (proc.stdin.writable) {
-      proc.stdin.write('q');
+      proc.stdin.write('q\n');
     }
 
     // Force kill after 5 seconds if it hasn't exited
