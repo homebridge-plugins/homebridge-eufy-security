@@ -212,6 +212,10 @@ class UiServer extends HomebridgePluginUiServer {
     this.onRequest('/skipIntelWait', this.skipIntelWait.bind(this));
     this.onRequest('/discoveryState', this.getDiscoveryState.bind(this));
     this.onRequest('/unsupportedDevices', this.loadUnsupportedDevices.bind(this));
+    this.onRequest('/debugRecordings', this.listDebugRecordings.bind(this));
+    this.onRequest('/downloadDebugRecording', this.downloadDebugRecording.bind(this));
+    this.onRequest('/deleteDebugRecording', this.deleteDebugRecording.bind(this));
+    this.onRequest('/deleteAllDebugRecordings', this.deleteAllDebugRecordings.bind(this));
   }
 
   skipIntelWait() {
@@ -1302,6 +1306,152 @@ class UiServer extends HomebridgePluginUiServer {
       os: `${os.type()} ${os.release()} (${os.arch()})`,
       devices: deviceSummary,
     };
+  }
+
+  /**
+   * List all debug recording files available for download.
+   */
+  async listDebugRecordings() {
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    try {
+      if (!fs.existsSync(recordingsDir)) {
+        return { recordings: [] };
+      }
+      const files = fs.readdirSync(recordingsDir)
+        .filter(f => f.endsWith('.mp4'))
+        .map(filename => {
+          const filePath = path.join(recordingsDir, filename);
+          try {
+            const stats = fs.statSync(filePath);
+            // Parse filename: <serial>_<timestamp>_<type>.mp4
+            const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T[\d-]+Z?)(?:_(raw|processed))?\.mp4$/);
+            return {
+              filename,
+              serial: match ? match[1] : 'unknown',
+              type: match && match[3] ? match[3] : 'processed',
+              sizeBytes: stats.size,
+              sizeMB: (stats.size / (1024 * 1024)).toFixed(1),
+              createdAt: stats.mtimeMs,
+              createdAtISO: new Date(stats.mtimeMs).toISOString(),
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(f => f !== null)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      return { recordings: files };
+    } catch (error) {
+      this.log.error('Error listing debug recordings: ' + error);
+      throw error;
+    }
+  }
+
+  /**
+   * Download a debug recording file in chunks to avoid memory spikes.
+   * Request: { filename: string, offset?: number, chunkSize?: number }
+   * Returns: { data: Buffer (base64), totalSize: number, offset: number, chunkSize: number, done: boolean }
+   */
+  async downloadDebugRecording(options = {}) {
+    const { filename, offset: rawOffset = 0, chunkSize: rawChunkSize = 256 * 1024 } = options;
+
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Missing or invalid filename parameter.');
+    }
+
+    // Coerce and clamp parameters
+    const numOffset = Number(rawOffset) || 0;
+    const MAX_CHUNK = 2 * 1024 * 1024; // 2 MB
+    const numChunkSize = Math.min(Number(rawChunkSize) || 256 * 1024, MAX_CHUNK);
+
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    const sanitized = path.basename(filename);
+    const filePath = path.join(recordingsDir, sanitized);
+    const resolved = path.resolve(filePath);
+
+    // Path traversal guard
+    if (!resolved.startsWith(path.resolve(recordingsDir))) {
+      throw new Error('Invalid filename.');
+    }
+
+    if (!fs.existsSync(resolved)) {
+      throw new Error('Recording file not found.');
+    }
+
+    const stats = fs.statSync(resolved);
+    const totalSize = stats.size;
+    const readSize = Math.min(numChunkSize, totalSize - numOffset);
+
+    if (numOffset >= totalSize || readSize <= 0) {
+      return { data: null, totalSize, offset: numOffset, chunkSize: 0, done: true };
+    }
+
+    const fd = fs.openSync(resolved, 'r');
+    const buf = Buffer.alloc(readSize);
+    fs.readSync(fd, buf, 0, readSize, numOffset);
+    fs.closeSync(fd);
+
+    const newOffset = numOffset + readSize;
+
+    return {
+      data: buf,
+      totalSize,
+      offset: newOffset,
+      chunkSize: readSize,
+      done: newOffset >= totalSize,
+      filename: sanitized,
+    };
+  }
+
+  /**
+   * Delete a specific debug recording file.
+   */
+  async deleteDebugRecording(options = {}) {
+    const { filename } = options;
+
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Missing or invalid filename parameter.');
+    }
+
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    const sanitized = path.basename(filename);
+    const filePath = path.join(recordingsDir, sanitized);
+    const resolved = path.resolve(filePath);
+
+    if (!resolved.startsWith(path.resolve(recordingsDir))) {
+      throw new Error('Invalid filename.');
+    }
+
+    if (!fs.existsSync(resolved)) {
+      throw new Error('Recording file not found.');
+    }
+
+    fs.unlinkSync(resolved);
+    this.log.info(`Deleted debug recording: ${sanitized}`);
+    return { deleted: true, filename: sanitized };
+  }
+
+  /**
+   * Delete all debug recording files.
+   */
+  async deleteAllDebugRecordings() {
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    if (!fs.existsSync(recordingsDir)) {
+      return { deleted: 0 };
+    }
+
+    const files = fs.readdirSync(recordingsDir).filter(f => f.endsWith('.mp4'));
+    let deleted = 0;
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(recordingsDir, file));
+        deleted++;
+      } catch {
+        // ignore individual failures
+      }
+    }
+    this.log.info(`Deleted ${deleted} debug recording(s)`);
+    return { deleted };
   }
 }
 

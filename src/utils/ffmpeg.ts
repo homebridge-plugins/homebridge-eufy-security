@@ -801,9 +801,10 @@ export class FFmpegParameters {
      * @returns The absolute path to the recording file.
      */
     public setFileRecording(recordingDir: string, serial: string): string {
+        const sanitizedSerial = serial.replace(/[^A-Za-z0-9_-]/g, '');
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
         mkdirSync(recordingDir, { recursive: true });
-        this.fileRecordingPath = path.join(recordingDir, `${serial}_${ts}.mp4`);
+        this.fileRecordingPath = path.join(recordingDir, `${sanitizedSerial}_${ts}_processed.mp4`);
         return this.fileRecordingPath;
     }
 

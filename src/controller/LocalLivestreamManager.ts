@@ -4,6 +4,7 @@ import { CameraAccessory } from '../accessories/CameraAccessory.js';
 import { Deferred } from '../utils/utils.js';
 import { ILogObj, Logger } from 'tslog';
 import { PREBUFFER_DURATION_MS, PREBUFFER_ESTIMATED_BYTE_RATE } from '../settings.js';
+import { DebugRecordingManager } from './DebugRecordingManager.js';
 
 /** Internal state: streams plus a timestamp for dedup/reuse logic. */
 interface ActiveStream {
@@ -86,11 +87,15 @@ export class LocalLivestreamManager {
   private readonly eufyClient: EufySecurity;
   private readonly log: Logger<ILogObj>;
   private readonly serialNumber: string;
+  private readonly debugRecordingManager: DebugRecordingManager | null;
+  private readonly debugEnabled: boolean;
 
   constructor(camera: CameraAccessory) {
     this.eufyClient = camera.platform.eufyClient;
     this.serialNumber = camera.device.getSerial();
     this.log = camera.log;
+    this.debugEnabled = camera.platform.config.debugLivestream ?? false;
+    this.debugRecordingManager = camera.platform.debugRecordingManager ?? null;
 
     this.log.debug(`LocalLivestreamManager initialized for ${camera.device.getName()} (serial: ${this.serialNumber})`);
 
@@ -101,6 +106,8 @@ export class LocalLivestreamManager {
   /** Destroy active streams and reset state. */
   private destroyStreams(): void {
     this.stopBuffering();
+    // Stop raw debug recording before destroying streams
+    this.debugRecordingManager?.stopRawRecording(this.serialNumber);
     if (this.stationStream) {
       this.stationStream.audiostream.unpipe();
       this.stationStream.audiostream.destroy();
@@ -414,6 +421,19 @@ export class LocalLivestreamManager {
     // resolve), forkStream will drain the buffer immediately. If this is a
     // pre-warm with no consumers, the buffer accumulates until one arrives.
     this.startBuffering(videostream);
+
+    // Start raw debug recording if enabled — captures the P2P feed before any FFmpeg processing.
+    if (this.debugEnabled && this.debugRecordingManager) {
+      const rawVideoFork = new PassThrough();
+      const rawAudioFork = new PassThrough();
+      videostream.pipe(rawVideoFork);
+      audiostream.pipe(rawAudioFork);
+      rawVideoFork.on('close', () => videostream.unpipe(rawVideoFork));
+      rawAudioFork.on('close', () => audiostream.unpipe(rawAudioFork));
+      this.debugRecordingManager.startRawRecording(
+        this.serialNumber, rawVideoFork, rawAudioFork, metadata,
+      ).catch((err) => this.log.warn(`Raw debug recording failed to start: ${err}`));
+    }
 
     this.settlePending('resolve', this.stationStream);
   };
