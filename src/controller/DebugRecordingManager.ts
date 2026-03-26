@@ -81,6 +81,7 @@ export class DebugRecordingManager {
     videostream: Readable,
     audiostream: Readable,
     metadata: StreamMetadata,
+    sessionId?: string,
   ): Promise<string | null> {
     const sanitizedSerial = serial.replace(/[^A-Za-z0-9_-]/g, '');
 
@@ -89,7 +90,7 @@ export class DebugRecordingManager {
       return null;
     }
 
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const ts = sessionId ?? new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${sanitizedSerial}_${ts}_raw.mp4`;
     const outputPath = path.join(this.recordingsDir, filename);
 
@@ -314,24 +315,16 @@ export class DebugRecordingManager {
           }
         }
 
-        // Backpressure-aware piping
-        socket.on('drain', () => input.resume());
+        // pipe() automatically drains any data buffered in the PassThrough
+        // while FFmpeg was starting up, then continues flowing with backpressure.
+        input.pipe(socket);
 
-        input.on('data', (chunk: Buffer) => {
-          if (socket.destroyed) return;
-          if (!socket.write(chunk)) {
-            input.pause();
-          }
-        });
-
-        input.on('end', () => {
-          if (!socket.destroyed) socket.end();
-        });
         input.on('error', () => {
           if (!socket.destroyed) socket.destroy();
         });
-        socket.on('error', () => { /* ignore — handled by FFmpeg exit */ });
+        socket.on('error', () => { input.unpipe(socket); });
         socket.on('close', () => {
+          input.unpipe(socket);
           const s = this.sessions.get(serial);
           if (s) {
             if (label === 'video') s.videoSocket = null;

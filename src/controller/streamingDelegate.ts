@@ -171,7 +171,8 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       // Record a parallel copy of the video stream to disk for debugging.
       if (this.camera.platform.config.debugLivestream) {
         const recDir = this.camera.platform.eufyPath + '/recordings';
-        const recPath = videoParams.setFileRecording(recDir, this.device.getSerial());
+        const sessionId = this.localLivestreamManager.getSessionId() ?? undefined;
+        const recPath = videoParams.setFileRecording(recDir, this.device.getSerial(), sessionId);
         this.log.info(`Recording stream to ${recPath}`);
       }
 

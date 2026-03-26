@@ -800,9 +800,9 @@ export class FFmpegParameters {
      *
      * @returns The absolute path to the recording file.
      */
-    public setFileRecording(recordingDir: string, serial: string): string {
+    public setFileRecording(recordingDir: string, serial: string, sessionId?: string): string {
         const sanitizedSerial = serial.replace(/[^A-Za-z0-9_-]/g, '');
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const ts = sessionId ?? new Date().toISOString().replace(/[:.]/g, '-');
         mkdirSync(recordingDir, { recursive: true });
         this.fileRecordingPath = path.join(recordingDir, `${sanitizedSerial}_${ts}_processed.mp4`);
         return this.fileRecordingPath;
@@ -1006,7 +1006,11 @@ export class FFmpegParameters {
         // Uses codec copy so there is virtually no extra CPU cost.
         const recPath = parameters[0].fileRecordingPath;
         if (recPath) {
-            params.push('-map 0:v -c:v copy -an -f mp4 -movflags frag_keyframe+empty_moov');
+            const hasAudio = parameters.length > 1;
+            const mapArgs = hasAudio
+                ? '-map 0:v -map 1:a -c copy'
+                : '-map 0:v -c:v copy';
+            params.push(`${mapArgs} -f mp4 -movflags frag_keyframe+empty_moov`);
             params.push(recPath);
         }
 
