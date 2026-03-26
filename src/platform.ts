@@ -105,10 +105,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     this.configureLogger();
 
     // Initialize debug recording manager when debugLivestream is enabled.
-    // Must be after configureLogger() so tsLogger is ready.
     if (this.config.debugLivestream) {
       this.debugRecordingManager = new DebugRecordingManager(
-        tsLogger,
+        log,
         this.eufyPath,
       );
     }

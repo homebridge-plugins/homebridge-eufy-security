@@ -294,8 +294,12 @@ export class DebugRecordingManager {
       );
     }
 
+    args.push('-c', 'copy');
+    // Raw AAC from P2P is ADTS-wrapped; MP4 container requires raw AAC.
+    if (audioPort && audioFormat) {
+      args.push('-bsf:a', 'aac_adtstoasc');
+    }
     args.push(
-      '-c', 'copy',
       '-f', 'mp4',
       '-movflags', 'frag_keyframe+empty_moov',
       outputPath,
