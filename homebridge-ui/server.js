@@ -1324,12 +1324,16 @@ class UiServer extends HomebridgePluginUiServer {
           try {
             const stats = fs.statSync(filePath);
             // Parse filename: <serial>_<timestamp>_<type>.mp4
-            const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T[\d-]+Z?)(?:_(raw|processed))?\.mp4$/);
+            // Types: hksv, livestream (current), raw, processed (legacy)
+            const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T[\d-]+Z?)(?:_(hksv|livestream|raw|processed))?\.mp4$/);
+            const rawType = match && match[3] ? match[3] : 'processed';
+            // Normalize legacy 'raw' → 'livestream'
+            const type = rawType === 'raw' ? 'livestream' : rawType;
             return {
               filename,
               serial: match ? match[1] : 'unknown',
               timestamp: match ? match[2] : '',
-              type: match && match[3] ? match[3] : 'processed',
+              type,
               sizeBytes: stats.size,
               sizeMB: (stats.size / (1024 * 1024)).toFixed(1),
               createdAt: stats.mtimeMs,

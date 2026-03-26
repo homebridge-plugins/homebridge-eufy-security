@@ -112,7 +112,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       videoParams.setInputSource(url);
       audioParams.setInputSource(url);
     } else {
-      const streamData = await this.localLivestreamManager.getLocalLiveStream();
+      const streamData = await this.localLivestreamManager.getLocalLiveStream('hksv');
       await videoParams.setInputStream(streamData.videostream);
       applyP2PAudioFormat(audioParams, streamData.metadata.audioCodec);
       await audioParams.setInputStream(streamData.audiostream);

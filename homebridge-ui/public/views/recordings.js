@@ -34,7 +34,7 @@ const RecordingsView = {
     const info = document.createElement('div');
     info.className = 'alert alert-info';
     info.style.fontSize = '0.85rem';
-    info.innerHTML = Helpers.iconHtml('info.svg') + ' <strong>Raw</strong> = P2P feed (audio + video, before FFmpeg). <strong>Processed</strong> = re-encoded video sent to HomeKit. Compare to find where an issue originates.';
+    info.innerHTML = Helpers.iconHtml('info.svg') + ' <strong>HKSV</strong> = recording triggered by motion (HomeKit Secure Video). <strong>Livestream</strong> = manual stream from Home app. <strong>Processed</strong> = RTSP re-encoded stream.';
     container.appendChild(info);
 
     // Toolbar row (Reload + Delete All)
@@ -117,8 +117,6 @@ const RecordingsView = {
         const sessions = this._groupIntoSessions(recs);
 
         for (const session of sessions) {
-          const raw = session.find(r => r.type === 'raw');
-          const processed = session.find(r => r.type === 'processed');
           const firstRec = session[0];
 
           const row = document.createElement('div');
@@ -130,8 +128,9 @@ const RecordingsView = {
           const dateStr = firstRec.createdAtISO
             ? new Date(firstRec.createdAtISO).toLocaleString()
             : firstRec.timestamp || 'Unknown';
+          const typeLabels = { hksv: 'HKSV', livestream: 'Live', processed: 'Proc', raw: 'Raw' };
           const sizeInfo = session.map(r => {
-            const label = r.type === 'raw' ? 'R' : 'P';
+            const label = typeLabels[r.type] || r.type;
             return label + ':' + r.sizeMB + 'MB';
           }).join(' / ');
 
@@ -147,22 +146,14 @@ const RecordingsView = {
           const rightCol = document.createElement('div');
           rightCol.className = 'd-flex align-items-center gap-1';
 
-          if (raw) {
-            const btnRaw = document.createElement('button');
-            btnRaw.className = 'btn btn-outline-success btn-sm';
-            btnRaw.title = 'Download Raw';
-            btnRaw.textContent = 'Raw';
-            btnRaw.addEventListener('click', () => this._downloadRecording(container, raw.filename, raw.sizeBytes));
-            rightCol.appendChild(btnRaw);
-          }
-
-          if (processed) {
-            const btnProc = document.createElement('button');
-            btnProc.className = 'btn btn-outline-primary btn-sm';
-            btnProc.title = 'Download Processed';
-            btnProc.textContent = 'Processed';
-            btnProc.addEventListener('click', () => this._downloadRecording(container, processed.filename, processed.sizeBytes));
-            rightCol.appendChild(btnProc);
+          const btnStyles = { hksv: 'btn-outline-warning', livestream: 'btn-outline-success', processed: 'btn-outline-primary', raw: 'btn-outline-success' };
+          for (const rec of session) {
+            const btn = document.createElement('button');
+            btn.className = 'btn ' + (btnStyles[rec.type] || 'btn-outline-secondary') + ' btn-sm';
+            btn.title = 'Download ' + (typeLabels[rec.type] || rec.type);
+            btn.textContent = typeLabels[rec.type] || rec.type;
+            btn.addEventListener('click', () => this._downloadRecording(container, rec.filename, rec.sizeBytes));
+            rightCol.appendChild(btn);
           }
 
           const btnDelete = document.createElement('button');
@@ -279,7 +270,7 @@ const RecordingsView = {
     const map = {};
     for (const rec of recs) {
       // Filename: <serial>_<timestamp>_<type>.mp4 — extract timestamp as session key
-      const match = rec.filename.match(/^[A-Za-z0-9_-]+?_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)_/);
+      const match = rec.filename.match(/^[A-Za-z0-9_-]+?_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)(?:_|\.mp4$)/);
       const key = match ? match[1] : rec.filename;
       if (!map[key]) map[key] = [];
       map[key].push(rec);
@@ -287,7 +278,10 @@ const RecordingsView = {
     // Sort sessions by newest first, within each session: raw before processed
     return Object.values(map)
       .sort((a, b) => (b[0].createdAt || 0) - (a[0].createdAt || 0))
-      .map(session => session.sort((a, b) => (a.type === 'raw' ? 0 : 1) - (b.type === 'raw' ? 0 : 1)));
+      .map(session => {
+        const order = { hksv: 0, livestream: 1, raw: 2, processed: 3 };
+        return session.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+      });
   },
 
   _confirmDeleteAll(container) {
