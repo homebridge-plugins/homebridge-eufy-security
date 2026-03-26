@@ -1003,14 +1003,11 @@ export class FFmpegParameters {
         }
 
         // Append a parallel file-recording output when configured.
-        // Uses codec copy so there is virtually no extra CPU cost.
+        // Video-only copy — for P2P streams video and audio use separate
+        // FFmpeg processes, so only the video track is available here.
         const recPath = parameters[0].fileRecordingPath;
         if (recPath) {
-            const hasAudio = parameters.length > 1;
-            const mapArgs = hasAudio
-                ? '-map 0:v -map 1:a -c copy'
-                : '-map 0:v -c:v copy';
-            params.push(`${mapArgs} -f mp4 -movflags frag_keyframe+empty_moov`);
+            params.push('-map 0:v -c:v copy -f mp4 -movflags frag_keyframe+empty_moov');
             params.push(recPath);
         }
 

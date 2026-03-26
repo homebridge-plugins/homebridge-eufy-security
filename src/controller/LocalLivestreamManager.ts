@@ -431,18 +431,20 @@ export class LocalLivestreamManager {
     this.startBuffering(videostream);
 
     // Start raw debug recording if enabled — captures the P2P feed before any FFmpeg processing.
-    // Large highWaterMark lets the fork buffer data while FFmpeg starts up,
-    // preventing backpressure from stalling the source P2P stream.
+    // Piping source→fork is deferred until startRawRecording resolves (TCP servers
+    // listening, FFmpeg spawned). This prevents buffered data from bursting into
+    // FFmpeg all at once, which would cause incorrect timestamps and ~0s duration.
     if (this.debugEnabled && this.debugRecordingManager) {
-      const rawVideoFork = new PassThrough({ highWaterMark: 4 * 1024 * 1024 });
-      const rawAudioFork = new PassThrough({ highWaterMark: 256 * 1024 });
-      videostream.pipe(rawVideoFork);
-      audiostream.pipe(rawAudioFork);
-      rawVideoFork.on('close', () => videostream.unpipe(rawVideoFork));
-      rawAudioFork.on('close', () => audiostream.unpipe(rawAudioFork));
+      const rawVideoFork = new PassThrough();
+      const rawAudioFork = new PassThrough();
       this.debugRecordingManager.startRawRecording(
         this.serialNumber, rawVideoFork, rawAudioFork, metadata, sessionId,
-      ).catch((err) => this.log.warn(`Raw debug recording failed to start: ${err}`));
+      ).then(() => {
+        videostream.pipe(rawVideoFork);
+        audiostream.pipe(rawAudioFork);
+        rawVideoFork.on('close', () => videostream.unpipe(rawVideoFork));
+        rawAudioFork.on('close', () => audiostream.unpipe(rawAudioFork));
+      }).catch((err) => this.log.warn(`Raw debug recording failed to start: ${err}`));
     }
 
     this.settlePending('resolve', this.stationStream);

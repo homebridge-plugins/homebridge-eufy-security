@@ -273,17 +273,22 @@ export class DebugRecordingManager {
     audioFormat: string | null,
     outputPath: string,
   ): string[] {
+    // Use genpts instead of wallclock timestamps — raw P2P data is often
+    // buffered in the PassThrough fork while FFmpeg starts up. Wallclock
+    // timestamps compress the burst into <1 s; genpts assigns monotonically
+    // increasing PTS at the assumed frame rate, producing correct duration.
     const args: string[] = [
       '-hide_banner',
       '-loglevel', 'warning',
-      '-use_wallclock_as_timestamps', '1',
+      '-fflags', '+genpts',
+      '-r', '15',
       '-f', 'h264',
       '-i', `tcp://127.0.0.1:${videoPort}`,
     ];
 
     if (audioPort && audioFormat) {
       args.push(
-        '-use_wallclock_as_timestamps', '1',
+        '-fflags', '+genpts',
         '-f', audioFormat,
         '-i', `tcp://127.0.0.1:${audioPort}`,
       );
