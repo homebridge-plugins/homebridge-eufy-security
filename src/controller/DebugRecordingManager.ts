@@ -254,19 +254,22 @@ export class DebugRecordingManager {
 
     this.log.info(`Stopping raw debug recording for ${serial}...`);
 
-    // Capture reference before cleanup can null it
-    const proc = session.ffmpegProcess;
-
-    // Send 'q' to FFmpeg for graceful shutdown (finalizes MP4 container)
-    if (proc.stdin.writable) {
-      proc.stdin.write('q\n');
+    // Close TCP sockets to signal EOF to FFmpeg. This is the only reliable
+    // way to stop FFmpeg when it reads from TCP — stdin 'q' is ignored
+    // because FFmpeg is blocked in the socket read loop. Socket EOF causes
+    // FFmpeg to finalize the MP4 container and exit cleanly.
+    if (session.videoSocket && !session.videoSocket.destroyed) {
+      session.videoSocket.destroy();
+    }
+    if (session.audioSocket && !session.audioSocket.destroyed) {
+      session.audioSocket.destroy();
     }
 
-    // Force kill after 5 seconds if it hasn't exited
+    const proc = session.ffmpegProcess;
     const killTimer = setTimeout(() => {
-      this.log.warn(`Raw recording FFmpeg for ${serial} did not exit gracefully — killing.`);
+      this.log.warn(`Raw recording FFmpeg for ${serial} did not exit after socket close — killing.`);
       proc.kill('SIGKILL');
-    }, 5000);
+    }, 3000);
 
     proc.on('exit', () => clearTimeout(killTimer));
   }
@@ -277,22 +280,21 @@ export class DebugRecordingManager {
     audioFormat: string | null,
     outputPath: string,
   ): string[] {
-    // Use genpts instead of wallclock timestamps — raw P2P data is often
-    // buffered in the PassThrough fork while FFmpeg starts up. Wallclock
-    // timestamps compress the burst into <1 s; genpts assigns monotonically
-    // increasing PTS at the assumed frame rate, producing correct duration.
+    // Wallclock timestamps are correct here because source→fork piping is
+    // deferred until TCP servers are listening and FFmpeg is spawned (no
+    // burst of buffered data). Frames arrive in real-time and get accurate
+    // PTS. Initial frames before SPS/PPS are discarded by FFmpeg (harmless).
     const args: string[] = [
       '-hide_banner',
       '-loglevel', 'warning',
-      '-fflags', '+genpts',
-      '-r', '15',
+      '-use_wallclock_as_timestamps', '1',
       '-f', 'h264',
       '-i', `tcp://127.0.0.1:${videoPort}`,
     ];
 
     if (audioPort && audioFormat) {
       args.push(
-        '-fflags', '+genpts',
+        '-use_wallclock_as_timestamps', '1',
         '-f', audioFormat,
         '-i', `tcp://127.0.0.1:${audioPort}`,
       );
