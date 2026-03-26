@@ -34,7 +34,7 @@ const RecordingsView = {
     const info = document.createElement('div');
     info.className = 'alert alert-info';
     info.style.fontSize = '0.85rem';
-    info.innerHTML = Helpers.iconHtml('info.svg') + ' <strong>Raw</strong> recordings capture the P2P feed directly from the camera (before FFmpeg). <strong>Processed</strong> recordings capture the re-encoded stream sent to HomeKit. Compare them to narrow down where an issue originates.';
+    info.innerHTML = Helpers.iconHtml('info.svg') + ' <strong>Raw</strong> = P2P feed (audio + video, before FFmpeg). <strong>Processed</strong> = re-encoded video sent to HomeKit. Compare to find where an issue originates.';
     container.appendChild(info);
 
     // Toolbar row (Reload + Delete All)
@@ -95,7 +95,7 @@ const RecordingsView = {
 
       if (btnDeleteAll) btnDeleteAll.style.display = '';
 
-      // Group by serial, then by session (recordings sharing a timestamp are a pair)
+      // Group by serial, then by session
       const bySerial = {};
       for (const rec of recordings) {
         if (!bySerial[rec.serial]) bySerial[rec.serial] = [];
@@ -117,78 +117,74 @@ const RecordingsView = {
         const sessions = this._groupIntoSessions(recs);
 
         for (const session of sessions) {
-          const sessionDiv = document.createElement('div');
-          sessionDiv.className = 'mb-3';
-
-          // Session header with date
-          const sessionHeader = document.createElement('div');
-          sessionHeader.className = 'text-muted mb-1';
-          sessionHeader.style.fontSize = '0.8rem';
+          const raw = session.find(r => r.type === 'raw');
+          const processed = session.find(r => r.type === 'processed');
           const firstRec = session[0];
+
+          const row = document.createElement('div');
+          row.className = 'd-flex align-items-center justify-content-between py-2 border-bottom';
+          row.style.fontSize = '0.85rem';
+
+          // Left: date and size info
+          const leftCol = document.createElement('div');
           const dateStr = firstRec.createdAtISO
             ? new Date(firstRec.createdAtISO).toLocaleString()
             : firstRec.timestamp || 'Unknown';
-          sessionHeader.textContent = dateStr;
-          sessionDiv.appendChild(sessionHeader);
+          const sizeInfo = session.map(r => {
+            const label = r.type === 'raw' ? 'R' : 'P';
+            return label + ':' + r.sizeMB + 'MB';
+          }).join(' / ');
 
-          const table = document.createElement('table');
-          table.className = 'table table-sm mb-0';
-          table.style.fontSize = '0.85rem';
+          const dateLine = document.createElement('div');
+          dateLine.textContent = dateStr;
+          const sizeLine = document.createElement('small');
+          sizeLine.className = 'text-muted';
+          sizeLine.textContent = sizeInfo;
+          leftCol.appendChild(dateLine);
+          leftCol.appendChild(sizeLine);
 
-          const tbody = document.createElement('tbody');
+          // Right: action buttons
+          const rightCol = document.createElement('div');
+          rightCol.className = 'd-flex align-items-center gap-1';
 
-          for (const rec of session) {
-            const tr = document.createElement('tr');
-
-            // Type badge
-            const tdType = document.createElement('td');
-            tdType.style.width = '90px';
-            const badge = document.createElement('span');
-            badge.className = rec.type === 'raw'
-              ? 'badge bg-success'
-              : 'badge bg-primary';
-            badge.textContent = rec.type === 'raw' ? 'Raw' : 'Processed';
-            tdType.appendChild(badge);
-            tr.appendChild(tdType);
-
-            // Size
-            const tdSize = document.createElement('td');
-            tdSize.textContent = rec.sizeMB + ' MB';
-            tr.appendChild(tdSize);
-
-            // Actions
-            const tdActions = document.createElement('td');
-            tdActions.className = 'text-end';
-
-            const btnDownload = document.createElement('button');
-            btnDownload.className = 'btn btn-outline-primary btn-sm me-1';
-            btnDownload.title = 'Download';
-            btnDownload.appendChild(Helpers.icon('download.svg'));
-            btnDownload.addEventListener('click', () => this._downloadRecording(container, rec.filename, rec.sizeBytes));
-            tdActions.appendChild(btnDownload);
-
-            const btnDelete = document.createElement('button');
-            btnDelete.className = 'btn btn-outline-danger btn-sm';
-            btnDelete.title = 'Delete';
-            btnDelete.appendChild(Helpers.icon('delete.svg'));
-            btnDelete.addEventListener('click', async () => {
-              try {
-                await Api.deleteDebugRecording(rec.filename);
-                homebridge.toast.success('Deleted ' + rec.filename);
-                await this._loadRecordings(container);
-              } catch (e) {
-                homebridge.toast.error('Delete failed: ' + (e.message || e));
-              }
-            });
-            tdActions.appendChild(btnDelete);
-
-            tr.appendChild(tdActions);
-            tbody.appendChild(tr);
+          if (raw) {
+            const btnRaw = document.createElement('button');
+            btnRaw.className = 'btn btn-outline-success btn-sm';
+            btnRaw.title = 'Download Raw';
+            btnRaw.textContent = 'Raw';
+            btnRaw.addEventListener('click', () => this._downloadRecording(container, raw.filename, raw.sizeBytes));
+            rightCol.appendChild(btnRaw);
           }
 
-          table.appendChild(tbody);
-          sessionDiv.appendChild(table);
-          section.appendChild(sessionDiv);
+          if (processed) {
+            const btnProc = document.createElement('button');
+            btnProc.className = 'btn btn-outline-primary btn-sm';
+            btnProc.title = 'Download Processed';
+            btnProc.textContent = 'Processed';
+            btnProc.addEventListener('click', () => this._downloadRecording(container, processed.filename, processed.sizeBytes));
+            rightCol.appendChild(btnProc);
+          }
+
+          const btnDelete = document.createElement('button');
+          btnDelete.className = 'btn btn-outline-danger btn-sm';
+          btnDelete.title = 'Delete';
+          btnDelete.appendChild(Helpers.icon('delete.svg'));
+          btnDelete.addEventListener('click', async () => {
+            try {
+              for (const rec of session) {
+                await Api.deleteDebugRecording(rec.filename);
+              }
+              homebridge.toast.success('Deleted ' + session.length + ' file(s).');
+              await this._loadRecordings(container);
+            } catch (e) {
+              homebridge.toast.error('Delete failed: ' + (e.message || e));
+            }
+          });
+          rightCol.appendChild(btnDelete);
+
+          row.appendChild(leftCol);
+          row.appendChild(rightCol);
+          section.appendChild(row);
         }
 
         listContainer.appendChild(section);
