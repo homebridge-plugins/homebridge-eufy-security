@@ -946,6 +946,12 @@ export class FFmpegParameters {
         params.push(parameters[0].inputSource);
         if (parameters.length > 1 && parameters[0].inputSource !== parameters[1].inputSource) {
             if (parameters[1].processAudio) {
+                // Include audio input format/codec hints so FFmpeg can detect the
+                // raw AAC ADTS stream without slow probing.  Cannot use full
+                // buildInputParameters() here because its -vn flag would suppress
+                // video in this combined (single-process) recording command.
+                if (parameters[1].inputFormat) params.push(`-f ${parameters[1].inputFormat}`);
+                if (parameters[1].inputCodec) params.push(`-c:a ${parameters[1].inputCodec}`);
                 params.push(parameters[1].inputSource);
             } else {
                 params.push('-f lavfi -i anullsrc -shortest');
