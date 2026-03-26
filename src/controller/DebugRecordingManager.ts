@@ -107,7 +107,7 @@ export class DebugRecordingManager {
 
       const args = this.buildRawMuxArgs(videoPort, audioPort, audioFormat, outputPath);
 
-      this.log.info(`Starting raw debug recording: ${filename}`);
+      this.log.debug(`Starting raw debug recording: ${filename}`);
       this.log.debug(`FFmpeg raw mux args: ffmpeg ${args.join(' ')}`);
 
       const ffmpeg = spawn('ffmpeg', args, { env: process.env });
@@ -121,9 +121,11 @@ export class DebugRecordingManager {
       };
       this.sessions.set(sanitizedSerial, session);
 
+      let stderrLines = 0;
       ffmpeg.stderr.on('data', (data: Buffer) => {
         const line = data.toString().trim();
-        if (line) {
+        if (line && stderrLines < 5) {
+          stderrLines++;
           this.log.debug(`[Raw Recording ${sanitizedSerial}] ${line}`);
         }
       });
@@ -134,7 +136,7 @@ export class DebugRecordingManager {
       });
 
       ffmpeg.on('exit', (code) => {
-        this.log.info(`Raw recording for ${sanitizedSerial} stopped (exit code: ${code ?? 'signal'}).`);
+        this.log.debug(`Raw recording for ${sanitizedSerial} stopped (exit code: ${code ?? 'signal'}).`);
         this.cleanupSession(sanitizedSerial);
         this.enforceRetentionPolicy(sanitizedSerial);
       });
@@ -255,7 +257,7 @@ export class DebugRecordingManager {
     const session = this.sessions.get(serial);
     if (!session) return;
 
-    this.log.info(`Stopping raw debug recording for ${serial}...`);
+    this.log.debug(`Stopping raw debug recording for ${serial}...`);
 
     // Close TCP sockets to signal EOF to FFmpeg. This is the only reliable
     // way to stop FFmpeg when it reads from TCP — stdin 'q' is ignored
@@ -289,7 +291,7 @@ export class DebugRecordingManager {
     // PTS. Initial frames before SPS/PPS are discarded by FFmpeg (harmless).
     const args: string[] = [
       '-hide_banner',
-      '-loglevel', 'warning',
+      '-loglevel', 'error',
       '-use_wallclock_as_timestamps', '1',
       '-f', 'h264',
       '-i', `tcp://127.0.0.1:${videoPort}`,
