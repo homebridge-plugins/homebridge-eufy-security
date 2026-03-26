@@ -169,11 +169,14 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       const isP2P = await this.configureStreamInput(videoParams, audioParams);
 
       // Record a parallel copy of the video stream to disk for debugging.
-      if (this.camera.platform.config.debugLivestream) {
+      // For P2P cameras, the raw recording (DebugRecordingManager) captures
+      // both video+audio from the P2P feed — the file tee here would only
+      // duplicate the raw video without audio. For RTSP cameras, this tee
+      // is the only recording mechanism since DebugRecordingManager is P2P-only.
+      if (this.camera.platform.config.debugLivestream && !isP2P) {
         const recDir = this.camera.platform.eufyPath + '/recordings';
-        const sessionId = this.localLivestreamManager.getSessionId() ?? undefined;
-        const recPath = videoParams.setFileRecording(recDir, this.device.getSerial(), sessionId);
-        this.log.info(`Recording stream to ${recPath}`);
+        const recPath = videoParams.setFileRecording(recDir, this.device.getSerial());
+        this.log.info(`Recording RTSP stream to ${recPath}`);
       }
 
       await this.startFFmpegProcesses(activeSession, videoParams, audioParams, request, callback, isP2P);
