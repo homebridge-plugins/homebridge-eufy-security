@@ -45,9 +45,13 @@ import { initLog, log, tsLogger, HAP, configureLogStreams } from './utils/utils.
 import { hasFdkAac, probeHardwareEncoder } from './utils/ffmpeg.js';
 import { AccessoriesStore } from './utils/accessoriesStore.js';
 import { LIB_VERSION } from './version.js';
+import { DebugRecordingManager } from './controller/DebugRecordingManager.js';
 
 export class EufySecurityPlatform implements DynamicPlatformPlugin {
   public eufyClient: EufySecurity = {} as EufySecurity;
+
+  /** Shared debug recording manager — created when debugLivestream is enabled. */
+  public debugRecordingManager: DebugRecordingManager | null = null;
 
   // this is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
@@ -97,6 +101,14 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     this.probeHwOs();
 
     this.initConfig(config);
+
+    // Initialize debug recording manager when debugLivestream is enabled.
+    if (this.config.debugLivestream) {
+      this.debugRecordingManager = new DebugRecordingManager(
+        tsLogger,
+        this.eufyPath,
+      );
+    }
 
     this.configureLogger();
 
