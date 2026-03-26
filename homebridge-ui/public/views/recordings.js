@@ -291,7 +291,7 @@ const RecordingsView = {
     // Sort sessions by newest first, within each session: raw before processed
     return Object.values(map)
       .sort((a, b) => (b[0].createdAt || 0) - (a[0].createdAt || 0))
-      .map(session => session.sort((a) => (a.type === 'raw' ? -1 : 1)));
+      .map(session => session.sort((a, b) => (a.type === 'raw' ? 0 : 1) - (b.type === 'raw' ? 0 : 1)));
   },
 
   _confirmDeleteAll(container) {
