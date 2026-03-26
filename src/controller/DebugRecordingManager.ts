@@ -42,6 +42,8 @@ interface RecordingSession {
   ffmpegProcess: ChildProcessWithoutNullStreams;
   videoSocket: net.Socket | null;
   audioSocket: net.Socket | null;
+  videoInput: Readable | null;
+  audioInput: Readable | null;
 }
 
 /**
@@ -111,6 +113,8 @@ export class DebugRecordingManager {
         ffmpegProcess: ffmpeg,
         videoSocket: null,
         audioSocket: null,
+        videoInput: videostream,
+        audioInput: audioFormat ? audiostream : null,
       };
       this.sessions.set(sanitizedSerial, session);
 
@@ -255,7 +259,7 @@ export class DebugRecordingManager {
 
     // Send 'q' to FFmpeg for graceful shutdown (finalizes MP4 container)
     if (proc.stdin.writable) {
-      proc.stdin.write('q');
+      proc.stdin.write('q\n');
     }
 
     // Force kill after 5 seconds if it hasn't exited
@@ -334,6 +338,7 @@ export class DebugRecordingManager {
         socket.on('error', () => { input.unpipe(socket); });
         socket.on('close', () => {
           input.unpipe(socket);
+          if (!input.destroyed) input.destroy();
           const s = this.sessions.get(serial);
           if (s) {
             if (label === 'video') s.videoSocket = null;
@@ -366,6 +371,16 @@ export class DebugRecordingManager {
     }
     if (session.audioSocket && !session.audioSocket.destroyed) {
       session.audioSocket.destroy();
+    }
+    // Destroy the PassThrough forks to release backpressure on the source
+    // P2P streams. Without this, a crashed FFmpeg leaves the forks alive —
+    // they fill their internal buffer and permanently pause the source,
+    // starving all other consumers (streaming FFmpeg, file tee).
+    if (session.videoInput && !session.videoInput.destroyed) {
+      session.videoInput.destroy();
+    }
+    if (session.audioInput && !session.audioInput.destroyed) {
+      session.audioInput.destroy();
     }
 
     this.sessions.delete(serial);
