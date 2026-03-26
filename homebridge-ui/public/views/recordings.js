@@ -37,33 +37,33 @@ const RecordingsView = {
     info.innerHTML = Helpers.iconHtml('info.svg') + ' <strong>Raw</strong> recordings capture the P2P feed directly from the camera (before FFmpeg). <strong>Processed</strong> recordings capture the re-encoded stream sent to HomeKit. Compare them to narrow down where an issue originates.';
     container.appendChild(info);
 
-    // Loading spinner
-    const spinner = document.createElement('div');
-    spinner.id = 'recordings-spinner';
-    spinner.className = 'd-flex justify-content-center my-3';
-    spinner.innerHTML = '<div class="spinner-border spinner-border-sm text-primary" role="status"><span class="visually-hidden">Loading...</span></div>';
-    container.appendChild(spinner);
+    // Toolbar row (Reload + Delete All)
+    const toolbar = document.createElement('div');
+    toolbar.className = 'd-flex justify-content-between align-items-center mb-3';
+    toolbar.id = 'recordings-toolbar';
+
+    const btnReload = document.createElement('button');
+    btnReload.className = 'btn btn-outline-primary btn-sm';
+    btnReload.appendChild(Helpers.icon('refresh.svg'));
+    btnReload.append(' Reload');
+    btnReload.addEventListener('click', () => this._loadRecordings(container));
+
+    const btnDeleteAll = document.createElement('button');
+    btnDeleteAll.className = 'btn btn-outline-danger btn-sm';
+    btnDeleteAll.id = 'recordings-delete-all';
+    btnDeleteAll.style.display = 'none';
+    btnDeleteAll.appendChild(Helpers.icon('delete.svg'));
+    btnDeleteAll.append(' Delete All');
+    btnDeleteAll.addEventListener('click', () => this._confirmDeleteAll(container));
+
+    toolbar.appendChild(btnReload);
+    toolbar.appendChild(btnDeleteAll);
+    container.appendChild(toolbar);
 
     // Recordings list container
     const listContainer = document.createElement('div');
     listContainer.id = 'recordings-list';
     container.appendChild(listContainer);
-
-    // Actions row
-    const actionsRow = document.createElement('div');
-    actionsRow.className = 'mt-3';
-    actionsRow.id = 'recordings-actions';
-    actionsRow.style.display = 'none';
-
-    const btnDeleteAll = document.createElement('button');
-    btnDeleteAll.className = 'btn btn-outline-danger btn-sm';
-    btnDeleteAll.innerHTML = '';
-    btnDeleteAll.appendChild(Helpers.icon('delete.svg'));
-    btnDeleteAll.append(' Delete All Recordings');
-    btnDeleteAll.addEventListener('click', () => this._confirmDeleteAll(container));
-
-    actionsRow.appendChild(btnDeleteAll);
-    container.appendChild(actionsRow);
 
     // Download progress area
     const progressArea = document.createElement('div');
@@ -75,17 +75,15 @@ const RecordingsView = {
   },
 
   async _loadRecordings(container) {
-    const spinner = container.querySelector('#recordings-spinner');
     const listContainer = container.querySelector('#recordings-list');
-    const actionsRow = container.querySelector('#recordings-actions');
+    const btnDeleteAll = container.querySelector('#recordings-delete-all');
 
     try {
       const result = await Api.listDebugRecordings();
       const recordings = result.recordings || [];
 
-      if (spinner) spinner.style.display = 'none';
-
       if (recordings.length === 0) {
+        if (btnDeleteAll) btnDeleteAll.style.display = 'none';
         listContainer.innerHTML = `
           <div class="text-muted text-center py-4" style="font-size: 0.9rem;">
             No debug recordings found.<br>
@@ -95,7 +93,7 @@ const RecordingsView = {
         return;
       }
 
-      if (actionsRow) actionsRow.style.display = '';
+      if (btnDeleteAll) btnDeleteAll.style.display = '';
 
       // Group by serial
       const grouped = {};
@@ -185,7 +183,6 @@ const RecordingsView = {
         listContainer.appendChild(section);
       }
     } catch (e) {
-      if (spinner) spinner.style.display = 'none';
       listContainer.innerHTML = '<div class="alert alert-danger">Failed to load recordings: ' + Helpers.escHtml(e.message || String(e)) + '</div>';
     }
   },
@@ -246,15 +243,17 @@ const RecordingsView = {
         pos += chunk.length;
       }
 
-      const blob = new Blob([combined], { type: 'video/mp4' });
-      const url = URL.createObjectURL(blob);
+      let binary = '';
+      for (let i = 0; i < combined.length; i++) {
+        binary += String.fromCharCode(combined[i]);
+      }
+      const base64 = btoa(binary);
       const a = document.createElement('a');
-      a.href = url;
+      a.href = 'data:application/octet-stream;base64,' + base64;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
 
       homebridge.toast.success('Downloaded: ' + filename);
     } catch (e) {
