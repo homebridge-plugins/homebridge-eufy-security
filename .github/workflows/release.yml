@@ -47,9 +47,13 @@ jobs:
       - name: Determine release type
         id: release-type
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
+          if [[ "${{ github.event_name }}" == "release" && "${{ github.event.release.prerelease }}" != "true" ]]; then
             echo "type=latest" >> $GITHUB_OUTPUT
             echo "tag=latest" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "release" && "${{ github.event.release.prerelease }}" == "true" ]]; then
+            echo "type=none" >> $GITHUB_OUTPUT
+            echo "tag=none" >> $GITHUB_OUTPUT
+            echo "Pre-release detected — skipping publish (beta/alpha are published via branch push)"
           elif [[ "${{ github.ref }}" == refs/heads/beta-* ]]; then
             echo "type=beta" >> $GITHUB_OUTPUT
             echo "tag=beta" >> $GITHUB_OUTPUT
