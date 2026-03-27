@@ -316,7 +316,7 @@ export class DebugRecordingManager {
     }
     args.push(
       '-f', 'mp4',
-      '-movflags', 'frag_keyframe+empty_moov',
+      '-movflags', '+faststart',
       outputPath,
     );
 

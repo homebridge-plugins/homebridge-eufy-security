@@ -79,3 +79,13 @@ Every PR #888-#893 was merged and found broken on the next beta. A single 15-sec
 **Rule**: Before merging debug recording changes, the test plan MUST actually be executed. At minimum: enable feature, stream for 15s, ffprobe the output, check eufy-security.log for errors.
 
 **Why**: The ADTS crash (FFmpeg exit 255) was visible in the very first test. The 0.07s duration was visible in the first ffprobe. Six PRs could have been two.
+
+## 9. Fragmented MP4 breaks VLC and QuickTime
+
+`-movflags frag_keyframe+empty_moov` writes fragmented MP4 (fMP4) — designed for live streaming, not file playback. VLC shows ~1s of content then stops. QuickTime can't play it at all.
+
+**Rule**: Use `-movflags +faststart` for debug recordings written to disk. Standard MP4 with moov relocated to the start is universally playable.
+
+**Why**: PR #897 used fMP4 for crash resilience (already-written fragments survive SIGKILL). But graceful shutdown via socket destroy (lesson #4) makes this unnecessary. PR #898 switched to faststart.
+
+**How to apply**: Only use `frag_keyframe+empty_moov` when streaming to a non-seekable output (e.g., HTTP). For file output, always use `+faststart`.
