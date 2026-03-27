@@ -27,6 +27,7 @@ const DeviceCard = {
     const d = opts.device;
     const isUnsupported = d.unsupported === true;
     const isIgnored = d.ignored === true;
+    const isKeypad = d.isKeypad === true;
 
     const col = document.createElement('div');
     col.className = 'col-6 col-md-4 col-lg-3 mb-3';
@@ -94,8 +95,8 @@ const DeviceCard = {
 
     metaRow.appendChild(meta);
 
-    // Toggle — inline with meta, only for non-unsupported devices
-    if (!isUnsupported) {
+    // Toggle — inline with meta, only for non-unsupported, non-keypad devices
+    if (!isUnsupported && !isKeypad) {
       const switchWrap = document.createElement('div');
       switchWrap.className = 'form-check form-switch mb-0';
       switchWrap.addEventListener('click', (e) => e.stopPropagation());
@@ -126,7 +127,13 @@ const DeviceCard = {
     const badgeArea = document.createElement('div');
     let hasBadge = false;
 
-    if (isUnsupported) {
+    if (isKeypad) {
+      const badge = document.createElement('span');
+      badge.className = 'badge bg-secondary';
+      badge.textContent = 'Not available for HomeKit';
+      badgeArea.appendChild(badge);
+      hasBadge = true;
+    } else if (isUnsupported) {
       const badge = document.createElement('span');
       badge.className = 'badge badge-unsupported';
       badge.textContent = 'Not Supported';
@@ -150,10 +157,15 @@ const DeviceCard = {
     card.appendChild(body);
     if (hasBadge) card.appendChild(footer);
 
-    // Click handler — navigate to detail
-    card.addEventListener('click', () => {
-      if (opts.onClick) opts.onClick(d);
-    });
+    // Click handler — navigate to detail (disabled for keypads)
+    if (isKeypad) {
+      card.style.cursor = 'default';
+      card.title = 'Keypads have no configurable HomeKit settings. The keypad works alongside your station but cannot be exposed to HomeKit.';
+    } else {
+      card.addEventListener('click', () => {
+        if (opts.onClick) opts.onClick(d);
+      });
+    }
 
     col.appendChild(card);
     if (container) container.appendChild(col);
