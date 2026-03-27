@@ -163,29 +163,6 @@ class UiServer extends HomebridgePluginUiServer {
         errorName: ['bold', 'bgRedBright', 'whiteBright'],
         fileName: ['yellow'],
       },
-      maskValuesOfKeys: [
-        'username',
-        'password',
-        'token',
-        'clientPrivateKey',
-        'private_key',
-        'login_hash',
-        'serverPublicKey',
-        'cloud_token',
-        'refreshToken',
-        'p2p_conn',
-        'app_conn',
-        'address',
-        'latitude',
-        'longitude',
-        'serialnumber',
-        'serialNumber',
-        'stationSerialNumber',
-        'data',
-        'ignoreStations',
-        'ignoreDevices',
-        'pincode',
-      ],
     };
     this.log = new TsLogger(logOptions);
     this.tsLog = new TsLogger({ ...logOptions, type: 'hidden', minLevel: 2 });
@@ -235,6 +212,10 @@ class UiServer extends HomebridgePluginUiServer {
     this.onRequest('/skipIntelWait', this.skipIntelWait.bind(this));
     this.onRequest('/discoveryState', this.getDiscoveryState.bind(this));
     this.onRequest('/unsupportedDevices', this.loadUnsupportedDevices.bind(this));
+    this.onRequest('/debugRecordings', this.listDebugRecordings.bind(this));
+    this.onRequest('/downloadDebugRecording', this.downloadDebugRecording.bind(this));
+    this.onRequest('/deleteDebugRecording', this.deleteDebugRecording.bind(this));
+    this.onRequest('/deleteAllDebugRecordings', this.deleteAllDebugRecordings.bind(this));
   }
 
   skipIntelWait() {
@@ -1219,13 +1200,29 @@ class UiServer extends HomebridgePluginUiServer {
 
       this.pushEvent('diagnosticsProgress', { progress: 45, status: `Compressing ${filesToArchive.length} files` });
 
-      // Stream tar+gzip into memory — no unencrypted file touches disk
-      const tarStream = tarCreate({ gzip: true, cwd: this.storagePath }, filesToArchive);
-      const chunks = [];
-      for await (const chunk of tarStream) {
-        chunks.push(chunk);
+      // Snapshot files to a temp directory before archiving.
+      // Log files are actively written to — reading them directly with tar
+      // causes "did not encounter expected EOF" when file size changes mid-read.
+      const os = await import('os');
+      const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'eufy-diag-'));
+      let fileBuffer;
+      try {
+        await Promise.all(filesToArchive.map((file) =>
+          fs.promises.copyFile(
+            path.join(this.storagePath, file),
+            path.join(tmpDir, file),
+          ),
+        ));
+
+        const tarStream = tarCreate({ gzip: true, cwd: tmpDir }, filesToArchive);
+        const chunks = [];
+        for await (const chunk of tarStream) {
+          chunks.push(chunk);
+        }
+        fileBuffer = Buffer.concat(chunks);
+      } finally {
+        fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
       }
-      const fileBuffer = Buffer.concat(chunks);
 
       if (skipEncryption) {
         this.pushEvent('diagnosticsProgress', { progress: 90, status: 'Returning plain archive' });
@@ -1236,8 +1233,7 @@ class UiServer extends HomebridgePluginUiServer {
       const encryptedBuffer = encryptDiagnostics(fileBuffer);
 
       this.pushEvent('diagnosticsProgress', { progress: 90, status: 'Returning encrypted archive' });
-      const encFilename = archiveName + '.enc';
-      return { buffer: encryptedBuffer, filename: encFilename };
+      return { buffer: encryptedBuffer, filename: archiveName };
     } catch (error) {
       this.log.error('Error while generating diagnostics archive: ' + error);
       throw error;
@@ -1310,6 +1306,157 @@ class UiServer extends HomebridgePluginUiServer {
       os: `${os.type()} ${os.release()} (${os.arch()})`,
       devices: deviceSummary,
     };
+  }
+
+  /**
+   * List all debug recording files available for download.
+   */
+  async listDebugRecordings() {
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    try {
+      if (!fs.existsSync(recordingsDir)) {
+        return { recordings: [] };
+      }
+      const files = fs.readdirSync(recordingsDir)
+        .filter(f => f.endsWith('.mp4'))
+        .map(filename => {
+          const filePath = path.join(recordingsDir, filename);
+          try {
+            const stats = fs.statSync(filePath);
+            // Parse filename: <serial>_<timestamp>_<type>.mp4
+            // Types: hksv, livestream (current), raw, processed (legacy)
+            const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T[\d-]+Z?)(?:_(hksv|livestream|raw|processed))?\.mp4$/);
+            const rawType = match && match[3] ? match[3] : 'processed';
+            // Normalize legacy 'raw' → 'livestream'
+            const type = rawType === 'raw' ? 'livestream' : rawType;
+            return {
+              filename,
+              serial: match ? match[1] : 'unknown',
+              timestamp: match ? match[2] : '',
+              type,
+              sizeBytes: stats.size,
+              sizeMB: (stats.size / (1024 * 1024)).toFixed(1),
+              createdAt: stats.mtimeMs,
+              createdAtISO: new Date(stats.mtimeMs).toISOString(),
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(f => f !== null)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      return { recordings: files };
+    } catch (error) {
+      this.log.error('Error listing debug recordings: ' + error);
+      throw error;
+    }
+  }
+
+  /**
+   * Download a debug recording file in chunks to avoid memory spikes.
+   * Request: { filename: string, offset?: number, chunkSize?: number }
+   * Returns: { data: Buffer (base64), totalSize: number, offset: number, chunkSize: number, done: boolean }
+   */
+  async downloadDebugRecording(options = {}) {
+    const { filename, offset: rawOffset = 0, chunkSize: rawChunkSize = 256 * 1024 } = options;
+
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Missing or invalid filename parameter.');
+    }
+
+    // Coerce and clamp parameters
+    const numOffset = Number(rawOffset) || 0;
+    const MAX_CHUNK = 2 * 1024 * 1024; // 2 MB
+    const numChunkSize = Math.min(Number(rawChunkSize) || 256 * 1024, MAX_CHUNK);
+
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    const sanitized = path.basename(filename);
+    const filePath = path.join(recordingsDir, sanitized);
+    const resolved = path.resolve(filePath);
+
+    // Path traversal guard
+    if (!resolved.startsWith(path.resolve(recordingsDir))) {
+      throw new Error('Invalid filename.');
+    }
+
+    if (!fs.existsSync(resolved)) {
+      throw new Error('Recording file not found.');
+    }
+
+    const stats = fs.statSync(resolved);
+    const totalSize = stats.size;
+    const readSize = Math.min(numChunkSize, totalSize - numOffset);
+
+    if (numOffset >= totalSize || readSize <= 0) {
+      return { data: null, totalSize, offset: numOffset, chunkSize: 0, done: true };
+    }
+
+    const fd = fs.openSync(resolved, 'r');
+    const buf = Buffer.alloc(readSize);
+    fs.readSync(fd, buf, 0, readSize, numOffset);
+    fs.closeSync(fd);
+
+    const newOffset = numOffset + readSize;
+
+    return {
+      data: buf,
+      totalSize,
+      offset: newOffset,
+      chunkSize: readSize,
+      done: newOffset >= totalSize,
+      filename: sanitized,
+    };
+  }
+
+  /**
+   * Delete a specific debug recording file.
+   */
+  async deleteDebugRecording(options = {}) {
+    const { filename } = options;
+
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Missing or invalid filename parameter.');
+    }
+
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    const sanitized = path.basename(filename);
+    const filePath = path.join(recordingsDir, sanitized);
+    const resolved = path.resolve(filePath);
+
+    if (!resolved.startsWith(path.resolve(recordingsDir))) {
+      throw new Error('Invalid filename.');
+    }
+
+    if (!fs.existsSync(resolved)) {
+      throw new Error('Recording file not found.');
+    }
+
+    fs.unlinkSync(resolved);
+    this.log.info(`Deleted debug recording: ${sanitized}`);
+    return { deleted: true, filename: sanitized };
+  }
+
+  /**
+   * Delete all debug recording files.
+   */
+  async deleteAllDebugRecordings() {
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    if (!fs.existsSync(recordingsDir)) {
+      return { deleted: 0 };
+    }
+
+    const files = fs.readdirSync(recordingsDir).filter(f => f.endsWith('.mp4'));
+    let deleted = 0;
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(recordingsDir, file));
+        deleted++;
+      } catch {
+        // ignore individual failures
+      }
+    }
+    this.log.info(`Deleted ${deleted} debug recording(s)`);
+    return { deleted };
   }
 }
 

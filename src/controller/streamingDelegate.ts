@@ -21,7 +21,7 @@ import { CameraAccessory } from '../accessories/CameraAccessory.js';
 import { SessionInfo, VideoConfig } from '../utils/configTypes.js';
 import { FFmpeg, FFmpegParameters } from '../utils/ffmpeg.js';
 import { TalkbackStream } from '../utils/Talkback.js';
-import { HAP, isRtspReady, ffmpegLoggerFactory } from '../utils/utils.js';
+import { HAP, isRtspReady, applyP2PAudioFormat, ffmpegLoggerFactory } from '../utils/utils.js';
 import { LocalLivestreamManager } from './LocalLivestreamManager.js';
 import { snapshotDelegate } from './snapshotDelegate.js';
 
@@ -30,9 +30,13 @@ type ActiveSession = {
   audioProcess?: FFmpeg;
   returnProcess?: FFmpeg;
   timeout?: NodeJS.Timeout;
+  graceTimeout?: NodeJS.Timeout;
   socket?: Socket;
   talkbackStream?: TalkbackStream;
 };
+
+/** Grace period (ms) before the first RTCP keep-alive is expected. */
+const STREAM_INITIAL_GRACE_MS = 15_000;
 
 export class StreamingDelegate implements CameraStreamingDelegate {
 
@@ -165,15 +169,19 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       const isP2P = await this.configureStreamInput(videoParams, audioParams);
 
       // Record a parallel copy of the video stream to disk for debugging.
-      if (this.camera.platform.config.debugLivestream) {
+      // For P2P cameras, the raw recording (DebugRecordingManager) captures
+      // both video+audio from the P2P feed — the file tee here would only
+      // duplicate the raw video without audio. For RTSP cameras, this tee
+      // is the only recording mechanism since DebugRecordingManager is P2P-only.
+      if (this.camera.platform.config.debugLivestream && !isP2P) {
         const recDir = this.camera.platform.eufyPath + '/recordings';
         const recPath = videoParams.setFileRecording(recDir, this.device.getSerial());
-        this.log.info(`Recording stream to ${recPath}`);
+        this.log.debug(`Recording RTSP stream to ${recPath}`);
       }
 
       await this.startFFmpegProcesses(activeSession, videoParams, audioParams, request, callback, isP2P);
 
-      await this.setupTalkback(activeSession, sessionInfo);
+      await this.setupTalkback(activeSession, sessionInfo, request);
 
       this.finalizeSession(request.sessionID, activeSession);
 
@@ -197,6 +205,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     activeSession: ActiveSession,
   ): Socket {
     const socket = createSocket(sessionInfo.ipv6 ? 'udp6' : 'udp4');
+    let firstMessageReceived = false;
 
     socket.on('error', (err: Error) => {
       this.log.error('Socket error: ' + err.message);
@@ -204,6 +213,14 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     });
 
     socket.on('message', () => {
+      if (!firstMessageReceived) {
+        firstMessageReceived = true;
+        if (activeSession.graceTimeout) {
+          clearTimeout(activeSession.graceTimeout);
+          activeSession.graceTimeout = undefined;
+        }
+        this.log.debug('First RTCP keep-alive received — stream health monitoring active.');
+      }
       if (activeSession.timeout) {
         clearTimeout(activeSession.timeout);
       }
@@ -213,6 +230,17 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         this.stopStream(request.sessionID);
       }, request.video.rtcp_interval * 5 * 1000);
     });
+
+    // Initial grace period: warn if no RTCP arrives at all
+    // (helps diagnose "stream starts but shows black screen" issues)
+    activeSession.graceTimeout = setTimeout(() => {
+      if (!firstMessageReceived) {
+        this.log.warn(
+          'No RTCP keep-alive received within initial grace period (' +
+          `${STREAM_INITIAL_GRACE_MS / 1000}s). Stream may not be reaching the Home app.`,
+        );
+      }
+    }, STREAM_INITIAL_GRACE_MS);
 
     socket.bind(sessionInfo.videoReturnPort);
     return socket;
@@ -237,7 +265,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     }
 
     let audioParams: FFmpegParameters | undefined;
-    if (isCodecSupported) {
+    if (isCodecSupported && this.camera.cameraConfig.audio !== false) {
       audioParams = await FFmpegParameters.forAudio(this.videoConfig.debug);
       audioParams.setup(this.camera.cameraConfig, request);
       audioParams.setRTPTarget(sessionInfo, request);
@@ -267,10 +295,13 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       `Using P2P local livestream for ${this.device.getName()} ` +
       `(serial: ${this.device.getSerial()}, type: ${this.device.getDeviceType()})`,
     );
-    const streamData = await this.localLivestreamManager.getLocalLiveStream();
+    const streamData = await this.localLivestreamManager.getLocalLiveStream('livestream');
     this.log.debug('Livestream obtained successfully. Setting up FFmpeg input streams...');
     await videoParams.setInputStream(streamData.videostream);
-    await audioParams?.setInputStream(streamData.audiostream);
+    if (audioParams) {
+      applyP2PAudioFormat(audioParams, streamData.metadata.audioCodec);
+      await audioParams.setInputStream(streamData.audiostream);
+    }
     this.log.debug('FFmpeg input streams configured.');
     return true;
   }
@@ -363,20 +394,31 @@ export class StreamingDelegate implements CameraStreamingDelegate {
 
   /**
    * Sets up talkback (return audio) if enabled in the camera config.
+   *
+   * The pipeline: HomeKit SRTP → FFmpeg (decode & re-encode to AAC ADTS)
+   * → TalkbackStream → eufy P2P talkback channel.
    */
-  private async setupTalkback(activeSession: ActiveSession, sessionInfo: SessionInfo): Promise<void> {
+  private async setupTalkback(
+    activeSession: ActiveSession,
+    sessionInfo: SessionInfo,
+    request: StartStreamRequest,
+  ): Promise<void> {
     if (!this.camera.cameraConfig.talkback) {
       return;
     }
 
     const talkbackParams = await FFmpegParameters.forAudio(this.videoConfig.debug);
-    await talkbackParams.setTalkbackInput(sessionInfo);
+    await talkbackParams.setTalkbackInput(sessionInfo, request);
 
     if (this.camera.cameraConfig.talkbackChannels) {
       talkbackParams.setTalkbackChannels(this.camera.cameraConfig.talkbackChannels);
     }
 
-    activeSession.talkbackStream = new TalkbackStream(this.camera.platform, this.device);
+    activeSession.talkbackStream = new TalkbackStream(
+      this.camera.platform,
+      this.device,
+      this.log,
+    );
     activeSession.returnProcess = new FFmpeg('[Talkback Process]', talkbackParams, this.ffmpegLog);
     activeSession.returnProcess.on('error', (error) => {
       this.log.error('Talkback process ended with error: ' + error);
@@ -446,6 +488,9 @@ export class StreamingDelegate implements CameraStreamingDelegate {
 
     if (session.timeout) {
       clearTimeout(session.timeout);
+    }
+    if (session.graceTimeout) {
+      clearTimeout(session.graceTimeout);
     }
 
     const cleanupSteps: Array<[string, () => void]> = [

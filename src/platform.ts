@@ -42,12 +42,16 @@ import { platform } from 'node:process';
 import { readFileSync } from 'node:fs';
 
 import { initLog, log, tsLogger, HAP, configureLogStreams } from './utils/utils.js';
-import { hasFdkAac } from './utils/ffmpeg.js';
+import { hasFdkAac, probeHardwareEncoder } from './utils/ffmpeg.js';
 import { AccessoriesStore } from './utils/accessoriesStore.js';
 import { LIB_VERSION } from './version.js';
+import { DebugRecordingManager } from './controller/DebugRecordingManager.js';
 
 export class EufySecurityPlatform implements DynamicPlatformPlugin {
   public eufyClient: EufySecurity = {} as EufySecurity;
+
+  /** Shared debug recording manager — created when debugLivestream is enabled. */
+  public debugRecordingManager: DebugRecordingManager | null = null;
 
   // this is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
@@ -99,6 +103,14 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     this.initConfig(config);
 
     this.configureLogger();
+
+    // Initialize debug recording manager when debugLivestream is enabled.
+    if (this.config.debugLivestream) {
+      this.debugRecordingManager = new DebugRecordingManager(
+        log,
+        this.eufyPath,
+      );
+    }
 
     this.initSetup();
   }
@@ -174,29 +186,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
         errorName: ['bold', 'bgRedBright', 'whiteBright'], // Style for error names
         fileName: ['yellow'], // Style for file names
       },
-      maskValuesOfKeys: [ // Keys whose values should be masked in logs
-        'username',
-        'password',
-        'token',
-        'clientPrivateKey',
-        'private_key',
-        'login_hash',
-        'serverPublicKey',
-        'cloud_token',
-        'refreshToken',
-        'p2p_conn',
-        'app_conn',
-        'address',
-        'latitude',
-        'longitude',
-        'serialnumber',
-        'serialNumber',
-        'stationSerialNumber',
-        'data',
-        'ignoreStations',
-        'ignoreDevices',
-        'pincode',
-      ],
     };
 
     // Modify log options if detailed logging is enabled
@@ -272,8 +261,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     log.debug('OS is', this.hostSystem);
     log.debug('Using bropats @homebridge-eufy-security/eufy-security-client library in version ', libVersion);
 
-    // Probe ffmpeg for libfdk_aac support early so the warning shows at boot.
+    // Probe ffmpeg capabilities early so warnings show at boot.
     hasFdkAac();
+    probeHardwareEncoder(this.hostSystem);
 
     // Log the final configuration object for debugging purposes
     log.debug('The config is:', this.config);

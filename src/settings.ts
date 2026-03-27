@@ -51,3 +51,12 @@ export const SNAPSHOT_CLOUD_SKIP_MS = 30 * 1000;
 
 // Milliseconds – maximum time to wait for a snapshot fetch before timing out.
 export const SNAPSHOT_FETCH_TIMEOUT_MS = 30 * 1000;
+
+// Milliseconds – how much raw P2P video data to keep in the prebuffer ring buffer.
+// Used to provide instant data to FFmpeg on HKSV recording start (eliminates probe delay).
+// At typical Eufy bitrates (1–2 Mbps) this is roughly 0.5–1 MB of memory per camera.
+export const PREBUFFER_DURATION_MS = 4_000;
+
+// Bytes per millisecond – conservative estimate for ring buffer sizing.
+// 2 Mbps = 250 KB/s = 0.25 bytes/ms × 1000 = 250 bytes/ms.
+export const PREBUFFER_ESTIMATED_BYTE_RATE = 250;

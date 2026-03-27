@@ -106,6 +106,18 @@ const DiagnosticsView = {
     livestreamHint.innerHTML = Helpers.iconHtml('warning.svg') + ' <strong>Debug Livestream:</strong> Only enable this if asked by a developer. Diagnostics files may contain recorded video sessions. Use <strong>Clean Storage</strong> to remove them afterwards, or reposition the camera if you are not comfortable sharing recordings.';
     livestreamSection.appendChild(livestreamHint);
 
+    // View Recordings button — always visible when debug livestream section is shown
+    const recBtnWrapper = document.createElement('div');
+    recBtnWrapper.className = 'mt-2';
+    const btnRecordings = document.createElement('button');
+    btnRecordings.className = 'btn btn-outline-info btn-sm';
+    btnRecordings.innerHTML = '';
+    btnRecordings.appendChild(Helpers.icon('inventory.svg'));
+    btnRecordings.append(' View Recordings');
+    btnRecordings.addEventListener('click', () => App.navigate('recordings'));
+    recBtnWrapper.appendChild(btnRecordings);
+    livestreamSection.appendChild(recBtnWrapper);
+
     step1.appendChild(livestreamSection);
     stepsSection.appendChild(step1);
 

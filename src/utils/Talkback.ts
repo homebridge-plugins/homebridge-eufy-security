@@ -1,116 +1,198 @@
-import { Duplex, Writable } from 'stream';
+import { Writable } from 'stream';
 
 import { EufySecurityPlatform } from '../platform.js';
 import { Device, EufySecurity, Station } from 'eufy-security-client';
-import { log } from './utils.js';
+import { Logger, ILogObj } from 'tslog';
 
-export class TalkbackStream extends Duplex {
+/** Maximum bytes to buffer while waiting for the P2P talkback channel to open. */
+const STARTUP_BUFFER_MAX = 4096;
 
-  private eufyClient: EufySecurity;
-  private cameraName: string;
-  private cameraSN: string;
+/** Default idle timeout (ms) before talkback is stopped after the last audio data. */
+const DEFAULT_IDLE_TIMEOUT_MS = 5_000;
 
-  private cacheData: Array<Buffer> = [];
+/**
+ * Manages the return-audio (talkback) pipeline for a single camera session.
+ *
+ * Audio data written to this stream is forwarded to the eufy P2P talkback
+ * channel.  While the channel is opening, data is buffered (up to
+ * {@link STARTUP_BUFFER_MAX} bytes) so early frames are not lost.
+ */
+export class TalkbackStream extends Writable {
+
+  private readonly eufyClient: EufySecurity;
+  private readonly log: Logger<ILogObj>;
+  private readonly cameraSN: string;
+  private readonly idleTimeoutMs: number;
+
+  private startupBuffer: Buffer[] = [];
+  private startupBufferSize = 0;
   private talkbackStarted = false;
-  private stopTalkbackTimeout?: NodeJS.Timeout;
-
+  private talkbackRequested = false;
   private targetStream?: Writable;
+  private idleTimeout?: NodeJS.Timeout;
 
-  constructor(platform: EufySecurityPlatform, camera: Device) {
+  constructor(platform: EufySecurityPlatform, camera: Device, log: Logger<ILogObj>, idleTimeoutMs?: number) {
     super();
 
     this.eufyClient = platform.eufyClient;
-    this.cameraName = camera.getName();
     this.cameraSN = camera.getSerial();
+    this.log = log;
+    this.idleTimeoutMs = idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
 
     this.eufyClient.on('station talkback start', this.onTalkbackStarted);
     this.eufyClient.on('station talkback stop', this.onTalkbackStopped);
   }
 
-  private onTalkbackStarted(station: Station, device: Device, stream: Writable) {
+  // --- Event handlers (arrow functions to preserve `this` context) ---
+
+  private onTargetStreamError = (err: Error): void => {
+    this.log.warn('Talkback target stream error: ' + err);
+  };
+
+  private onTalkbackStarted = (station: Station, device: Device, stream: Writable): void => {
     if (device.getSerial() !== this.cameraSN) {
       return;
     }
 
-    log.debug(this.cameraName, 'talkback started event from station ' + station.getName());
+    this.log.debug('Talkback started via station ' + station.getName());
+    this.talkbackStarted = true;
 
     if (this.targetStream) {
-      this.unpipe(this.targetStream);
+      this.targetStream.removeListener('error', this.onTargetStreamError);
     }
 
     this.targetStream = stream;
-    this.pipe(this.targetStream);
-  }
+    this.targetStream.on('error', this.onTargetStreamError);
 
-  private onTalkbackStopped(station: Station, device: Device) {
+    this.drainStartupBuffer();
+  };
+
+  private onTalkbackStopped = (_station: Station, device: Device): void => {
     if (device.getSerial() !== this.cameraSN) {
       return;
     }
 
-    log.debug(this.cameraName, 'talkback stopped event from station ' + station.getName());
-
-    if (this.targetStream) {
-      this.unpipe(this.targetStream);
-    }
+    this.log.debug('Talkback stopped.');
+    this.talkbackStarted = false;
+    this.talkbackRequested = false;
     this.targetStream = undefined;
-  }
+  };
 
-  public stopTalkbackStream(): void {
-    // remove event listeners
-    this.eufyClient.removeListener('station talkback start', this.onTalkbackStarted);
-    this.eufyClient.removeListener('station talkback stop', this.onTalkbackStopped);
+  // --- Writable implementation ---
 
-    this.stopTalkback();
-    this.unpipe();
-    this.destroy();
-  }
-
-  override _read(): void {
-    let pushReturn = true;
-    while (this.cacheData.length > 0 && pushReturn) {
-      const data = this.cacheData.shift();
-      pushReturn = this.push(data);
-    }
-  }
-
-  override _write(chunk: Buffer, encoding: BufferEncoding, callback: (error?: Error | null | undefined) => void): void {
-
-    if (this.stopTalkbackTimeout) {
-      clearTimeout(this.stopTalkbackTimeout);
-    }
-
-    this.stopTalkbackTimeout = setTimeout(() => {
-      this.stopTalkback();
-    }, 2000);
+  override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    this.resetIdleTimeout();
 
     if (this.targetStream) {
-      this.push(chunk);
+      // Channel is open — write directly
+      this.targetStream.write(chunk, callback);
     } else {
-      this.cacheData.push(chunk);
-      this.startTalkback();
+      // Channel not yet open — buffer and request talkback
+      this.bufferChunk(chunk);
+      this.requestTalkback();
+      callback();
     }
+  }
+
+  override _final(callback: (error?: Error | null) => void): void {
+    this.stopTalkback();
     callback();
   }
 
-  private startTalkback() {
-    if (!this.talkbackStarted) {
-      this.talkbackStarted = true;
-      log.debug(this.cameraName, 'starting talkback');
-      this.eufyClient.startStationTalkback(this.cameraSN)
+  override _destroy(_error: Error | null, callback: (error?: Error | null) => void): void {
+    this.cleanup();
+    callback();
+  }
+
+  // --- Public API ---
+
+  /** Gracefully stop the talkback session and clean up all resources. */
+  public stopTalkbackStream(): void {
+    this.cleanup();
+    this.destroy();
+  }
+
+  // --- Internal helpers ---
+
+  private requestTalkback(): void {
+    if (this.talkbackRequested) {
+      return;
+    }
+    this.talkbackRequested = true;
+    this.log.debug('Requesting talkback start...');
+    this.eufyClient.startStationTalkback(this.cameraSN)
+      .catch(error => {
+        this.log.error('Talkback could not be started: ' + error);
+        this.talkbackRequested = false;
+      });
+  }
+
+  private stopTalkback(): void {
+    if (this.idleTimeout) {
+      clearTimeout(this.idleTimeout);
+      this.idleTimeout = undefined;
+    }
+    if (this.talkbackStarted || this.talkbackRequested) {
+      this.log.debug('Stopping talkback.');
+      this.talkbackStarted = false;
+      this.talkbackRequested = false;
+      this.eufyClient.stopStationTalkback(this.cameraSN)
         .catch(error => {
-          log.error(this.cameraName, 'talkback could not be started: ' + error);
+          this.log.error('Talkback could not be stopped: ' + error);
         });
     }
   }
 
-  private stopTalkback() {
-    if (this.talkbackStarted) {
-      this.talkbackStarted = false;
-      log.debug(this.cameraName, 'stopping talkback');
-      this.eufyClient.stopStationTalkback(this.cameraSN)
-        .catch(error => {
-          log.error(this.cameraName, 'talkback could not be stopped: ' + error);
-        });
+  private bufferChunk(chunk: Buffer): void {
+    if (chunk.length >= STARTUP_BUFFER_MAX) {
+      // Single chunk exceeds buffer — keep only this chunk
+      this.clearStartupBuffer();
+      this.startupBuffer.push(chunk);
+      this.startupBufferSize = chunk.length;
+      return;
+    }
+    while (this.startupBuffer.length > 0 && this.startupBufferSize + chunk.length > STARTUP_BUFFER_MAX) {
+      const dropped = this.startupBuffer.shift()!;
+      this.startupBufferSize -= dropped.length;
+    }
+    this.startupBuffer.push(chunk);
+    this.startupBufferSize += chunk.length;
+  }
+
+  private drainStartupBuffer(): void {
+    if (!this.targetStream || this.startupBuffer.length === 0) {
+      return;
+    }
+    this.log.debug(`Draining ${this.startupBufferSize} bytes of buffered audio.`);
+    for (const chunk of this.startupBuffer) {
+      this.targetStream.write(chunk);
+    }
+    this.clearStartupBuffer();
+  }
+
+  private clearStartupBuffer(): void {
+    this.startupBuffer = [];
+    this.startupBufferSize = 0;
+  }
+
+  private resetIdleTimeout(): void {
+    if (this.idleTimeout) {
+      clearTimeout(this.idleTimeout);
+    }
+    this.idleTimeout = setTimeout(() => {
+      this.log.debug('Talkback idle timeout — stopping.');
+      this.stopTalkback();
+    }, this.idleTimeoutMs);
+  }
+
+  private cleanup(): void {
+    this.eufyClient.removeListener('station talkback start', this.onTalkbackStarted);
+    this.eufyClient.removeListener('station talkback stop', this.onTalkbackStopped);
+    this.stopTalkback();
+    this.clearStartupBuffer();
+    if (this.targetStream) {
+      this.targetStream.removeListener('error', this.onTargetStreamError);
+      this.targetStream = undefined;
     }
   }
 }

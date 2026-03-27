@@ -153,6 +153,11 @@ const App = {
         DiagnosticsView.render(this._root);
         break;
 
+      case 'recordings':
+        homebridge.enableSaveButton();
+        RecordingsView.render(this._root);
+        break;
+
       default:
         // Unknown route — try dashboard if we have stations, otherwise login
         if (this.state.stations.length > 0) {

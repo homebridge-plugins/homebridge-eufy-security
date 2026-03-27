@@ -196,6 +196,16 @@ const DeviceDetailView = {
         });
       }
 
+      Toggle.render(advSection, {
+        id: 'toggle-audio',
+        label: 'Audio',
+        help: 'Include audio in camera streams and recordings.',
+        checked: deviceConfig.audio !== false,
+        onChange: async (checked) => {
+          await Config.updateDeviceConfig(device.uniqueId, { audio: checked });
+        },
+      });
+
       if (device.supportsTalkback) {
         Toggle.render(advSection, {
           id: 'toggle-talkback',

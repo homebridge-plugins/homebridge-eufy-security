@@ -28,6 +28,7 @@ export type CameraConfig = {
   enableCamera: boolean;
   snapshotHandlingMethod?: SnapshotHandlingMethod;
   delayCameraSnapshot?: boolean;
+  audio?: boolean;
   talkback?: boolean;
   talkbackChannels?: number;
   hsvRecordingDuration?: number;
@@ -43,6 +44,7 @@ export const DEFAULT_CAMERACONFIG_VALUES: CameraConfig = {
   enableButton: true,
   motionButton: true,
   lightButton: true,
+  audio: true,
   talkback: false,
   talkbackChannels: 1,
   hsvRecordingDuration: 90,

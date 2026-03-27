@@ -211,4 +211,40 @@ const Api = {
   async getSystemInfo() {
     return homebridge.request('/systemInfo');
   },
+
+  /**
+   * List all available debug recordings.
+   * @returns {Promise<{recordings: Array}>}
+   */
+  async listDebugRecordings() {
+    return homebridge.request('/debugRecordings');
+  },
+
+  /**
+   * Download a chunk of a debug recording file.
+   * @param {string} filename
+   * @param {number} offset
+   * @param {number} chunkSize
+   * @returns {Promise<{data: Buffer, totalSize: number, offset: number, chunkSize: number, done: boolean, filename: string}>}
+   */
+  async downloadDebugRecording(filename, offset = 0, chunkSize = 256 * 1024) {
+    return homebridge.request('/downloadDebugRecording', { filename, offset, chunkSize });
+  },
+
+  /**
+   * Delete a specific debug recording file.
+   * @param {string} filename
+   * @returns {Promise<{deleted: boolean, filename: string}>}
+   */
+  async deleteDebugRecording(filename) {
+    return homebridge.request('/deleteDebugRecording', { filename });
+  },
+
+  /**
+   * Delete all debug recording files.
+   * @returns {Promise<{deleted: number}>}
+   */
+  async deleteAllDebugRecordings() {
+    return homebridge.request('/deleteAllDebugRecordings');
+  },
 };
