@@ -43,7 +43,7 @@
   ],
   "dependencies": {
     "@homebridge/plugin-ui-utils": "^2.2.2",
-    "eufy-security-client": "dev",
+    "eufy-security-client": "^3.8.0",
     "ffmpeg-for-homebridge": "2.2.2",
     "pick-port": "^2.2.0",
     "rotating-file-stream": "^3.2.9",
