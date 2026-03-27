@@ -105,7 +105,7 @@ export class DebugRecordingManager {
       const videoPort = await this.createInputServer(sanitizedSerial, videostream, 'video');
       const audioPort = audioFormat ? await this.createInputServer(sanitizedSerial, audiostream, 'audio') : null;
 
-      const args = this.buildRawMuxArgs(videoPort, audioPort, audioFormat, outputPath);
+      const args = this.buildRawMuxArgs(videoPort, audioPort, audioFormat, outputPath, metadata.videoFPS);
 
       this.log.debug(`Starting raw debug recording: ${filename}`);
       this.log.debug(`FFmpeg raw mux args: ffmpeg ${args.join(' ')}`);
@@ -284,22 +284,26 @@ export class DebugRecordingManager {
     audioPort: number | null,
     audioFormat: string | null,
     outputPath: string,
+    videoFps: number,
   ): string[] {
-    // Wallclock timestamps are correct here because source→fork piping is
-    // deferred until TCP servers are listening and FFmpeg is spawned (no
-    // burst of buffered data). Frames arrive in real-time and get accurate
-    // PTS. Initial frames before SPS/PPS are discarded by FFmpeg (harmless).
+    // P2P delivers data in bursts, not at a steady real-time rate. Wallclock
+    // timestamps reflect burst-arrival times (choppy video, crushed audio).
+    // Instead, let FFmpeg generate PTS from the declared framerate for video
+    // and from the sample rate for audio — producing smooth playback that
+    // matches what HomeKit sees.
+    const fps = videoFps > 0 ? videoFps : 15;
     const args: string[] = [
       '-hide_banner',
       '-loglevel', 'error',
-      '-use_wallclock_as_timestamps', '1',
+      '-fflags', '+genpts',
+      '-r', String(fps),
       '-f', 'h264',
       '-i', `tcp://127.0.0.1:${videoPort}`,
     ];
 
     if (audioPort && audioFormat) {
       args.push(
-        '-use_wallclock_as_timestamps', '1',
+        '-fflags', '+genpts',
         '-f', audioFormat,
         '-i', `tcp://127.0.0.1:${audioPort}`,
       );
