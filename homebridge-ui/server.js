@@ -282,6 +282,8 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async login(options) {
+    clearTimeout(this._loginTimeout);
+
     // Block login if the plugin is already running (accessories updated within 90s)
     if (!this.eufyClient) {
       try {
