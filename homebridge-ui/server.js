@@ -171,9 +171,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   initTransportStreams() {
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
-    }
+    fs.mkdirSync(this.storagePath, { recursive: true });
 
     const logStreams = [
       { name: 'configui-server.log', logger: this.log },
@@ -940,9 +938,7 @@ class UiServer extends HomebridgePluginUiServer {
 
   /** Persist discovered stations/devices to accessories.json. */
   storeAccessories() {
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
-    }
+    fs.mkdirSync(this.storagePath, { recursive: true });
     const dataToStore = { version: LIB_VERSION, storedAt: new Date().toISOString(), stations: this.stations };
     fs.writeFileSync(this.storedAccessoriesPath, JSON.stringify(dataToStore));
   }
@@ -1058,9 +1054,7 @@ class UiServer extends HomebridgePluginUiServer {
       }
     }
 
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
-    }
+    fs.mkdirSync(this.storagePath, { recursive: true });
 
     const dataToStore = { version: LIB_VERSION, storedAt: new Date().toISOString(), devices: unsupportedEntries };
     fs.writeFileSync(this.unsupportedPath, JSON.stringify(dataToStore));
