@@ -246,6 +246,17 @@ class UiServer extends HomebridgePluginUiServer {
     };
   }
 
+  /** Emit a discovery progress event to the UI. */
+  _emitProgress(phase, progress, message) {
+    this.pushEvent('discoveryProgress', {
+      phase,
+      progress,
+      stations: this.pendingStations.length,
+      devices: this.pendingDevices.length,
+      message,
+    });
+  }
+
   async deleteFileIfExists(filePath) {
     try {
       await fs.promises.unlink(filePath);
@@ -381,11 +392,7 @@ class UiServer extends HomebridgePluginUiServer {
       }
     } else if (options && options.verifyCode) {
       this.log.debug('login with TFA code');
-      this.pushEvent('discoveryProgress', {
-        phase: 'authenticating',
-        progress: 10,
-        message: 'Verifying TFA code...',
-      });
+      this._emitProgress('authenticating', 10, 'Verifying TFA code...');
       try {
         this._registerOneTimeAuthHandlers();
         this.eufyClient?.connect({ verifyCode: options.verifyCode, force: false })
@@ -401,11 +408,7 @@ class UiServer extends HomebridgePluginUiServer {
       }
     } else if (options && options.captcha) {
       this.log.debug('login with captcha');
-      this.pushEvent('discoveryProgress', {
-        phase: 'authenticating',
-        progress: 10,
-        message: 'Verifying captcha...',
-      });
+      this._emitProgress('authenticating', 10, 'Verifying captcha...');
       try {
         this._registerOneTimeAuthHandlers();
         this.eufyClient?.connect({ captcha: { captchaCode: options.captcha.captchaCode, captchaId: options.captcha.captchaId }, force: false })
@@ -444,11 +447,7 @@ class UiServer extends HomebridgePluginUiServer {
         return;
       }
       this.pushEvent('authSuccess', {});
-      this.pushEvent('discoveryProgress', {
-        phase: 'authenticating',
-        progress: 15,
-        message: 'Authenticated — waiting for devices...',
-      });
+      this._emitProgress('authenticating', 15, 'Authenticated — waiting for devices...');
       this._startDiscoveryInactivityTimer();
     });
   }
@@ -467,11 +466,7 @@ class UiServer extends HomebridgePluginUiServer {
       const elapsed = Math.floor((Date.now() - start) / 1000);
       const remaining = Math.max(0, totalSec - elapsed);
       const pct = Math.min(95, 15 + Math.floor((elapsed / totalSec) * 80));
-      this.pushEvent('discoveryProgress', {
-        phase: 'waitingForDevices',
-        progress: pct,
-        message: `Authenticated — waiting for devices... ${remaining}s`,
-      });
+      this._emitProgress('waitingForDevices', pct, `Authenticated — waiting for devices... ${remaining}s`);
     }, 1000);
 
     this._discoveryInactivityTimeout = setTimeout(() => {
@@ -488,11 +483,7 @@ class UiServer extends HomebridgePluginUiServer {
       } catch (error) {
         this.log.error('Error storing empty accessories:', error);
       }
-      this.pushEvent('discoveryProgress', {
-        phase: 'done',
-        progress: 100,
-        message: 'No devices found.',
-      });
+      this._emitProgress('done', 100, 'No devices found.');
       this.pushEvent('addAccessory', { stations: [], noDevices: true });
       this.eufyClient?.removeAllListeners();
       this.eufyClient?.close();
@@ -626,13 +617,7 @@ class UiServer extends HomebridgePluginUiServer {
     this.pendingStations.push(station);
     this.log.debug(`${station.getName()}: Station queued for processing`);
     this._discoveryPhase = 'queuing';
-    this.pushEvent('discoveryProgress', {
-      phase: 'queuing',
-      progress: 30,
-      stations: this.pendingStations.length,
-      devices: this.pendingDevices.length,
-      message: `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`,
-    });
+    this._emitProgress('queuing', 30, `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`);
     this._restartDiscoveryDebounce();
   }
 
@@ -652,13 +637,7 @@ class UiServer extends HomebridgePluginUiServer {
     this.pendingDevices.push(device);
     this.log.debug(`${device.getName()}: Device queued for processing`);
     this._discoveryPhase = 'queuing';
-    this.pushEvent('discoveryProgress', {
-      phase: 'queuing',
-      progress: 30,
-      stations: this.pendingStations.length,
-      devices: this.pendingDevices.length,
-      message: `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`,
-    });
+    this._emitProgress('queuing', 30, `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`);
     this._restartDiscoveryDebounce();
   }
 
@@ -677,13 +656,7 @@ class UiServer extends HomebridgePluginUiServer {
       const elapsed = (Date.now() - debounceStart) / 1000;
       const pct = Math.min(95, 30 + Math.floor((elapsed / delaySec) * 65));
       const remaining = Math.max(0, Math.ceil(delaySec - elapsed));
-      this.pushEvent('discoveryProgress', {
-        phase: 'queuing',
-        progress: pct,
-        stations: this.pendingStations.length,
-        devices: this.pendingDevices.length,
-        message: `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s) — waiting for more... ${remaining}s`,
-      });
+      this._emitProgress('queuing', pct, `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s) — waiting for more... ${remaining}s`);
     }, 1000);
 
     this.processingTimeout = setTimeout(() => {
@@ -704,13 +677,7 @@ class UiServer extends HomebridgePluginUiServer {
     this.log.debug(`Processing ${this.pendingStations.length} stations and ${this.pendingDevices.length} devices`);
 
     this._discoveryPhase = 'processing';
-    this.pushEvent('discoveryProgress', {
-      phase: 'processing',
-      progress: 95,
-      stations: this.pendingStations.length,
-      devices: this.pendingDevices.length,
-      message: `Processing ${this.pendingStations.length} station(s) and ${this.pendingDevices.length} device(s)...`,
-    });
+    this._emitProgress('processing', 95, `Processing ${this.pendingStations.length} station(s) and ${this.pendingDevices.length} device(s)...`);
 
     if (this.pendingStations.length === 0 || this.pendingDevices.length === 0) {
       this.log.warn(
@@ -756,11 +723,7 @@ class UiServer extends HomebridgePluginUiServer {
         waited += pollMs;
         const pct = Math.min(95, 50 + Math.floor((waited / UNSUPPORTED_INTEL_WAIT_MS) * 45));
         const remaining = Math.max(0, Math.ceil((UNSUPPORTED_INTEL_WAIT_MS - waited) / 1000));
-        this.pushEvent('discoveryProgress', {
-          phase: 'unsupportedWait',
-          progress: pct,
-          message: `Collecting data for ${unsupportedItems.length} unsupported device(s)... ${remaining}s`,
-        });
+        this._emitProgress('unsupportedWait', pct, `Collecting data for ${unsupportedItems.length} unsupported device(s)... ${remaining}s`);
       }
 
       if (this._skipIntelWait) {
@@ -770,11 +733,7 @@ class UiServer extends HomebridgePluginUiServer {
       }
     }
 
-    this.pushEvent('discoveryProgress', {
-      phase: 'buildingStations',
-      progress: 96,
-      message: 'Building station list...',
-    });
+    this._emitProgress('buildingStations', 96, 'Building station list...');
 
     // Process queued stations
     for (const station of this.pendingStations) {
@@ -842,11 +801,7 @@ class UiServer extends HomebridgePluginUiServer {
       this.stations.push(s);
     }
 
-    this.pushEvent('discoveryProgress', {
-      phase: 'buildingDevices',
-      progress: 98,
-      message: 'Building device list...',
-    });
+    this._emitProgress('buildingDevices', 98, 'Building device list...');
 
     // Process queued devices and attach them to stations
     for (const device of this.pendingDevices) {
@@ -929,11 +884,7 @@ class UiServer extends HomebridgePluginUiServer {
       this.log.error('Error storing accessories:', error);
     }
 
-    this.pushEvent('discoveryProgress', {
-      phase: 'done',
-      progress: 100,
-      message: 'Discovery complete!',
-    });
+    this._emitProgress('done', 100, 'Discovery complete!');
 
     this.pushEvent('addAccessory', { stations: this.stations, extendedDiscovery: unsupportedItems.length > 0 });
   }
