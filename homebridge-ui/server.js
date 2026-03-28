@@ -373,8 +373,8 @@ class UiServer extends HomebridgePluginUiServer {
         this.eufyClient?.on('connect', () => this.log.debug('Connected!'));
         this.eufyClient?.on('close', () => this.log.debug('Closed!'));
       } catch (error) {
-        this.log.error(error);
-        this.pushEvent('authError', { message: `Initialization failed: ${error.message || error}` });
+        this.log.error('EufySecurity init failed:', error);
+        this.pushEvent('authError', { message: 'Initialization failed. Check the logs for details.' });
         this._discoveryPhase = 'idle';
         return { success: false };
       }
@@ -393,9 +393,9 @@ class UiServer extends HomebridgePluginUiServer {
           .then(() => this.log.debug('connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => this.log.error(error));
       } catch (error) {
-        this.log.error(error);
+        this.log.error('Login error:', error);
         this._clearLoginTimeout();
-        this.pushEvent('authError', { message: 'Login error: ' + (error.message || error) });
+        this.pushEvent('authError', { message: 'Login failed. Check the logs for details.' });
       }
     } else if (options && options.verifyCode) {
       this.log.debug('login with TFA code');
@@ -405,13 +405,14 @@ class UiServer extends HomebridgePluginUiServer {
         this.eufyClient?.connect({ verifyCode: options.verifyCode, force: false })
           .then(() => this.log.debug('TFA connect resolved, connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => {
-            this.log.error('TFA connect error: ' + error);
+            this.log.error('TFA connect error:', error);
             this._clearLoginTimeout();
-            this.pushEvent('authError', { message: 'TFA verification failed: ' + (error.message || error) });
+            this.pushEvent('authError', { message: 'TFA verification failed. Check the logs for details.' });
           });
       } catch (error) {
+        this.log.error('TFA verification error:', error);
         this._clearLoginTimeout();
-        this.pushEvent('authError', { message: 'TFA verification error: ' + (error.message || error) });
+        this.pushEvent('authError', { message: 'TFA verification failed. Check the logs for details.' });
       }
     } else if (options && options.captcha) {
       this.log.debug('login with captcha');
@@ -421,13 +422,14 @@ class UiServer extends HomebridgePluginUiServer {
         this.eufyClient?.connect({ captcha: { captchaCode: options.captcha.captchaCode, captchaId: options.captcha.captchaId }, force: false })
           .then(() => this.log.debug('Captcha connect resolved, connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => {
-            this.log.error('Captcha connect error: ' + error);
+            this.log.error('Captcha connect error:', error);
             this._clearLoginTimeout();
-            this.pushEvent('authError', { message: 'Captcha verification failed: ' + (error.message || error) });
+            this.pushEvent('authError', { message: 'Captcha verification failed. Check the logs for details.' });
           });
       } catch (error) {
+        this.log.error('Captcha verification error:', error);
         this._clearLoginTimeout();
-        this.pushEvent('authError', { message: 'Captcha verification error: ' + (error.message || error) });
+        this.pushEvent('authError', { message: 'Captcha verification failed. Check the logs for details.' });
       }
     } else {
       this._clearLoginTimeout();
