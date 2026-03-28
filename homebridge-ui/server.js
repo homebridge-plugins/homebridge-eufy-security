@@ -7,6 +7,8 @@ import { HomebridgePluginUiServer } from '@homebridge/plugin-ui-utils';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import os from 'os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { encryptDiagnostics } from './diagnosticsCrypto.js';
 
 const require = createRequire(import.meta.url);
@@ -610,10 +612,6 @@ class UiServer extends HomebridgePluginUiServer {
     }
   }
 
-  async delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
   async _onStationDiscovered(station) {
     if (this.adminAccountUsed) {
       return;
@@ -754,7 +752,7 @@ class UiServer extends HomebridgePluginUiServer {
       const pollMs = 1000;
       let waited = 0;
       while (waited < UNSUPPORTED_INTEL_WAIT_MS && !this._skipIntelWait) {
-        await this.delay(pollMs);
+        await delay(pollMs);
         waited += pollMs;
         const pct = Math.min(95, 50 + Math.floor((waited / UNSUPPORTED_INTEL_WAIT_MS) * 45));
         const remaining = Math.max(0, Math.ceil((UNSUPPORTED_INTEL_WAIT_MS - waited) / 1000));
@@ -1203,7 +1201,7 @@ class UiServer extends HomebridgePluginUiServer {
       // Snapshot files to a temp directory before archiving.
       // Log files are actively written to — reading them directly with tar
       // causes "did not encounter expected EOF" when file size changes mid-read.
-      const os = await import('os');
+
       const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'eufy-diag-'));
       let fileBuffer;
       try {
@@ -1268,7 +1266,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async getSystemInfo() {
-    const os = await import('os');
+
     let homebridgeVersion = 'unknown';
     try {
       const hbPkg = require('homebridge/package.json');
