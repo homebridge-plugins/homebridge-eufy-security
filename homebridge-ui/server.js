@@ -24,7 +24,7 @@ class UiServer extends HomebridgePluginUiServer {
   log;
   tsLog;
   storagePath;
-  storedAccessories_file;
+  storedAccessoriesPath;
 
   adminAccountUsed = false;
 
@@ -71,8 +71,8 @@ class UiServer extends HomebridgePluginUiServer {
     super();
 
     this.storagePath = this.homebridgeStoragePath + '/eufysecurity';
-    this.storedAccessories_file = this.storagePath + '/accessories.json';
-    this.unsupported_file = this.storagePath + '/unsupported.json';
+    this.storedAccessoriesPath = this.storagePath + '/accessories.json';
+    this.unsupportedPath = this.storagePath + '/unsupported.json';
     this.config.persistentDir = this.storagePath;
 
     this.initLogger();
@@ -263,7 +263,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async resetAccessoryData() {
-    return this.deleteFileIfExists(this.storedAccessories_file);
+    return this.deleteFileIfExists(this.storedAccessoriesPath);
   }
 
   async checkCache() {
@@ -287,8 +287,8 @@ class UiServer extends HomebridgePluginUiServer {
     // Block login if the plugin is already running (accessories updated within 90s)
     if (!this.eufyClient) {
       try {
-        if (fs.existsSync(this.storedAccessories_file)) {
-          const data = JSON.parse(fs.readFileSync(this.storedAccessories_file, 'utf-8'));
+        if (fs.existsSync(this.storedAccessoriesPath)) {
+          const data = JSON.parse(fs.readFileSync(this.storedAccessoriesPath, 'utf-8'));
           if (data?.storedAt) {
             const ageMs = Date.now() - new Date(data.storedAt).getTime();
             if (ageMs < 90_000) {
@@ -562,12 +562,12 @@ class UiServer extends HomebridgePluginUiServer {
 
   async loadStoredAccessories() {
     try {
-      if (!fs.existsSync(this.storedAccessories_file)) {
+      if (!fs.existsSync(this.storedAccessoriesPath)) {
         this.log.debug('Stored accessories file does not exist.');
         return [];
       }
 
-      const storedData = await fs.promises.readFile(this.storedAccessories_file, { encoding: 'utf-8' });
+      const storedData = await fs.promises.readFile(this.storedAccessoriesPath, { encoding: 'utf-8' });
       const { version: storedVersion, storedAt, stations: storedAccessories } = JSON.parse(storedData);
 
       // --- Cache age check (30 days) ---
@@ -944,7 +944,7 @@ class UiServer extends HomebridgePluginUiServer {
       fs.mkdirSync(this.storagePath, { recursive: true });
     }
     const dataToStore = { version: LIB_VERSION, storedAt: new Date().toISOString(), stations: this.stations };
-    fs.writeFileSync(this.storedAccessories_file, JSON.stringify(dataToStore));
+    fs.writeFileSync(this.storedAccessoriesPath, JSON.stringify(dataToStore));
   }
 
   // ── Sensitive-field redaction ──────────────────────────────────────────────
@@ -1063,7 +1063,7 @@ class UiServer extends HomebridgePluginUiServer {
     }
 
     const dataToStore = { version: LIB_VERSION, storedAt: new Date().toISOString(), devices: unsupportedEntries };
-    fs.writeFileSync(this.unsupported_file, JSON.stringify(dataToStore));
+    fs.writeFileSync(this.unsupportedPath, JSON.stringify(dataToStore));
     this.log.debug(`Persisted ${unsupportedEntries.length} unsupported device(s) to unsupported.json`);
   }
 
@@ -1118,10 +1118,10 @@ class UiServer extends HomebridgePluginUiServer {
   /** Load unsupported device intel from disk. */
   async loadUnsupportedDevices() {
     try {
-      if (!fs.existsSync(this.unsupported_file)) {
+      if (!fs.existsSync(this.unsupportedPath)) {
         return { devices: [] };
       }
-      const data = JSON.parse(await fs.promises.readFile(this.unsupported_file, 'utf-8'));
+      const data = JSON.parse(await fs.promises.readFile(this.unsupportedPath, 'utf-8'));
       return { devices: data.devices || [] };
     } catch (error) {
       this.log.error('Could not load unsupported devices: ' + error);
@@ -1177,13 +1177,13 @@ class UiServer extends HomebridgePluginUiServer {
     const filesToArchive = [...finalLogFiles];
 
     // Include accessories.json for diagnostics
-    if (fs.existsSync(this.storedAccessories_file)) {
-      filesToArchive.push(path.basename(this.storedAccessories_file));
+    if (fs.existsSync(this.storedAccessoriesPath)) {
+      filesToArchive.push(path.basename(this.storedAccessoriesPath));
     }
 
     // Include unsupported.json for diagnostics
-    if (fs.existsSync(this.unsupported_file)) {
-      filesToArchive.push(path.basename(this.unsupported_file));
+    if (fs.existsSync(this.unsupportedPath)) {
+      filesToArchive.push(path.basename(this.unsupportedPath));
     }
 
     this.pushEvent('diagnosticsProgress', { progress: 40, status: 'Checking archive content' });
@@ -1277,8 +1277,8 @@ class UiServer extends HomebridgePluginUiServer {
 
     let deviceSummary = [];
     try {
-      if (fs.existsSync(this.storedAccessories_file)) {
-        const storedData = JSON.parse(fs.readFileSync(this.storedAccessories_file, 'utf-8'));
+      if (fs.existsSync(this.storedAccessoriesPath)) {
+        const storedData = JSON.parse(fs.readFileSync(this.storedAccessoriesPath, 'utf-8'));
         if (storedData.stations) {
           deviceSummary = storedData.stations.map(s => ({
             name: s.displayName,
