@@ -31,7 +31,14 @@ class UiServer extends HomebridgePluginUiServer {
   // Batch processing for stations and devices
   pendingStations = [];
   pendingDevices = [];
-  processingTimeout;
+
+  // Timer handles — declared here for visibility; cleared via scoped helpers below
+  /** @type {ReturnType<typeof setTimeout>|null} */ _loginTimeout = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ processingTimeout = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ _closeTimeout = null;
+  /** @type {ReturnType<typeof setInterval>|null} */ _debounceTickInterval = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ _discoveryInactivityTimeout = null;
+  /** @type {ReturnType<typeof setInterval>|null} */ _discoveryInactivityTickInterval = null;
 
   /** Set to true when the user clicks "Skip" in the UI to abort the unsupported intel wait. */
   _skipIntelWait = false;
@@ -293,7 +300,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async login(options) {
-    clearTimeout(this._loginTimeout);
+    this._clearLoginTimeout();
 
     // Block login if the plugin is already running (accessories updated within 90s)
     if (!this.eufyClient) {
@@ -387,7 +394,7 @@ class UiServer extends HomebridgePluginUiServer {
           .catch((error) => this.log.error(error));
       } catch (error) {
         this.log.error(error);
-        clearTimeout(this._loginTimeout);
+        this._clearLoginTimeout();
         this.pushEvent('authError', { message: 'Login error: ' + (error.message || error) });
       }
     } else if (options && options.verifyCode) {
@@ -399,11 +406,11 @@ class UiServer extends HomebridgePluginUiServer {
           .then(() => this.log.debug('TFA connect resolved, connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => {
             this.log.error('TFA connect error: ' + error);
-            clearTimeout(this._loginTimeout);
+            this._clearLoginTimeout();
             this.pushEvent('authError', { message: 'TFA verification failed: ' + (error.message || error) });
           });
       } catch (error) {
-        clearTimeout(this._loginTimeout);
+        this._clearLoginTimeout();
         this.pushEvent('authError', { message: 'TFA verification error: ' + (error.message || error) });
       }
     } else if (options && options.captcha) {
@@ -415,15 +422,15 @@ class UiServer extends HomebridgePluginUiServer {
           .then(() => this.log.debug('Captcha connect resolved, connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => {
             this.log.error('Captcha connect error: ' + error);
-            clearTimeout(this._loginTimeout);
+            this._clearLoginTimeout();
             this.pushEvent('authError', { message: 'Captcha verification failed: ' + (error.message || error) });
           });
       } catch (error) {
-        clearTimeout(this._loginTimeout);
+        this._clearLoginTimeout();
         this.pushEvent('authError', { message: 'Captcha verification error: ' + (error.message || error) });
       }
     } else {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       this.pushEvent('authError', { message: 'Unsupported login method.' });
     }
 
@@ -434,15 +441,15 @@ class UiServer extends HomebridgePluginUiServer {
   /** Register once-only auth event handlers (TFA, captcha, connect) on the eufy client. */
   _registerOneTimeAuthHandlers() {
     this.eufyClient?.once('tfa request', () => {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       this.pushEvent('tfaRequest', {});
     });
     this.eufyClient?.once('captcha request', (id, captcha) => {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       this.pushEvent('captchaRequest', { id, captcha });
     });
     this.eufyClient?.once('connect', () => {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       if (this.adminAccountUsed) {
         return;
       }
@@ -515,35 +522,35 @@ class UiServer extends HomebridgePluginUiServer {
     `);
   }
 
-  /** Clear all pending timers (login, processing, close, debounce tick, discovery inactivity). */
-  _clearAllTimers() {
+  /** Clear the login timeout. */
+  _clearLoginTimeout() {
     clearTimeout(this._loginTimeout);
     this._loginTimeout = null;
-    if (this.processingTimeout) {
-      clearTimeout(this.processingTimeout);
-      this.processingTimeout = null;
-    }
-    if (this._closeTimeout) {
-      clearTimeout(this._closeTimeout);
-      this._closeTimeout = null;
-    }
-    if (this._debounceTickInterval) {
-      clearInterval(this._debounceTickInterval);
-      this._debounceTickInterval = null;
-    }
-    this._clearDiscoveryInactivityTimer();
+  }
+
+  /** Clear debounce-related timers (processing, close, tick interval). */
+  _clearDebounceTimers() {
+    clearTimeout(this.processingTimeout);
+    this.processingTimeout = null;
+    clearTimeout(this._closeTimeout);
+    this._closeTimeout = null;
+    clearInterval(this._debounceTickInterval);
+    this._debounceTickInterval = null;
   }
 
   /** Clear the post-auth discovery inactivity timer. */
   _clearDiscoveryInactivityTimer() {
-    if (this._discoveryInactivityTickInterval) {
-      clearInterval(this._discoveryInactivityTickInterval);
-      this._discoveryInactivityTickInterval = null;
-    }
-    if (this._discoveryInactivityTimeout) {
-      clearTimeout(this._discoveryInactivityTimeout);
-      this._discoveryInactivityTimeout = null;
-    }
+    clearInterval(this._discoveryInactivityTickInterval);
+    this._discoveryInactivityTickInterval = null;
+    clearTimeout(this._discoveryInactivityTimeout);
+    this._discoveryInactivityTimeout = null;
+  }
+
+  /** Clear all pending timers. */
+  _clearAllTimers() {
+    this._clearLoginTimeout();
+    this._clearDebounceTimers();
+    this._clearDiscoveryInactivityTimer();
   }
 
   /** Parse a semver string (e.g. '4.4.2-beta.18') into [major, minor, patch]. */
@@ -643,7 +650,8 @@ class UiServer extends HomebridgePluginUiServer {
 
   /** Restart the debounce timer — processing fires after DISCOVERY_DEBOUNCE_SEC of silence. */
   _restartDiscoveryDebounce() {
-    this._clearAllTimers();
+    this._clearDebounceTimers();
+    this._clearDiscoveryInactivityTimer();
     const delaySec = UiServer.DISCOVERY_DEBOUNCE_SEC;
     this.log.debug(
       `Discovery debounce reset — will process in ${delaySec}s if no more devices arrive ` +
