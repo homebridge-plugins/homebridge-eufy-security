@@ -25,6 +25,7 @@ class UiServer extends HomebridgePluginUiServer {
   tsLog;
   storagePath;
   storedAccessoriesPath;
+  unsupportedPath;
 
   adminAccountUsed = false;
 
@@ -1298,8 +1299,8 @@ class UiServer extends HomebridgePluginUiServer {
         .sort((a, b) => b.createdAt - a.createdAt);
       return { recordings: files };
     } catch (error) {
-      this.log.error('Error listing debug recordings: ' + error);
-      throw error;
+      this.log.error('Error listing debug recordings:', error);
+      throw new Error('Failed to list debug recordings. Check the logs for details.');
     }
   }
 
@@ -1332,8 +1333,11 @@ class UiServer extends HomebridgePluginUiServer {
 
     const fh = await fs.promises.open(resolved, 'r');
     const buf = Buffer.alloc(readSize);
-    await fh.read(buf, 0, readSize, numOffset);
-    await fh.close();
+    try {
+      await fh.read(buf, 0, readSize, numOffset);
+    } finally {
+      await fh.close();
+    }
 
     const newOffset = numOffset + readSize;
 
