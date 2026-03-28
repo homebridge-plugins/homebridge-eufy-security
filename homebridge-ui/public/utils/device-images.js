@@ -82,6 +82,7 @@ const DeviceImages = {
       case 201: return 'smartlock_t85L0_large.png';
       case 202: return 'smartlock_t85D0_large.png';
       case 203: return 'smartlock_t85V0_large.png';
+      case 209: return 'smartlock_t85P0_large.png';
       case 300: return 'nvr_s4_max_T8N00_large.png';
       case 301: return 'poe_bullet_ptz_cam_s4_T8E00_large.png';
       case 10005: return 'walllight_s120_large.png';
