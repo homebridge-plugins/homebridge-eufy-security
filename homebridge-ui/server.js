@@ -996,14 +996,14 @@ class UiServer extends HomebridgePluginUiServer {
     for (const station of pendingStations) {
       const stationType = station.getDeviceType();
       if (!Device.isStation(stationType) && !Device.isSupported(stationType)) {
-        unsupportedEntries.push(this._buildUnsupportedStationEntry(station));
+        unsupportedEntries.push(this._buildUnsupportedEntry(station, 'station'));
       }
     }
 
     // Collect unsupported devices
     for (const device of pendingDevices) {
       if (!Device.isSupported(device.getDeviceType())) {
-        unsupportedEntries.push(this._buildUnsupportedDeviceEntry(device));
+        unsupportedEntries.push(this._buildUnsupportedEntry(device, 'device'));
       }
     }
 
@@ -1014,50 +1014,29 @@ class UiServer extends HomebridgePluginUiServer {
     this.log.debug(`Persisted ${unsupportedEntries.length} unsupported device(s) to unsupported.json`);
   }
 
-  /** Build a triage-ready intel object for an unsupported device. */
-  _buildUnsupportedDeviceEntry(device) {
-    const rawDevice = device.getRawDevice ? device.getRawDevice() : {};
-    const rawProps = device.getRawProperties ? device.getRawProperties() : {};
+  /** Build a triage-ready intel object for an unsupported device or station. */
+  _buildUnsupportedEntry(item, kind) {
+    const isStation = kind === 'station';
+    const rawData = isStation
+      ? (item.getRawStation ? item.getRawStation() : {})
+      : (item.getRawDevice ? item.getRawDevice() : {});
+    const rawProps = item.getRawProperties ? item.getRawProperties() : {};
 
-    const wifiSsid = rawDevice.wifi_ssid || undefined;
-    const localIp = rawDevice.ip_addr || rawDevice.local_ip || undefined;
-
-    return {
-      uniqueId: device.getSerial(),
-      displayName: device.getName(),
-      type: device.getDeviceType(),
-      typename: DeviceType[device.getDeviceType()] || undefined,
-      stationSerialNumber: device.getStationSerial(),
-      model: rawDevice.device_model,
-      hardwareVersion: rawDevice.main_hw_version,
-      softwareVersion: rawDevice.main_sw_version,
-      wifiSsid: wifiSsid ? UiServer._partialMask(wifiSsid, 3, 0) : undefined,
-      localIp: localIp ? UiServer._partialMask(localIp, 3, 0) : undefined,
-      rawDevice: UiServer._redactSensitiveFields(rawDevice),
-      rawProperties: rawProps,
-    };
-  }
-
-  /** Build a triage-ready intel object for an unsupported standalone station. */
-  _buildUnsupportedStationEntry(station) {
-    const rawStation = station.getRawStation ? station.getRawStation() : {};
-    const rawProps = station.getRawProperties ? station.getRawProperties() : {};
-
-    const wifiSsid = rawStation.wifi_ssid || undefined;
-    const localIp = rawStation.ip_addr || undefined;
+    const wifiSsid = rawData.wifi_ssid || undefined;
+    const localIp = rawData.ip_addr || rawData.local_ip || undefined;
 
     return {
-      uniqueId: station.getSerial(),
-      displayName: station.getName(),
-      type: station.getDeviceType(),
-      typename: DeviceType[station.getDeviceType()] || undefined,
-      stationSerialNumber: station.getSerial(),
-      model: rawStation.station_model,
-      hardwareVersion: rawStation.main_hw_version,
-      softwareVersion: rawStation.main_sw_version,
+      uniqueId: item.getSerial(),
+      displayName: item.getName(),
+      type: item.getDeviceType(),
+      typename: DeviceType[item.getDeviceType()] || undefined,
+      stationSerialNumber: isStation ? item.getSerial() : item.getStationSerial(),
+      model: rawData[isStation ? 'station_model' : 'device_model'],
+      hardwareVersion: rawData.main_hw_version,
+      softwareVersion: rawData.main_sw_version,
       wifiSsid: wifiSsid ? UiServer._partialMask(wifiSsid, 3, 0) : undefined,
       localIp: localIp ? UiServer._partialMask(localIp, 3, 0) : undefined,
-      rawDevice: UiServer._redactSensitiveFields(rawStation),
+      rawDevice: UiServer._redactSensitiveFields(rawData),
       rawProperties: rawProps,
     };
   }
