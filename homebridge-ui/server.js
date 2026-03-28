@@ -1244,17 +1244,17 @@ class UiServer extends HomebridgePluginUiServer {
       'configui-server.log',
       'configui-lib.log',
     ]);
-    const files = await fs.promises.readdir(this.storagePath);
+    const entries = await fs.promises.readdir(this.storagePath, { withFileTypes: true });
     let deleted = 0;
-    for (const file of files) {
-      if (preserved.has(file)) continue;
-      const filePath = path.join(this.storagePath, file);
+    for (const entry of entries) {
+      if (!entry.isFile() || preserved.has(entry.name)) continue;
+      const filePath = path.join(this.storagePath, entry.name);
       try {
         await fs.promises.unlink(filePath);
         deleted++;
-        this.log.debug(`Deleted: ${file}`);
+        this.log.debug(`Deleted: ${entry.name}`);
       } catch (error) {
-        this.log.warn(`Failed to delete ${file}: ${error}`);
+        this.log.warn(`Failed to delete ${entry.name}: ${error}`);
       }
     }
     this.log.info(`Cleaned ${deleted} file(s)`);
