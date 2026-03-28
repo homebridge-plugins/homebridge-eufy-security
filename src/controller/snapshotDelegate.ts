@@ -181,7 +181,7 @@ export class snapshotDelegate {
   }
 
   private storeSnapshotForCache(data: Buffer, time?: number): void {
-    this.currentSnapshot = { timestamp: time ??= Date.now(), image: data };
+    this.currentSnapshot = { timestamp: time ?? Date.now(), image: data };
   }
 
   public async getSnapshotBufferResized(request: SnapshotRequest): Promise<Buffer> {
