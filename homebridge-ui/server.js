@@ -1302,6 +1302,23 @@ class UiServer extends HomebridgePluginUiServer {
     };
   }
 
+  /** Resolve and validate a recording filename, returning the absolute path. */
+  _resolveRecordingPath(filename) {
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Missing or invalid filename parameter.');
+    }
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    const sanitized = path.basename(filename);
+    if (!sanitized.endsWith('.mp4')) {
+      throw new Error('Invalid filename.');
+    }
+    const resolved = path.resolve(path.join(recordingsDir, sanitized));
+    if (!resolved.startsWith(path.resolve(recordingsDir))) {
+      throw new Error('Invalid filename.');
+    }
+    return resolved;
+  }
+
   /**
    * List all debug recording files available for download.
    */
@@ -1353,25 +1370,13 @@ class UiServer extends HomebridgePluginUiServer {
    */
   async downloadDebugRecording(options = {}) {
     const { filename, offset: rawOffset = 0, chunkSize: rawChunkSize = 256 * 1024 } = options;
-
-    if (!filename || typeof filename !== 'string') {
-      throw new Error('Missing or invalid filename parameter.');
-    }
+    const resolved = this._resolveRecordingPath(filename);
 
     // Coerce and clamp parameters
     const numOffset = Number(rawOffset) || 0;
+    if (numOffset < 0) throw new Error('Invalid offset.');
     const MAX_CHUNK = 2 * 1024 * 1024; // 2 MB
     const numChunkSize = Math.min(Number(rawChunkSize) || 256 * 1024, MAX_CHUNK);
-
-    const recordingsDir = path.join(this.storagePath, 'recordings');
-    const sanitized = path.basename(filename);
-    const filePath = path.join(recordingsDir, sanitized);
-    const resolved = path.resolve(filePath);
-
-    // Path traversal guard
-    if (!resolved.startsWith(path.resolve(recordingsDir))) {
-      throw new Error('Invalid filename.');
-    }
 
     if (!fs.existsSync(resolved)) {
       throw new Error('Recording file not found.');
@@ -1385,10 +1390,10 @@ class UiServer extends HomebridgePluginUiServer {
       return { data: null, totalSize, offset: numOffset, chunkSize: 0, done: true };
     }
 
-    const fd = fs.openSync(resolved, 'r');
+    const fh = await fs.promises.open(resolved, 'r');
     const buf = Buffer.alloc(readSize);
-    fs.readSync(fd, buf, 0, readSize, numOffset);
-    fs.closeSync(fd);
+    await fh.read(buf, 0, readSize, numOffset);
+    await fh.close();
 
     const newOffset = numOffset + readSize;
 
@@ -1398,7 +1403,7 @@ class UiServer extends HomebridgePluginUiServer {
       offset: newOffset,
       chunkSize: readSize,
       done: newOffset >= totalSize,
-      filename: sanitized,
+      filename: path.basename(resolved),
     };
   }
 
@@ -1406,26 +1411,14 @@ class UiServer extends HomebridgePluginUiServer {
    * Delete a specific debug recording file.
    */
   async deleteDebugRecording(options = {}) {
-    const { filename } = options;
-
-    if (!filename || typeof filename !== 'string') {
-      throw new Error('Missing or invalid filename parameter.');
-    }
-
-    const recordingsDir = path.join(this.storagePath, 'recordings');
-    const sanitized = path.basename(filename);
-    const filePath = path.join(recordingsDir, sanitized);
-    const resolved = path.resolve(filePath);
-
-    if (!resolved.startsWith(path.resolve(recordingsDir))) {
-      throw new Error('Invalid filename.');
-    }
+    const resolved = this._resolveRecordingPath(options.filename);
 
     if (!fs.existsSync(resolved)) {
       throw new Error('Recording file not found.');
     }
 
     fs.unlinkSync(resolved);
+    const sanitized = path.basename(resolved);
     this.log.info(`Deleted debug recording: ${sanitized}`);
     return { deleted: true, filename: sanitized };
   }
