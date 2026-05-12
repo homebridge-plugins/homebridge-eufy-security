@@ -6,12 +6,17 @@
  * to the corresponding property constants in eufy-security-client.
  *
  * Usage:
- *   node map-properties.mjs <raw-properties.json>
- *   cat raw.json | node map-properties.mjs
+ *   node map-properties.mjs <raw-properties.json> [--closest]
+ *   cat raw.json | node map-properties.mjs [--closest]
  *
  * The input JSON should be the rawProperties object from a device dump,
  * e.g. { "1101": { "value": 100 }, "1013": { "value": 1 }, ... }
  * or an array of { "param_type": 1101, "param_value": "..." } objects.
+ *
+ * Options:
+ *   --closest   Find the closest existing devices by Jaccard similarity
+ *               on resolved PropertyName overlap. Useful to identify which
+ *               existing device to base the DeviceProperties block on.
  *
  * Output: a table mapping each param_type to its CommandType/ParamType enum name
  * and all property constants that use that key.
@@ -122,14 +127,17 @@ function parsePropertyConstants(source) {
     props.push({ constName, key, keyRaw, propertyName, spreadFrom });
   }
 
-  // Resolve spreads: if a property has no key but spreads from another, inherit
+  // Resolve spreads: inherit missing fields from parent property
   const byName = new Map(props.map((p) => [p.constName, p]));
   for (const prop of props) {
-    if (prop.key === null && prop.spreadFrom) {
+    if (prop.spreadFrom) {
       const parent = byName.get(prop.spreadFrom);
       if (parent) {
-        prop.key = parent.key;
-        if (!prop.keyRaw) prop.keyRaw = `(spread from ${prop.spreadFrom}) ${parent.keyRaw}`;
+        if (prop.key === null) {
+          prop.key = parent.key;
+          if (!prop.keyRaw) prop.keyRaw = `(spread from ${prop.spreadFrom}) ${parent.keyRaw}`;
+        }
+        // Always inherit propertyName from parent when missing, even if key is overridden
         if (!prop.propertyName) prop.propertyName = parent.propertyName;
       }
     }
@@ -182,7 +190,7 @@ const propUsage = parseDevicePropertiesUsage(httpSource);
 // ── Step 4: Read and parse input JSON ──────────────────────────────────────
 
 let inputData;
-const inputFile = process.argv[2];
+const inputFile = process.argv.slice(2).find((a) => !a.startsWith("-"));
 if (inputFile) {
   inputData = readFileSync(inputFile, "utf-8");
 } else {
@@ -298,19 +306,145 @@ if (unmatched.length > 0) {
   }
 }
 
+// ── Step 6: Companion custom properties ─────────────────────────────────────
+// Some param_type-based properties require a companion custom (runtime) property
+// that never appears in raw device data. Define those pairings here so the
+// suggested block always includes both.
+
+const COMPANION_PROPERTIES = new Map([
+  // DeviceRTSPStream (CMD_NAS_SWITCH) → DeviceRTSPStreamUrl (custom_rtspStreamUrl)
+  ["PropertyName.DeviceRTSPStream", {
+    propertyName: "PropertyName.DeviceRTSPStreamUrl",
+    constName: "DeviceRTSPStreamUrlProperty",
+    reason: "RTSP URL is set at runtime by the station — must accompany DeviceRTSPStream",
+  }],
+  // DeviceWifiRSSI → DeviceWifiSignalLevel (custom_wifiSignalLevel)
+  ["PropertyName.DeviceWifiRSSI", {
+    propertyName: "PropertyName.DeviceWifiSignalLevel",
+    constName: "DeviceWifiSignalLevelProperty",
+    reason: "WiFi signal level is derived at runtime from RSSI",
+  }],
+  // DeviceCellularRSSI → DeviceCellularSignalLevel (custom_cellularSignalLevel)
+  ["PropertyName.DeviceCellularRSSI", {
+    propertyName: "PropertyName.DeviceCellularSignalLevel",
+    constName: "DeviceCellularSignalLevelProperty",
+    reason: "Cellular signal level is derived at runtime from RSSI",
+  }],
+]);
+
 // Output a suggested PropertyName list for use in DeviceProperties block
 console.log();
 console.log("=".repeat(80));
 console.log("SUGGESTED DeviceProperties block entries:");
 console.log("=".repeat(80));
 const seen = new Set();
+const companionsAdded = [];
 for (const m of matched) {
-  for (let i = 0; i < m.constNames.length; i++) {
-    const pn = m.propertyNames[0]; // Use first PropertyName
-    const cn = m.constNames[i];
+  // Use original props lookup to get correct constName → propertyName mapping
+  // (the deduplicated m.propertyNames array loses the index association with m.constNames)
+  const propsForKey = keyToProps.get(m.paramType) || [];
+  for (const prop of propsForKey) {
+    const pn = prop.propertyName;
+    const cn = prop.constName;
     if (pn && !seen.has(pn)) {
       seen.add(pn);
       console.log(`  [${pn}]: ${cn},`);
+
+      // Check if this property has a required companion
+      const companion = COMPANION_PROPERTIES.get(pn);
+      if (companion && !seen.has(companion.propertyName)) {
+        seen.add(companion.propertyName);
+        console.log(`  [${companion.propertyName}]: ${companion.constName},  // ⚠ companion (custom/runtime)`);
+        companionsAdded.push(companion);
+      }
+    }
+  }
+}
+
+if (companionsAdded.length > 0) {
+  console.log();
+  console.log("=".repeat(80));
+  console.log("⚠  COMPANION PROPERTIES (custom/runtime — not in raw device data):");
+  console.log("=".repeat(80));
+  for (const c of companionsAdded) {
+    console.log(`  ${c.constName}: ${c.reason}`);
+  }
+}
+
+// ── Step 7: Closest device detection (--closest flag) ───────────────────────
+
+if (process.argv.includes("--closest")) {
+  // Collect the set of PropertyName values from the matched raw properties
+  const targetPropNames = new Set();
+  for (const m of matched) {
+    for (const pn of m.propertyNames) {
+      if (pn) targetPropNames.add(pn);
+    }
+  }
+
+  if (targetPropNames.size === 0) {
+    console.log("\nCannot compute closest device — no PropertyName matches found.");
+  } else {
+    // Parse DeviceProperties blocks to get property sets per device type
+    const dpStart = httpSource.indexOf("export const DeviceProperties");
+    const dpEnd = httpSource.indexOf("export const StationProperties");
+    if (dpStart !== -1) {
+      const dpSection = httpSource.slice(dpStart, dpEnd === -1 ? undefined : dpEnd);
+
+      const devicePropSets = new Map(); // DeviceType name → Set of PropertyName references
+      const blockRegex = /\[DeviceType\.(\w+)\]\s*:\s*\{([\s\S]*?)\}/g;
+      let bm;
+      while ((bm = blockRegex.exec(dpSection)) !== null) {
+        const dt = bm[1];
+        const body = bm[2];
+        const props = new Set();
+        // Extract property constants used, then resolve to PropertyName
+        const refRegex = /:\s*(\w+Property)/g;
+        let rm;
+        while ((rm = refRegex.exec(body)) !== null) {
+          const constName = rm[1];
+          const prop = allProps.find((p) => p.constName === constName);
+          if (prop && prop.propertyName) props.add(prop.propertyName);
+        }
+        devicePropSets.set(dt, props);
+      }
+
+      // Jaccard similarity
+      const similarities = [];
+      for (const [dt, props] of devicePropSets) {
+        const intersection = new Set([...targetPropNames].filter((p) => props.has(p)));
+        const union = new Set([...targetPropNames, ...props]);
+        const jaccard = union.size > 0 ? intersection.size / union.size : 0;
+        if (jaccard > 0.2) {
+          similarities.push({
+            device: dt,
+            jaccard: Math.round(jaccard * 100),
+            shared: intersection.size,
+            targetOnly: [...targetPropNames].filter((p) => !props.has(p)).length,
+            otherOnly: [...props].filter((p) => !targetPropNames.has(p)).length,
+          });
+        }
+      }
+
+      similarities.sort((a, b) => b.jaccard - a.jaccard);
+      const top = similarities.slice(0, 8);
+
+      console.log();
+      console.log("=".repeat(80));
+      console.log("CLOSEST EXISTING DEVICES (by property overlap with raw data)");
+      console.log("=".repeat(80));
+      if (top.length === 0) {
+        console.log("  No devices with >20% property overlap found.");
+      } else {
+        console.log("  " + "Device".padEnd(38) + "Similarity  Shared  Target-only  Other-only");
+        for (const d of top) {
+          console.log(
+            `  ${d.device.padEnd(38)} ${String(d.jaccard + "%").padEnd(11)} ${String(d.shared).padEnd(7)} ${String(d.targetOnly).padEnd(12)} ${d.otherOnly}`
+          );
+        }
+        console.log();
+        console.log(`  Recommended base: ${top[0].device} (${top[0].jaccard}% overlap)`);
+      }
     }
   }
 }

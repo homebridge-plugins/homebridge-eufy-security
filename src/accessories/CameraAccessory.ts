@@ -23,9 +23,11 @@ import { DeviceAccessory } from './Device.js';
 import { Camera, DeviceEvents, PropertyName, CommandName, StreamMetadata, PropertyValue } from 'eufy-security-client';
 
 import { CameraConfig, DEFAULT_CAMERACONFIG_VALUES } from '../utils/configTypes.js';
-import { CHAR, SERV } from '../utils/utils.js';
+import { probeHardwareEncoder } from '../utils/ffmpeg.js';
+import { CHAR, SERV, isRtspReady } from '../utils/utils.js';
 import { StreamingDelegate } from '../controller/streamingDelegate.js';
 import { RecordingDelegate } from '../controller/recordingDelegate.js';
+import { PREBUFFER_DURATION_MS } from '../settings.js';
 
 // A semi-complete description of the UniFi Protect camera channel JSON.
 export interface ProtectCameraChannelConfig {
@@ -124,6 +126,13 @@ export class CameraAccessory extends DeviceAccessory {
     this.log.debug(`Constructed Camera`);
 
     this.cameraConfig = this.getCameraConfig();
+
+    const hw = probeHardwareEncoder(this.platform.hostSystem);
+    this.hardwareTranscoding = hw !== null;
+    this.hardwareDecoding = hw?.decoder !== undefined;
+    if (hw) {
+      this.log.debug(`Using hardware encoder: ${hw.encoder}`);
+    }
 
     this.standalone = device.getSerial() === device.getStationSerial();
 
@@ -298,6 +307,18 @@ export class CameraAccessory extends DeviceAccessory {
           this.device.on(eventType as keyof any, (device: any, state: any) => {
             this.log.info(`MOTION DETECTED (${eventType})': ${state}`);
             characteristic.updateValue(state);
+
+            // Pre-warm the P2P livestream on motion start so it's ready when
+            // HomeKit requests an HKSV recording.  RTSP cameras don't need this
+            // since their stream URL is immediately available.
+            if (state && this.streamingDelegate && this.recordingDelegate
+              && !this.recordingDelegate.isRecording()
+              && !isRtspReady(this.device, this.cameraConfig)) {
+              const manager = this.streamingDelegate.getLivestreamManager();
+              manager.preWarmStream().catch((err) => {
+                this.log.debug('P2P pre-warm failed (non-fatal): ' + err);
+              });
+            }
           });
         });
       },
@@ -509,29 +530,11 @@ export class CameraAccessory extends DeviceAccessory {
       this.log.debug(`recordingDelegate.setController`);
       this.recordingDelegate.setController(controller);
 
-      this.log.debug(`configureController`);
-
-      // Remove stale controller-managed services from cache before configuring.
-      // When HSV is enabled, CameraController creates CameraOperatingMode and
-      // DataStreamTransportManagement services automatically. If the cached
-      // accessory already has them (e.g. from a previous run), configureController
-      // will throw a duplicate UUID error.
-      const controllerManagedServiceUUIDs = [
-        SERV.CameraOperatingMode.UUID,
-        SERV.DataStreamTransportManagement.UUID,
-      ];
-      for (const uuid of controllerManagedServiceUUIDs) {
-        const existingService = this.accessory.services.find(s => s.UUID === uuid);
-        if (existingService) {
-          this.log.debug(`Removing stale cached service ${uuid} before configureController`);
-          this.accessory.removeService(existingService);
-        }
-      }
-
+      this.log.debug(`configureController (${this.accessory.services.length} cached services)`);
       this.accessory.configureController(controller);
 
     } catch (error) {
-      this.log.error(`while happending Delegate ${error}`);
+      this.log.error(`configureController failed: ${error}`);
     }
     return true;
   }
@@ -557,6 +560,10 @@ export class CameraAccessory extends DeviceAccessory {
               type: AudioStreamingCodecType.AAC_ELD,
               samplerate: AudioStreamingSamplerate.KHZ_16,
             },
+            {
+              type: AudioStreamingCodecType.OPUS,
+              samplerate: AudioStreamingSamplerate.KHZ_16,
+            },
           ],
         },
       },
@@ -566,7 +573,7 @@ export class CameraAccessory extends DeviceAccessory {
             EventTriggerOption.MOTION,
             EventTriggerOption.DOORBELL,
           ],
-          prebufferLength: 0, // prebufferLength always remains 4s ?
+          prebufferLength: (isRtspReady(this.device, this.cameraConfig) || this.device.hasBattery()) ? 0 : PREBUFFER_DURATION_MS,
           mediaContainerConfiguration: [
             {
               type: MediaContainerType.FRAGMENTED_MP4,

@@ -17,9 +17,15 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
-    if: ${{ github.repository == 'homebridge-plugins/homebridge-eufy-security' }}
+    if: >-
+      github.repository == 'homebridge-plugins/homebridge-eufy-security'
+      && !(github.event_name == 'release' && github.event.release.prerelease)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

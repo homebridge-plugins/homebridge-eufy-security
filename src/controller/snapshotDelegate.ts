@@ -407,6 +407,10 @@ export class snapshotDelegate {
   ): Promise<Buffer> {
     const params = await FFmpegParameters.forSnapshot(this.cameraConfig.videoConfig?.debug);
     await configure(params);
-    return new FFmpeg(label, params, ffmpegLoggerFactory.forSnapshots()).getResult(input);
+    const ffmpeg = new FFmpeg(label, params, ffmpegLoggerFactory.forSnapshots());
+    ffmpeg.on('error', (error) => {
+      this.log.debug('Snapshot FFmpeg error: ' + error);
+    });
+    return ffmpeg.getResult(input);
   }
 }

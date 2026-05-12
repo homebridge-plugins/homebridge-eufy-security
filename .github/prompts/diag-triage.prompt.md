@@ -8,10 +8,10 @@ This prompt is used to triage issues reported by users of the homebridge-eufy-se
 
 ## Diagnostics Archive Structure
 
-Diagnostics archives are **encrypted** (RSA-4096 + AES-256-GCM) and include a creation timestamp in the header. The downloaded file has a `.tar.gz.enc` extension. Before analysis, decrypt it:
+Diagnostics archives are **encrypted** (RSA-4096 + AES-256-GCM) and include a creation timestamp in the header. The downloaded file has a `.tar.gz` extension (the content is encrypted despite the extension — this allows direct upload to GitHub). Before analysis, decrypt it:
 
 ```bash
-node scripts/decrypt-diagnostics.mjs <file>.tar.gz.enc
+node scripts/decrypt-diagnostics.mjs <file>.tar.gz
 ```
 
 The script prints the archive creation date and warns if the archive is older than 90 days.
@@ -50,9 +50,9 @@ There are two categories of logs depending on the area of the issue:
 
 Before any analysis, check which files are present:
 
-- **If runtime logs (`eufy-security.log`, `eufy-lib.log`) are missing**: the plugin was not running when diagnostics were exported. Stop analysis — reply to the user asking to restart Homebridge, wait for the plugin to fully load, then re-export diagnostics.
+- **If runtime logs (`eufy-security.log`, `eufy-lib.log`) are missing**: the plugin was not running when diagnostics were exported. Stop analysis — ask the user to upgrade to the latest beta ([Beta Versions](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV))) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to restart Homebridge, reproduce the issue, and re-export diagnostics.
 - **If UI logs (`configui-server.log`, `configui-lib.log`) are missing**: the UI server wasn't active. These are only needed for UI-related issues.
-- **If only `accessories.json` is present**: the archive is incomplete. Only device presence can be confirmed, not runtime behavior.
+- **If only `accessories.json` is present**: the archive is incomplete. Only device presence can be confirmed, not runtime behavior. Same guidance as above — ask the user to upgrade to the latest beta and follow the Basic Troubleshooting steps.
 
 Do **not** attempt further analysis without the relevant logs for the reported issue area.
 
@@ -68,7 +68,7 @@ In `eufy-security.log`, check the first few lines for indicators:
 
 You can also confirm from the config dump in the log: `"enableDetailedLogging":true` or `false`.
 
-**If debug is disabled**, the logs will lack critical details (no `DEBUG` entries for device discovery, characteristic registration, property changes). Ask the user to enable `Detailed Logging` in the plugin settings and re-export diagnostics.
+**If debug is disabled**, the logs will lack critical details (no `DEBUG` entries for device discovery, characteristic registration, property changes). Ask the user to upgrade to the latest beta ([Beta Versions](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Special-Version-(BETA---RC---HKSV))) and follow the [Basic Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting) steps to enable Detailed Logging, reproduce the issue, and export diagnostics.
 
 ### 3. Extract environment info
 
@@ -198,3 +198,12 @@ Based on triage findings, suggest one or more labels for the issue:
 | `dependencies` | Dependency updates |
 | `hoobs` | HOOBS-specific issues — HOOBS is an alternative to Homebridge where the Plugin UI is known to not work properly. Label as `hoobs` + `wontfix` and close the issue. |
 | `stale` | Inactive issue |
+
+## Closing Comments
+
+When a fix has been merged and published, leave a concise comment on the issue:
+
+- **Audience is end users** — keep language simple, avoid internal jargon or FFmpeg/P2P technical details
+- Don't scope the fix to a specific device model when it applies broadly (e.g. "all cameras using P2P" not just "the E42")
+- Always check the published beta version (`npm view @homebridge-plugins/homebridge-eufy-security dist-tags`) and mention it so the user knows which version to install
+- Label the issue `resolved in beta`

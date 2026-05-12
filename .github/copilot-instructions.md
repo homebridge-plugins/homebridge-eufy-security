@@ -44,6 +44,9 @@ gh pr create --base beta-*.*.* --title "<concise title>" --body-file /tmp/pr-bod
 - Use first person ("I")
 - Thank the user by @mention
 - Be formal and concise
+- **Audience is end users** — keep language simple, no internal jargon or technical deep-dives
+- Don't scope a fix to a specific device when it applies broadly (e.g. "all cameras using P2P" not "the E42")
+- When a fix is merged, check the published beta version (`npm view @homebridge-plugins/homebridge-eufy-security dist-tags`) and mention it in the comment
 
 ## Dependency Updates — `eufy-security-client`
 

@@ -142,3 +142,5 @@ diagnostics-*
 
 # Keys directory — contains RSA key pair for diagnostics encryption
 keys/
+
+.claude-octopus

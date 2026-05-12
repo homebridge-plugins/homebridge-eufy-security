@@ -19,6 +19,7 @@ import {
     ReconfigureStreamRequest,
     SnapshotRequest,
     StartStreamRequest,
+    SRTPCryptoSuites,
 } from 'homebridge';
 import { pickPort } from 'pick-port';
 
@@ -33,6 +34,8 @@ const TCP_SERVER_TIMEOUT_MS = 30_000;
 const PROCESS_RESULT_TIMEOUT_MS = 15_000;
 /** Grace period after SIGTERM before sending SIGKILL (ms) */
 const KILL_GRACE_PERIOD_MS = 2_000;
+/** Maximum allowed fMP4 box size (50 MB). Anything larger is likely corruption. */
+const MAX_FRAG_BOX_SIZE = 50 * 1024 * 1024;
 
 /** Returns true when the value is a non-empty string (guards `undefined | ''`). */
 function isNonEmpty(value: string | undefined): value is string {
@@ -75,6 +78,97 @@ export function hasFdkAac(): boolean {
         );
     }
     return _hasFdkAac;
+}
+
+/** Description of a detected hardware encoder. */
+export interface HardwareEncoder {
+    encoder: string;
+    decoder?: string;
+    hwaccel?: string;
+    /** Encoder-specific options (replaces libx264's `-preset`/`-tune`). */
+    customOptions: string;
+}
+
+/** Cached result: `undefined` = not yet probed, `null` = no hardware encoder found. */
+let _hwEncoder: HardwareEncoder | null | undefined;
+
+/**
+ * Probes for hardware H.264 encoders by running a real test encode.
+ * Result is cached after the first call. Call early at platform init.
+ */
+export function probeHardwareEncoder(hostSystem: string): HardwareEncoder | null {
+    if (_hwEncoder !== undefined) return _hwEncoder;
+
+    const ffmpegExec: string = (ffmpegPath as unknown as string) || 'ffmpeg';
+
+    const candidates: Array<{
+        systems: string[];
+        encoder: string;
+        decoder?: string;
+        hwaccel?: string;
+        options: string;
+    }> = [
+        {
+            systems: ['macOS.Apple', 'macOS.Intel'],
+            encoder: 'h264_videotoolbox',
+            hwaccel: 'videotoolbox',
+            options: '-allow_sw 1 -realtime 1',
+        },
+        {
+            systems: ['raspbian'],
+            encoder: 'h264_v4l2m2m',
+            options: '',
+        },
+        {
+            systems: ['generic', 'raspbian'],
+            encoder: 'h264_vaapi',
+            hwaccel: 'vaapi',
+            options: '',
+        },
+        {
+            systems: ['generic'],
+            encoder: 'h264_qsv',
+            hwaccel: 'qsv',
+            options: '-preset veryfast',
+        },
+    ];
+
+    const toTry = candidates.filter(c => c.systems.includes(hostSystem) || c.systems.includes('generic'));
+
+    for (const candidate of toTry) {
+        try {
+            // Include candidate-specific options (e.g. `-allow_sw 1` for VideoToolbox)
+            // so the probe reflects actual encoding conditions.
+            const extraArgs = candidate.options ? candidate.options.split(/\s+/) : [];
+            execFileSync(ffmpegExec, [
+                '-hide_banner', '-loglevel', 'error',
+                '-f', 'lavfi', '-i', 'color=black:s=64x64:d=0.1',
+                '-c:v', candidate.encoder,
+                ...extraArgs,
+                '-frames:v', '1',
+                '-f', 'null', '-',
+            ], { timeout: 10_000, stdio: ['pipe', 'pipe', 'pipe'] });
+
+            _hwEncoder = {
+                encoder: candidate.encoder,
+                decoder: candidate.decoder,
+                hwaccel: candidate.hwaccel,
+                customOptions: candidate.options,
+            };
+            ffmpegLogger.info(`Hardware encoder detected and validated: ${candidate.encoder}`);
+            return _hwEncoder;
+        } catch {
+            // This encoder doesn't work — try next candidate
+        }
+    }
+
+    _hwEncoder = null;
+    ffmpegLogger.info(
+        'No hardware H.264 encoder available — using software encoding (libx264). ' +
+        'If running in Docker, make sure hardware devices are exposed to the container ' +
+        '(e.g. --device /dev/dri for VAAPI, --device /dev/video* for V4L2).',
+    );
+    return _hwEncoder;
 }
 
 /**
@@ -182,6 +276,98 @@ class FFmpegProgress extends EventEmitter {
             }
         }
     }
+}
+
+/**
+ * Build an AAC AudioSpecificConfig hex string for the SDP fmtp line.
+ * This replaces the previously hardcoded `F8F0212C00BC00` which was
+ * only valid for AAC-ELD at 16 kHz mono.
+ *
+ * AudioSpecificConfig structure (ISO 14496-3):
+ *   audioObjectType (5 bits) — 39 for AAC-ELD
+ *   samplingFrequencyIndex (4 bits)
+ *   channelConfiguration (4 bits)
+ *   ELD-specific config follows
+ */
+function buildAacEldAudioSpecificConfig(sampleRateKHz: number, channels: number): string {
+    // Sampling frequency index lookup (ISO 14496-3 Table 1.18)
+    const sampleRateHz = sampleRateKHz * 1000;
+    // AAC-ELD = audioObjectType 39 (5-bit overflow: write 31 then 8 more bits for 39-32=7)
+    // Bit layout: 11111 | 00000111 | freqIndex(4) | channels(4) | ELD-specific...
+    // The ELD-specific config for basic ELD (no SBR): frameLengthFlag=0, aacSectionDataResilienceFlag=0, etc.
+    // For simplicity and compatibility, use known-good configs per sample rate
+    const configs: Record<number, Record<number, string>> = {
+        8000: { 1: 'F8E85C00' },
+        16000: { 1: 'F8F0212C00BC00', 2: 'F8F0612C00BC00' },
+        24000: { 1: 'F8EC212C00BC00', 2: 'F8EC612C00BC00' },
+    };
+
+    const config = configs[sampleRateHz]?.[channels];
+    if (!config) {
+        ffmpegLogger.warn(
+            `No AAC-ELD AudioSpecificConfig for ${sampleRateKHz} kHz / ${channels} ch — ` +
+            'falling back to 16 kHz mono. Return audio may not work correctly.',
+        );
+    }
+    return config ?? configs[16000][1];
+}
+
+/** Build an SDP session description for AAC-ELD return audio from HomeKit. */
+function buildAacEldSdp(
+    ipVer: string,
+    sessionInfo: SessionInfo,
+    payloadType: number,
+    sampleRateKHz: number,
+    channels: number,
+    maxBitrate: number,
+    srtpSuite: string,
+): string {
+    const sampleRateHz = sampleRateKHz * 1000;
+    const config = buildAacEldAudioSpecificConfig(sampleRateKHz, channels);
+
+    return (
+        'v=0\r\n' +
+        `o=- 0 0 IN ${ipVer} ${sessionInfo.address}\r\n` +
+        's=Talk\r\n' +
+        `c=IN ${ipVer} ${sessionInfo.address}\r\n` +
+        't=0 0\r\n' +
+        `m=audio ${sessionInfo.audioReturnPort} RTP/AVP ${payloadType}\r\n` +
+        `b=AS:${maxBitrate}\r\n` +
+        `a=rtpmap:${payloadType} MPEG4-GENERIC/${sampleRateHz}/${channels}\r\n` +
+        'a=rtcp-mux\r\n' +
+        `a=fmtp:${payloadType} ` +
+        `profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3; ` +
+        `config=${config}\r\n` +
+        `a=crypto:1 ${srtpSuite} inline:${sessionInfo.audioSRTP.toString('base64')}\r\n`
+    );
+}
+
+/** Build an SDP session description for Opus return audio from HomeKit. */
+function buildOpusSdp(
+    ipVer: string,
+    sessionInfo: SessionInfo,
+    payloadType: number,
+    sampleRateKHz: number,
+    channels: number,
+    maxBitrate: number,
+    srtpSuite: string,
+): string {
+    // Opus in RTP always uses 48000 Hz clock rate (RFC 7587), regardless of actual sample rate
+    const clockRate = 48000;
+
+    return (
+        'v=0\r\n' +
+        `o=- 0 0 IN ${ipVer} ${sessionInfo.address}\r\n` +
+        's=Talk\r\n' +
+        `c=IN ${ipVer} ${sessionInfo.address}\r\n` +
+        't=0 0\r\n' +
+        `m=audio ${sessionInfo.audioReturnPort} RTP/AVP ${payloadType}\r\n` +
+        `b=AS:${maxBitrate}\r\n` +
+        `a=rtpmap:${payloadType} opus/${clockRate}/${channels}\r\n` +
+        'a=rtcp-mux\r\n' +
+        `a=fmtp:${payloadType} minptime=10;useinbandfec=1;sprop-maxcapturerate=${sampleRateKHz * 1000}${channels === 2 ? ';sprop-stereo=1' : ''}\r\n` +
+        `a=crypto:1 ${srtpSuite} inline:${sessionInfo.audioSRTP.toString('base64')}\r\n`
+    );
 }
 
 export class FFmpegParameters {
@@ -307,9 +493,31 @@ export class FFmpegParameters {
         this.inputSource = `-i ${value}`;
     }
 
+    public setInputFormat(value: string) {
+        this.inputFormat = value;
+    }
+
+    public setInputCodec(value: string) {
+        this.inputCodec = value;
+    }
+
     public async setInputStream(input: Readable) {
         const { port } = await createOneShotTcpServer((socket) => {
-            input.pipe(socket);
+            // Manual backpressure handling instead of pipe() — prevents
+            // unbounded memory growth when FFmpeg is slower than the camera
+            // (common on Raspberry Pi during HKSV transcoding).
+            socket.on('drain', () => input.resume());
+
+            input.on('data', (chunk: Buffer) => {
+                if (!socket.write(chunk)) {
+                    input.pause();
+                }
+            });
+
+            input.on('end', () => socket.end());
+            input.on('error', () => socket.destroy());
+            socket.on('error', () => { if (!input.destroyed) input.destroy(); });
+            socket.on('close', () => { if (!input.destroyed) input.destroy(); });
         });
         this.setInputSource(`tcp://127.0.0.1:${port}`);
     }
@@ -342,15 +550,43 @@ export class FFmpegParameters {
 
         if (this.isVideo) {
             const req = request as StartStreamRequest | ReconfigureStreamRequest;
-            this.codec = isNonEmpty(videoConfig.vcodec) ? videoConfig.vcodec : 'libx264';
+            if (isNonEmpty(videoConfig.vcodec)) {
+                this.codec = videoConfig.vcodec;
+            } else {
+                const hw = probeHardwareEncoder('generic');
+                this.codec = hw?.encoder ?? 'libx264';
+            }
             if (this.codec !== 'copy') {
                 this.fps = videoConfig.maxFPS ?? req.video.fps;
                 const bitrate = videoConfig.maxBitrate ?? req.video.max_bit_rate;
                 this.bitrate = bitrate;
                 this.bufsize = bitrate * 2;
                 this.maxrate = bitrate;
-                this.codecOptions = videoConfig.encoderOptions
-                    ?? (this.codec === 'libx264' ? '-preset ultrafast -tune zerolatency' : '');
+
+                // Resolve H.264 profile & level from the HomeKit request.
+                const startReq = request as StartStreamRequest;
+                const profile =
+                    startReq.video.profile === H264Profile.HIGH
+                        ? 'high'
+                        : startReq.video.profile === H264Profile.MAIN
+                            ? 'main'
+                            : 'baseline';
+                const level =
+                    startReq.video.level === H264Level.LEVEL4_0
+                        ? '4.0'
+                        : startReq.video.level === H264Level.LEVEL3_2
+                            ? '3.2'
+                            : '3.1';
+
+                if (isNonEmpty(videoConfig.encoderOptions)) {
+                    this.codecOptions = videoConfig.encoderOptions;
+                } else if (this.codec === 'libx264') {
+                    this.codecOptions = `-preset ultrafast -tune zerolatency -profile:v ${profile} -level:v ${level}`;
+                } else {
+                    const hw = probeHardwareEncoder('generic');
+                    const hwOpts = (hw && this.codec === hw.encoder) ? hw.customOptions : '';
+                    this.codecOptions = `${hwOpts} -profile:v ${profile} -level:v ${level}`.trim();
+                }
                 this.pixFormat = 'yuv420p';
                 this.colorRange = 'mpeg';
                 this.applyVisualConfig(req.video.width, req.video.height, videoConfig);
@@ -430,24 +666,31 @@ export class FFmpegParameters {
             if (isNonEmpty(videoConfig.vcodec)) {
                 this.codec = videoConfig.vcodec;
             } else {
-                this.codec = 'libx264';
+                const hw = probeHardwareEncoder('generic');
+                this.codec = hw?.encoder ?? 'libx264';
             }
+
+            const profile =
+                configuration.videoCodec.parameters.profile === H264Profile.HIGH
+                    ? 'high'
+                    : configuration.videoCodec.parameters.profile === H264Profile.MAIN
+                        ? 'main'
+                        : 'baseline';
+            const level =
+                configuration.videoCodec.parameters.level === H264Level.LEVEL4_0
+                    ? '4.0'
+                    : configuration.videoCodec.parameters.level === H264Level.LEVEL3_2
+                        ? '3.2'
+                        : '3.1';
 
             if (this.codec === 'libx264') {
                 this.pixFormat = 'yuv420p';
-                const profile =
-                    configuration.videoCodec.parameters.profile === H264Profile.HIGH
-                        ? 'high'
-                        : configuration.videoCodec.parameters.profile === H264Profile.MAIN
-                            ? 'main'
-                            : 'baseline';
-                const level =
-                    configuration.videoCodec.parameters.level === H264Level.LEVEL4_0
-                        ? '4.0'
-                        : configuration.videoCodec.parameters.level === H264Level.LEVEL3_2
-                            ? '3.2'
-                            : '3.1';
                 this.codecOptions = `-preset ultrafast -tune zerolatency -profile:v ${profile} -level:v ${level}`;
+            } else if (this.codec !== 'copy') {
+                this.pixFormat = 'yuv420p';
+                const hw = probeHardwareEncoder('generic');
+                const hwOpts = (hw && this.codec === hw.encoder) ? hw.customOptions : '';
+                this.codecOptions = `${hwOpts} -profile:v ${profile} -level:v ${level}`.trim();
             }
             if (this.codec !== 'copy') {
                 this.bitrate = videoConfig.maxBitrate ?? configuration.videoCodec.parameters.bitRate;
@@ -489,33 +732,54 @@ export class FFmpegParameters {
         }
     }
 
-    public async setTalkbackInput(sessionInfo: SessionInfo) {
+    /**
+     * Configure this FFmpegParameters instance to receive return audio from
+     * HomeKit via SRTP, decode it, and re-encode to AAC ADTS for the eufy
+     * P2P talkback channel.
+     *
+     * The SDP is generated dynamically based on the codec and sample rate
+     * that HomeKit negotiated during the stream setup.
+     */
+    public async setTalkbackInput(
+        sessionInfo: SessionInfo,
+        request?: StartStreamRequest,
+    ): Promise<void> {
         this.useWallclockAsTimestamp = false;
         this.protocolWhitelist = 'pipe,udp,rtp,file,crypto,tcp';
         this.inputFormat = 'sdp';
-        const talkbackCodec = hasFdkAac() ? 'libfdk_aac' : 'aac';
-        this.inputCodec = talkbackCodec;
-        this.codec = talkbackCodec;
+
+        // Output: always AAC ADTS — this is what the eufy P2P layer expects
+        const outputCodec = hasFdkAac() ? 'libfdk_aac' : 'aac';
+        this.codec = outputCodec;
         this.sampleRate = 16;
         this.channels = 1;
         this.bitrate = 20;
         this.format = 'adts';
 
+        // Determine input codec from HomeKit's negotiated parameters
+        const audioCodec = request?.audio.codec ?? AudioStreamingCodecType.AAC_ELD;
+        const sampleRateKHz = request?.audio.sample_rate ?? 16;
+        const channels = request?.audio.channel ?? 1;
+        const payloadType = request?.audio.pt ?? 110;
+        const maxBitrate = request?.audio.max_bit_rate ?? 24;
+
+        const isOpus = audioCodec === AudioStreamingCodecType.OPUS;
+
+        // Set the input decoder to match what HomeKit is sending
+        if (isOpus) {
+            this.inputCodec = 'libopus';
+        } else {
+            this.inputCodec = hasFdkAac() ? 'libfdk_aac' : 'aac';
+        }
+
         const ipVer = sessionInfo.ipv6 ? 'IP6' : 'IP4';
-        const sdpInput =
-            'v=0\r\n' +
-            'o=- 0 0 IN ' + ipVer + ' ' + sessionInfo.address + '\r\n' +
-            's=Talk\r\n' +
-            'c=IN ' + ipVer + ' ' + sessionInfo.address + '\r\n' +
-            't=0 0\r\n' +
-            'm=audio ' + sessionInfo.audioReturnPort + ' RTP/AVP 110\r\n' +
-            'b=AS:24\r\n' +
-            'a=rtpmap:110 MPEG4-GENERIC/16000/1\r\n' +
-            'a=rtcp-mux\r\n' + // FFmpeg ignores this, but might as well
-            'a=fmtp:110 ' +
-            'profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3; ' +
-            'config=F8F0212C00BC00\r\n' +
-            'a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:' + sessionInfo.audioSRTP.toString('base64') + '\r\n';
+        const srtpSuite = sessionInfo.audioCryptoSuite === SRTPCryptoSuites.AES_CM_256_HMAC_SHA1_80
+            ? 'AES_CM_256_HMAC_SHA1_80'
+            : 'AES_CM_128_HMAC_SHA1_80';
+
+        const sdpInput = isOpus
+            ? buildOpusSdp(ipVer, sessionInfo, payloadType, sampleRateKHz, channels, maxBitrate, srtpSuite)
+            : buildAacEldSdp(ipVer, sessionInfo, payloadType, sampleRateKHz, channels, maxBitrate, srtpSuite);
 
         const { port } = await createOneShotTcpServer((socket) => {
             socket.end(sdpInput);
@@ -536,10 +800,11 @@ export class FFmpegParameters {
      *
      * @returns The absolute path to the recording file.
      */
-    public setFileRecording(recordingDir: string, serial: string): string {
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    public setFileRecording(recordingDir: string, serial: string, sessionId?: string): string {
+        const sanitizedSerial = serial.replace(/[^A-Za-z0-9_-]/g, '');
+        const ts = sessionId ?? new Date().toISOString().replace(/[:.]/g, '-');
         mkdirSync(recordingDir, { recursive: true });
-        this.fileRecordingPath = path.join(recordingDir, `${serial}_${ts}.mp4`);
+        this.fileRecordingPath = path.join(recordingDir, `${sanitizedSerial}_${ts}_processed.mp4`);
         return this.fileRecordingPath;
     }
 
@@ -623,6 +888,7 @@ export class FFmpegParameters {
             if (this.pixFormat) params.push(`-pix_fmt ${this.pixFormat}`);
             if (this.colorRange) params.push(`-color_range ${this.colorRange}`);
             if (this.codecOptions) params.push(this.codecOptions);
+            if (this.codec === 'libx264') params.push('-sc_threshold 0');
 
             params.push(...this.buildVideoFilterParams());
 
@@ -681,6 +947,12 @@ export class FFmpegParameters {
         params.push(parameters[0].inputSource);
         if (parameters.length > 1 && parameters[0].inputSource !== parameters[1].inputSource) {
             if (parameters[1].processAudio) {
+                // Include audio input format/codec hints so FFmpeg can detect the
+                // raw AAC ADTS stream without slow probing.  Cannot use full
+                // buildInputParameters() here because its -vn flag would suppress
+                // video in this combined (single-process) recording command.
+                if (parameters[1].inputFormat) params.push(`-f ${parameters[1].inputFormat}`);
+                if (parameters[1].inputCodec) params.push(`-c:a ${parameters[1].inputCodec}`);
                 params.push(parameters[1].inputSource);
             } else {
                 params.push('-f lavfi -i anullsrc -shortest');
@@ -695,6 +967,7 @@ export class FFmpegParameters {
         params.push(...parameters[0].buildEncodingParameters());
         if (parameters[0].iFrameInterval) {
             params.push(`-force_key_frames expr:gte(t,n_forced*${parameters[0].iFrameInterval / 1000})`);
+            params.push('-sc_threshold 0');
         }
 
         // audio encoding
@@ -730,10 +1003,11 @@ export class FFmpegParameters {
         }
 
         // Append a parallel file-recording output when configured.
-        // Uses codec copy so there is virtually no extra CPU cost.
+        // Video-only copy — for P2P streams video and audio use separate
+        // FFmpeg processes, so only the video track is available here.
         const recPath = parameters[0].fileRecordingPath;
         if (recPath) {
-            params.push('-map 0:v -c:v copy -an -f mp4 -movflags frag_keyframe+empty_moov');
+            params.push('-map 0:v -c:v copy -f mp4 -movflags frag_keyframe+empty_moov');
             params.push(recPath);
         }
 
@@ -866,6 +1140,7 @@ export class FFmpeg extends EventEmitter {
     public async startFragmentedMP4Session(): Promise<{
         socket: net.Socket;
         process?: ChildProcessWithoutNullStreams;
+        ffmpeg: FFmpeg;
         generator: AsyncGenerator<{
             header: Buffer;
             length: number;
@@ -882,6 +1157,7 @@ export class FFmpeg extends EventEmitter {
                 resolve({
                     socket: socket,
                     process: this.process,
+                    ffmpeg: this,
                     generator: this.parseFragmentedMP4(socket),
                 });
             });
@@ -899,6 +1175,13 @@ export class FFmpeg extends EventEmitter {
             const header = await this.readLength(socket, 8);
             const length = header.readInt32BE(0) - 8;
             const type = header.slice(4).toString();
+
+            if (length > MAX_FRAG_BOX_SIZE) {
+                throw new Error(
+                    `fMP4 box '${type}' reports size ${length} bytes, exceeding limit of ${MAX_FRAG_BOX_SIZE}. Stream likely corrupted.`,
+                );
+            }
+
             const data = await this.readLength(socket, length);
 
             yield {
@@ -988,13 +1271,16 @@ export class FFmpeg extends EventEmitter {
     private onProcessExit(code: number, signal: NodeJS.Signals) {
         this.emit('exit');
 
+        const wasStopRequested = !!this.killTimeout;
         if (this.killTimeout) {
             clearTimeout(this.killTimeout);
         }
 
         const message = 'FFmpeg exited with code: ' + code + ' and signal: ' + signal;
-        if (this.killTimeout && code === 0) {
-            this.log.info(this.name, message + ' (Expected)');
+        if (wasStopRequested) {
+            // stop() was called — any exit code is expected (non-zero typically
+            // means broken pipe from socket teardown during HKSV recording close).
+            this.log.debug(this.name, message + ' (Expected)');
         } else if (code === null || code === 255) {
             if (this.process?.killed) {
                 this.log.info(this.name, message + ' (Forced)');
