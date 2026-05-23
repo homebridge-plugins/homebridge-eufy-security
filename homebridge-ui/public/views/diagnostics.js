@@ -304,8 +304,7 @@ const DiagnosticsView = {
     try {
       const result = await Api.downloadDiagnostics({ skipEncryption });
       const rawBuffer = result.buffer || result;
-      const fallbackExt = skipEncryption ? '.tar.gz' : '.tar.gz.enc';
-      const filename = result.filename || ('eufy-security-diagnostics' + fallbackExt);
+      const filename = result.filename || ('eufy-security-diagnostics.tar.gz');
       const bytes = new Uint8Array(rawBuffer.data || rawBuffer);
       let binary = '';
       for (let i = 0; i < bytes.length; i++) {
