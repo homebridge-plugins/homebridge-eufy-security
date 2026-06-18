@@ -355,7 +355,11 @@ export abstract class BaseAccessory extends EventEmitter {
   }
 
   protected pruneUnusedServices() {
-    this.accessory.services.forEach((service) => {
+    // Snapshot the services list first: removeService() splices the very array
+    // backing accessory.services, so iterating it live would skip the element
+    // after each removal and leave stale services (e.g. disabled Switch
+    // buttons) behind in HomeKit.
+    [...this.accessory.services].forEach((service) => {
       if (
         !this.servicesInUse.includes(service) &&
         !BaseAccessory.CAMERA_CONTROLLER_SERVICE_UUIDS.has(service.UUID)
