@@ -28,6 +28,7 @@ import { CHAR, SERV, isRtspReady } from '../utils/utils.js';
 import { StreamingDelegate } from '../controller/streamingDelegate.js';
 import { RecordingDelegate } from '../controller/recordingDelegate.js';
 import { PREBUFFER_DURATION_MS } from '../settings.js';
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
 
 // A semi-complete description of the UniFi Protect camera channel JSON.
 export interface ProtectCameraChannelConfig {
@@ -149,6 +150,51 @@ export class CameraAccessory extends DeviceAccessory {
     this.setupChimeButton();
 
     this.pruneUnusedServices();
+
+    if (this.cameraConfig.doorbellHttpPort) {
+      this.setupDoorbellHttpServer(this.cameraConfig.doorbellHttpPort);
+    }
+  }
+
+  /**
+   * Register a Doorbell service and start an HTTP server on the given port.
+   *
+   * This is intended for cameras that do not identify themselves as a doorbell
+   * via eufy-security-client (isDoorbell() returns false) but should expose a
+   * doorbell tile in HomeKit and support being triggered by external systems.
+   *
+   * A GET or POST request to /doorbell fires a ProgrammableSwitchEvent
+   * SINGLE_PRESS, subject to the same 15-second notification debounce used by
+   * the native push-notification path.
+   */
+  private setupDoorbellHttpServer(port: number): void {
+    const doorbellService =
+      this.accessory.getService(SERV.Doorbell) ??
+      this.accessory.addService(SERV.Doorbell, this.accessory.displayName);
+
+    const doorbellChar = doorbellService.getCharacteristic(CHAR.ProgrammableSwitchEvent);
+
+    this.log.info(`Doorbell service registered via HTTP trigger on port ${port}`);
+
+    const server = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.url?.startsWith('/doorbell')) {
+        this.log.info(`Doorbell HTTP trigger received`);
+        this.onDeviceRingsPushNotification(doorbellChar);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: false, message: `Doorbell triggered for ${this.accessory.displayName}` }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+
+    server.listen(port, () => {
+      this.log.info(`Doorbell HTTP server listening on port ${port}`);
+    });
+
+    server.on('error', (err: Error) => {
+      this.log.error(`Doorbell HTTP server error: ${err.message}`);
+    });
   }
 
   private setupCamera() {
@@ -296,42 +342,6 @@ export class CameraAccessory extends DeviceAccessory {
         });
       },
     });
-
-    // if (this.device.hasProperty('speaker')) {
-    //   this.registerCharacteristic({
-    //     serviceType: SERV.Speaker,
-    //     characteristicType: CHAR.Mute,
-    //     serviceSubType: 'speaker_mute',
-    //     getValue: (data, characteristic) =>
-    //       this.getCameraPropertyValue(characteristic, PropertyName.DeviceSpeaker),
-    //     setValue: (value, characteristic) =>
-    //       this.setCameraPropertyValue(characteristic, PropertyName.DeviceSpeaker, value),
-    //   });
-    // }
-
-    // if (this.device.hasProperty('speakerVolume')) {
-    //   this.registerCharacteristic({
-    //     serviceType: SERV.Speaker,
-    //     characteristicType: CHAR.Volume,
-    //     serviceSubType: 'speaker_volume',
-    //     getValue: (data, characteristic) =>
-    //       this.getCameraPropertyValue(characteristic, PropertyName.DeviceSpeakerVolume),
-    //     setValue: (value, characteristic) =>
-    //       this.setCameraPropertyValue(characteristic, PropertyName.DeviceSpeakerVolume, value),
-    //   });
-    // }
-
-    // if (this.device.hasProperty('microphone')) {
-    //   this.registerCharacteristic({
-    //     serviceType: SERV.Microphone,
-    //     characteristicType: CHAR.Mute,
-    //     serviceSubType: 'mic_mute',
-    //     getValue: (data, characteristic) =>
-    //       this.getCameraPropertyValue(characteristic, PropertyName.DeviceMicrophone),
-    //     setValue: (value, characteristic) =>
-    //       this.setCameraPropertyValue(characteristic, PropertyName.DeviceMicrophone, value),
-    //   });
-    // }
 
     if (this.device.isDoorbell()) {
       this.registerCharacteristic({

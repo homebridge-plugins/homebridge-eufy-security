@@ -33,6 +33,16 @@ export type CameraConfig = {
   talkbackChannels?: number;
   hsvRecordingDuration?: number;
   indoorChimeButton?: boolean;
+  /**
+   * When set, a lightweight HTTP server is started on this port during
+   * accessory construction. A request to /doorbell fires a
+   * ProgrammableSwitchEvent SINGLE_PRESS on the Doorbell service.
+   *
+   * This is intended for cameras that do not report isDoorbell() = true
+   * via eufy-security-client but should expose a doorbell tile in HomeKit
+   * and support external triggers (e.g. from Node-RED or Home Assistant).
+   */
+  doorbellHttpPort?: number;
 };
 
 export const DEFAULT_CAMERACONFIG_VALUES: CameraConfig = {
