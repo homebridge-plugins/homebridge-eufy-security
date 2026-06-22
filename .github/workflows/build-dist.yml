@@ -8,6 +8,7 @@ on:
       - 'src/**'
       - 'package.json'
       - 'tsconfig.json'
+  workflow_dispatch:
 
 jobs:
   build:
