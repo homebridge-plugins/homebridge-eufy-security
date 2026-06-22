@@ -150,10 +150,6 @@ export class CameraAccessory extends DeviceAccessory {
     this.setupChimeButton();
 
     this.pruneUnusedServices();
-
-    if (this.cameraConfig.doorbellHttpPort) {
-      this.setupDoorbellHttpServer(this.cameraConfig.doorbellHttpPort);
-    }
   }
 
   /**
@@ -166,6 +162,10 @@ export class CameraAccessory extends DeviceAccessory {
    * A GET or POST request to /doorbell fires a ProgrammableSwitchEvent
    * SINGLE_PRESS, subject to the same 15-second notification debounce used by
    * the native push-notification path.
+   *
+   * IMPORTANT: this method must be called before configureVideoStream() so that
+   * the Doorbell service exists when CameraController is initialised and
+   * EventTriggerOption.DOORBELL is honoured for HKSV recording.
    */
   private setupDoorbellHttpServer(port: number): void {
     const doorbellService =
@@ -202,6 +202,13 @@ export class CameraAccessory extends DeviceAccessory {
       this.cameraFunction();
     } catch (error) {
       this.log.error(`while happending CameraFunction ${error}`);
+    }
+
+    // Register Doorbell service before configureVideoStream() so that
+    // CameraController is aware of it when EventTriggerOption.DOORBELL
+    // is set in the recording options.
+    if (this.cameraConfig.doorbellHttpPort) {
+      this.setupDoorbellHttpServer(this.cameraConfig.doorbellHttpPort);
     }
 
     try {
