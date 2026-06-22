@@ -1,0 +1,40 @@
+name: Build dist
+
+on:
+  push:
+    branches:
+      - feat/doorbell-http-trigger
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit dist
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f dist/
+          git diff --cached --quiet && echo "No changes" || git commit -m "chore: rebuild dist [skip ci]"
+          git push
