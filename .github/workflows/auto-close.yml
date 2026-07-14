@@ -31,9 +31,19 @@ jobs:
         with:
           script: |
             const isPR = !!context.payload.pull_request;
-            const number = isPR
-              ? context.payload.pull_request.number
-              : context.payload.issue.number;
+            const node = isPR ? context.payload.pull_request : context.payload.issue;
+            const number = node.number;
+
+            // Never auto-close items opened by the maintainers/team, nor anything
+            // explicitly flagged to stay open. This lets us keep working in the repo
+            // while the project is frozen for outside contributors.
+            const association = node.author_association;
+            const exemptAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
+            const labels = (node.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+            if (exemptAssociations.includes(association) || labels.includes("keep-open")) {
+              core.info(`Skipping auto-close for #${number} (association=${association}, labels=${labels.join(",")})`);
+              return;
+            }
 
             const intro = isPR
               ? "Thank you for the pull request."
