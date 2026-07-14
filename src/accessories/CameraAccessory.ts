@@ -18,8 +18,7 @@ import {
 import { EufySecurityPlatform } from '../platform.js';
 import { DeviceAccessory } from './Device.js';
 
-
-// @ts-ignore  
+// @ts-ignore
 import { Camera, DeviceEvents, PropertyName, CommandName, StreamMetadata, PropertyValue } from 'eufy-security-client';
 
 import { CameraConfig, DEFAULT_CAMERACONFIG_VALUES } from '../utils/configTypes.js';
@@ -31,7 +30,6 @@ import { PREBUFFER_DURATION_MS } from '../settings.js';
 
 // A semi-complete description of the UniFi Protect camera channel JSON.
 export interface ProtectCameraChannelConfig {
-
   bitrate: number;
   enabled: boolean;
   fps: number;
@@ -44,7 +42,6 @@ export interface ProtectCameraChannelConfig {
 }
 
 export interface RtspEntry {
-
   channel: ProtectCameraChannelConfig;
   lens?: number;
   name: string;
@@ -58,7 +55,6 @@ export interface RtspEntry {
  * Each accessory may expose multiple services of different service types.
  */
 export class CameraAccessory extends DeviceAccessory {
-
   // Define the object variable to hold the boolean and timestamp
   protected cameraStatus: { isEnabled: boolean; timestamp: number };
   private notificationTimeout: NodeJS.Timeout | null = null;
@@ -107,11 +103,7 @@ export class CameraAccessory extends DeviceAccessory {
     [320, 180, 30],
   ];
 
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: Camera,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: Camera) {
     super(platform, accessory, device);
 
     this.cameraConfig = {} as CameraConfig;
@@ -219,22 +211,25 @@ export class CameraAccessory extends DeviceAccessory {
   }
 
   private async setupChimeButton() {
-    this.setupButtonService('IndoorChime', this.cameraConfig.indoorChimeButton, PropertyName.DeviceChimeIndoor, 'switch');
+    this.setupButtonService(
+      'IndoorChime',
+      this.cameraConfig.indoorChimeButton,
+      PropertyName.DeviceChimeIndoor,
+      'switch',
+    );
   }
 
   /**
    * Get the configuration for a camera device.
-   * 
+   *
    * - Combines default settings with those from the platform config.
    * - Validates certain settings like talkback capability.
-   * 
+   *
    * @returns {CameraConfig} The finalized camera configuration.
    */
   private getCameraConfig(): CameraConfig {
     // Find the specific camera config from the platform based on its serial number
-    const foundConfig = this.platform.config.cameras?.find(
-      e => e.serialNumber === this.device.getSerial(),
-    ) ?? {};
+    const foundConfig = this.platform.config.cameras?.find((e) => e.serialNumber === this.device.getSerial()) ?? {};
 
     // Combine default and specific configurations
     const config: Partial<CameraConfig> = {
@@ -268,15 +263,13 @@ export class CameraAccessory extends DeviceAccessory {
   }
 
   private cameraFunction() {
-
     // Fire snapshot when motion detected
     this.registerCharacteristic({
       serviceType: SERV.MotionSensor,
       characteristicType: CHAR.MotionDetected,
       getValue: () => this.device.getPropertyValue(PropertyName.DeviceMotionDetected),
       onValue: (service, characteristic) => {
-        this.eventTypesToHandle.forEach(eventType => {
-
+        this.eventTypesToHandle.forEach((eventType) => {
           this.device.on(eventType as keyof any, (device: any, state: any) => {
             this.log.info(`MOTION DETECTED (${eventType})': ${state}`);
             characteristic.updateValue(state);
@@ -284,9 +277,13 @@ export class CameraAccessory extends DeviceAccessory {
             // Pre-warm the P2P livestream on motion start so it's ready when
             // HomeKit requests an HKSV recording.  RTSP cameras don't need this
             // since their stream URL is immediately available.
-            if (state && this.streamingDelegate && this.recordingDelegate
-              && !this.recordingDelegate.isRecording()
-              && !isRtspReady(this.device, this.cameraConfig)) {
+            if (
+              state &&
+              this.streamingDelegate &&
+              this.recordingDelegate &&
+              !this.recordingDelegate.isRecording() &&
+              !isRtspReady(this.device, this.cameraConfig)
+            ) {
               const manager = this.streamingDelegate.getLivestreamManager();
               manager.preWarmStream().catch((err) => {
                 this.log.debug('P2P pre-warm failed (non-fatal): ' + err);
@@ -338,12 +335,10 @@ export class CameraAccessory extends DeviceAccessory {
         serviceType: SERV.Doorbell,
         characteristicType: CHAR.ProgrammableSwitchEvent,
         onValue: (service, characteristic) => {
-          this.device.on('rings', () => this.onDeviceRingsPushNotification(characteristic),
-          );
+          this.device.on('rings', () => this.onDeviceRingsPushNotification(characteristic));
         },
       });
     }
-
   }
 
   // This private function sets up the motion sensor characteristics for the accessory.
@@ -364,9 +359,7 @@ export class CameraAccessory extends DeviceAccessory {
       getValue: () => {
         const tampered = this.device.getPropertyValue(PropertyName.DeviceEnabled);
         this.log.debug(`TAMPERED? ${!tampered}`);
-        return tampered
-          ? CHAR.StatusTampered.NOT_TAMPERED
-          : CHAR.StatusTampered.TAMPERED;
+        return tampered ? CHAR.StatusTampered.NOT_TAMPERED : CHAR.StatusTampered.TAMPERED;
       },
     });
 
@@ -375,8 +368,7 @@ export class CameraAccessory extends DeviceAccessory {
         serviceType: SERV.Doorbell,
         characteristicType: CHAR.ProgrammableSwitchEvent,
         onValue: (service, characteristic) => {
-          this.device.on('rings', () => this.onDeviceRingsPushNotification(characteristic),
-          );
+          this.device.on('rings', () => this.onDeviceRingsPushNotification(characteristic));
         },
       });
     }
@@ -392,19 +384,22 @@ export class CameraAccessory extends DeviceAccessory {
     }
   }
 
-  protected applyPropertyValue(characteristic: any, propertyName: PropertyName, value: PropertyValue): CharacteristicValue {
+  protected applyPropertyValue(
+    characteristic: any,
+    propertyName: PropertyName,
+    value: PropertyValue,
+  ): CharacteristicValue {
     this.log.debug(`GET '${characteristic.displayName}' ${propertyName}: ${value}`);
 
     if (propertyName === PropertyName.DeviceNightvision) {
       return value === 1;
     }
 
-    // Override for PropertyName.DeviceEnabled when enabled button is fired and 
-    if (
-      propertyName === PropertyName.DeviceEnabled &&
-      Date.now() - this.cameraStatus.timestamp <= 60000
-    ) {
-      this.log.debug(`CACHED for (1 min) '${characteristic.displayName}' ${propertyName}: ${this.cameraStatus.isEnabled}`);
+    // Override for PropertyName.DeviceEnabled when enabled button is fired and
+    if (propertyName === PropertyName.DeviceEnabled && Date.now() - this.cameraStatus.timestamp <= 60000) {
+      this.log.debug(
+        `CACHED for (1 min) '${characteristic.displayName}' ${propertyName}: ${this.cameraStatus.isEnabled}`,
+      );
       value = this.cameraStatus.isEnabled;
     }
 
@@ -425,15 +420,11 @@ export class CameraAccessory extends DeviceAccessory {
       this.log.debug(`SET '${characteristic.displayName}' ${propertyName}: ${value}`);
       await this.setPropertyValue(propertyName, value);
 
-      if (
-        propertyName === PropertyName.DeviceEnabled &&
-        characteristic.displayName === 'On'
-      ) {
+      if (propertyName === PropertyName.DeviceEnabled && characteristic.displayName === 'On') {
         characteristic.updateValue(value);
 
         this.cameraStatus = { isEnabled: value as boolean, timestamp: Date.now() };
-        characteristic = this.getService(SERV.CameraOperatingMode)
-          .getCharacteristic(CHAR.ManuallyDisabled);
+        characteristic = this.getService(SERV.CameraOperatingMode).getCharacteristic(CHAR.ManuallyDisabled);
 
         this.log.debug(`INVERSED '${characteristic.displayName}' ${propertyName}: ${!value}`);
         value = !value as boolean;
@@ -465,7 +456,6 @@ export class CameraAccessory extends DeviceAccessory {
   public getBitrate(): number {
     return -1;
   }
-
 
   // Set the bitrate for a specific camera channel.
   public async setBitrate(): Promise<boolean> {
@@ -501,7 +491,6 @@ export class CameraAccessory extends DeviceAccessory {
 
       this.log.debug(`configureController (${this.accessory.services.length} cached services)`);
       this.accessory.configureController(controller);
-
     } catch (error) {
       this.log.error(`configureController failed: ${error}`);
     }
@@ -509,7 +498,6 @@ export class CameraAccessory extends DeviceAccessory {
   }
 
   private getCameraControllerOptions(): CameraControllerOptions {
-
     const option: CameraControllerOptions = {
       cameraStreamCount: this.cameraConfig.videoConfig?.maxStreams || 2, // HomeKit requires at least 2 streams, but 1 is also just fine
       delegate: this.streamingDelegate as StreamingDelegate,
@@ -538,11 +526,9 @@ export class CameraAccessory extends DeviceAccessory {
       },
       recording: {
         options: {
-          overrideEventTriggerOptions: [
-            EventTriggerOption.MOTION,
-            EventTriggerOption.DOORBELL,
-          ],
-          prebufferLength: (isRtspReady(this.device, this.cameraConfig) || this.device.hasBattery()) ? 0 : PREBUFFER_DURATION_MS,
+          overrideEventTriggerOptions: [EventTriggerOption.MOTION, EventTriggerOption.DOORBELL],
+          prebufferLength:
+            isRtspReady(this.device, this.cameraConfig) || this.device.hasBattery() ? 0 : PREBUFFER_DURATION_MS,
           mediaContainerConfiguration: [
             {
               type: MediaContainerType.FRAGMENTED_MP4,
@@ -576,5 +562,4 @@ export class CameraAccessory extends DeviceAccessory {
 
     return option;
   }
-
 }

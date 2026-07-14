@@ -2,8 +2,7 @@ import { PlatformAccessory } from 'homebridge';
 import { EufySecurityPlatform } from '../platform.js';
 import { DeviceAccessory } from './Device.js';
 
- 
-// @ts-ignore  
+// @ts-ignore
 import { MotionSensor, PropertyName } from 'eufy-security-client';
 import { CHAR, SERV } from '../utils/utils.js';
 
@@ -18,7 +17,6 @@ import { CHAR, SERV } from '../utils/utils.js';
  * @extends DeviceAccessory
  */
 export class MotionSensorAccessory extends DeviceAccessory {
-
   /**
    * Constructor for MotionSensorAccessory.
    *
@@ -26,11 +24,7 @@ export class MotionSensorAccessory extends DeviceAccessory {
    * @param {PlatformAccessory} accessory - The platform-specific accessory.
    * @param {MotionSensor} device - The motion sensor device being represented.
    */
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: MotionSensor,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: MotionSensor) {
     // Call the constructor of the parent class DeviceAccessory.
     super(platform, accessory, device);
 
@@ -39,7 +33,6 @@ export class MotionSensorAccessory extends DeviceAccessory {
 
     // Check if the device has the 'motionDetected' property.
     if (this.device.hasProperty('motionDetected')) {
-
       // Register the Motion Detected characteristic.
       this.registerCharacteristic({
         serviceType: SERV.MotionSensor,
@@ -50,7 +43,6 @@ export class MotionSensorAccessory extends DeviceAccessory {
 
       // Initialize the sensor service.
       this.initSensorService();
-
     } else {
       // Log an error if the 'motionDetected' property is not available for this device.
       this.log.error(`has no motionDetected`);

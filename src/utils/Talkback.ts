@@ -18,7 +18,6 @@ const DEFAULT_IDLE_TIMEOUT_MS = 5_000;
  * {@link STARTUP_BUFFER_MAX} bytes) so early frames are not lost.
  */
 export class TalkbackStream extends Writable {
-
   private readonly eufyClient: EufySecurity;
   private readonly log: Logger<ILogObj>;
   private readonly cameraSN: string;
@@ -120,11 +119,10 @@ export class TalkbackStream extends Writable {
     }
     this.talkbackRequested = true;
     this.log.debug('Requesting talkback start...');
-    this.eufyClient.startStationTalkback(this.cameraSN)
-      .catch(error => {
-        this.log.error('Talkback could not be started: ' + error);
-        this.talkbackRequested = false;
-      });
+    this.eufyClient.startStationTalkback(this.cameraSN).catch((error) => {
+      this.log.error('Talkback could not be started: ' + error);
+      this.talkbackRequested = false;
+    });
   }
 
   private stopTalkback(): void {
@@ -136,10 +134,9 @@ export class TalkbackStream extends Writable {
       this.log.debug('Stopping talkback.');
       this.talkbackStarted = false;
       this.talkbackRequested = false;
-      this.eufyClient.stopStationTalkback(this.cameraSN)
-        .catch(error => {
-          this.log.error('Talkback could not be stopped: ' + error);
-        });
+      this.eufyClient.stopStationTalkback(this.cameraSN).catch((error) => {
+        this.log.error('Talkback could not be stopped: ' + error);
+      });
     }
   }
 

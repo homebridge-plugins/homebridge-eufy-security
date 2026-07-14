@@ -36,9 +36,7 @@ type Snapshot = {
   image: Buffer;
 };
 
-type StreamSource =
-  | { type: 'rtsp'; url: string }
-  | { type: 'local'; stream: Readable };
+type StreamSource = { type: 'rtsp'; url: string } | { type: 'local'; stream: Readable };
 
 /**
  * possible performance settings:
@@ -49,16 +47,15 @@ type StreamSource =
  *      if request takes too long old snapshot will be returned
  * 3. get an old snapshot immediately
  *    - wait on cloud snapshot with new events
- * 
+ *
  * extra options:
  *  - force refresh snapshots with interval
  *  - force immediate snapshot-reject when ringing
- * 
+ *
  * Drawbacks: elapsed time in homekit might be wrong
  */
 
 export class snapshotDelegate {
-
   private readonly eufyPath: string;
   private readonly device: Camera;
   private cameraConfig: CameraConfig;
@@ -75,7 +72,6 @@ export class snapshotDelegate {
     camera: CameraAccessory,
     private livestreamManager: LocalLivestreamManager,
   ) {
-
     this.eufyPath = camera.platform.eufyPath;
     this.device = camera.device;
     this.cameraConfig = camera.cameraConfig;
@@ -97,7 +93,9 @@ export class snapshotDelegate {
 
     switch (method) {
       case SnapshotHandlingMethod.AlwaysFresh:
-        this.log.info('is set to generate new snapshots on events every time. This might reduce homebridge performance and increase power consumption.');
+        this.log.info(
+          'is set to generate new snapshots on events every time. This might reduce homebridge performance and increase power consumption.',
+        );
         break;
       case SnapshotHandlingMethod.Balanced:
         this.log.info('is set to balanced snapshot handling.');
@@ -132,7 +130,7 @@ export class snapshotDelegate {
   private initializeDeviceState(): void {
     try {
       const state = this.device.getPropertyValue(PropertyName.DeviceState) as number;
-      this.isDeviceOffline = (state === 0 || state === 3);
+      this.isDeviceOffline = state === 0 || state === 3;
       if (this.isDeviceOffline) {
         this.log.info('Device is currently offline (state: ' + state + ').');
       }
@@ -254,8 +252,7 @@ export class snapshotDelegate {
   }
 
   private isCacheFresh(maxAgeSeconds: number): boolean {
-    return !!this.currentSnapshot &&
-      (Date.now() - this.currentSnapshot.timestamp) / 1000 <= maxAgeSeconds;
+    return !!this.currentSnapshot && (Date.now() - this.currentSnapshot.timestamp) / 1000 <= maxAgeSeconds;
   }
 
   private storeImage(file: string, image: Buffer) {
@@ -274,7 +271,7 @@ export class snapshotDelegate {
         const picture = device.getPropertyValue(PropertyName.DevicePicture) as Picture;
         if (picture && picture.type) {
           this.storeImage(`${device.getSerial()}.${picture.type.ext}`, picture.data);
-          if (this.currentSnapshot && (Date.now() - this.currentSnapshot.timestamp) < SNAPSHOT_CLOUD_SKIP_MS) {
+          if (this.currentSnapshot && Date.now() - this.currentSnapshot.timestamp < SNAPSHOT_CLOUD_SKIP_MS) {
             this.log.debug('Skipping cloud snapshot update, a recent stream snapshot already exists.');
           } else {
             this.storeSnapshotForCache(picture.data);
@@ -295,7 +292,7 @@ export class snapshotDelegate {
       case 'state': {
         const state = device.getPropertyValue(PropertyName.DeviceState) as number;
         const wasOffline = this.isDeviceOffline;
-        this.isDeviceOffline = (state === 0 || state === 3);
+        this.isDeviceOffline = state === 0 || state === 3;
         if (this.isDeviceOffline && !wasOffline) {
           this.log.warn(`Device went offline (state: ${state}).`);
         } else if (!this.isDeviceOffline && wasOffline) {
@@ -317,28 +314,31 @@ export class snapshotDelegate {
 
     this.log.debug('Fetching new snapshot from camera.');
 
-    this.pendingFetch = this.withTimeout((async () => {
-      const source = await this.getCameraSource();
+    this.pendingFetch = this.withTimeout(
+      (async () => {
+        const source = await this.getCameraSource();
 
-      const isLocalStream = source.type === 'local';
-      try {
-        const buffer = await this.runFFmpegSnapshot('[Snapshot Process]', async (params) => {
-          if (source.type === 'rtsp') {
-            params.setInputSource(source.url);
-          } else {
-            await params.setInputStream(source.stream);
+        const isLocalStream = source.type === 'local';
+        try {
+          const buffer = await this.runFFmpegSnapshot('[Snapshot Process]', async (params) => {
+            if (source.type === 'rtsp') {
+              params.setInputSource(source.url);
+            } else {
+              await params.setInputStream(source.stream);
+            }
+            if (this.cameraConfig.delayCameraSnapshot) {
+              params.setDelayedSnapshot();
+            }
+          });
+          this.storeSnapshotForCache(buffer);
+        } finally {
+          if (isLocalStream) {
+            this.livestreamManager.stopLocalLiveStream();
           }
-          if (this.cameraConfig.delayCameraSnapshot) {
-            params.setDelayedSnapshot();
-          }
-        });
-        this.storeSnapshotForCache(buffer);
-      } finally {
-        if (isLocalStream) {
-          this.livestreamManager.stopLocalLiveStream();
         }
-      }
-    })(), SNAPSHOT_FETCH_TIMEOUT_MS).finally(() => {
+      })(),
+      SNAPSHOT_FETCH_TIMEOUT_MS,
+    ).finally(() => {
       this.pendingFetch = undefined;
     });
 
@@ -395,9 +395,13 @@ export class snapshotDelegate {
   }
 
   private async resizeSnapshot(snapshot: Buffer, request: SnapshotRequest): Promise<Buffer> {
-    return this.runFFmpegSnapshot('[Snapshot Resize]', (params) => {
-      params.setup(this.cameraConfig, request);
-    }, snapshot);
+    return this.runFFmpegSnapshot(
+      '[Snapshot Resize]',
+      (params) => {
+        params.setup(this.cameraConfig, request);
+      },
+      snapshot,
+    );
   }
 
   private async runFFmpegSnapshot(

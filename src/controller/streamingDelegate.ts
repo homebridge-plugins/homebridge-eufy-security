@@ -39,7 +39,6 @@ type ActiveSession = {
 const STREAM_INITIAL_GRACE_MS = 15_000;
 
 export class StreamingDelegate implements CameraStreamingDelegate {
-
   private controller?: CameraController;
 
   private readonly log: Logger<ILogObj>;
@@ -60,18 +59,13 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     return this.camera.cameraConfig.videoConfig!;
   }
 
-  constructor(
-    private camera: CameraAccessory,
-  ) {
+  constructor(private camera: CameraAccessory) {
     this.log = camera.log;
     this.ffmpegLog = ffmpegLoggerFactory.forCamera(camera.device.getSerial());
 
     this.localLivestreamManager = new LocalLivestreamManager(camera);
 
-    this.snapshotDelegate = new snapshotDelegate(
-      this.camera,
-      this.localLivestreamManager,
-    );
+    this.snapshotDelegate = new snapshotDelegate(this.camera, this.localLivestreamManager);
   }
 
   public setController(controller: CameraController) {
@@ -187,7 +181,6 @@ export class StreamingDelegate implements CameraStreamingDelegate {
 
       // Opportunistically capture a snapshot from the running livestream
       this.captureSnapshotFromLivestream();
-
     } catch (error) {
       this.log.error('Stream could not be started: ' + error);
       callback(error as Error);
@@ -224,11 +217,14 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       if (activeSession.timeout) {
         clearTimeout(activeSession.timeout);
       }
-      activeSession.timeout = setTimeout(() => {
-        this.log.debug('Device appears to be inactive. Stopping video stream.');
-        this.controller?.forceStopStreamingSession(request.sessionID);
-        this.stopStream(request.sessionID);
-      }, request.video.rtcp_interval * 5 * 1000);
+      activeSession.timeout = setTimeout(
+        () => {
+          this.log.debug('Device appears to be inactive. Stopping video stream.');
+          this.controller?.forceStopStreamingSession(request.sessionID);
+          this.stopStream(request.sessionID);
+        },
+        request.video.rtcp_interval * 5 * 1000,
+      );
     });
 
     // Initial grace period: warn if no RTCP arrives at all
@@ -237,7 +233,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       if (!firstMessageReceived) {
         this.log.warn(
           'No RTCP keep-alive received within initial grace period (' +
-          `${STREAM_INITIAL_GRACE_MS / 1000}s). Stream may not be reaching the Home app.`,
+            `${STREAM_INITIAL_GRACE_MS / 1000}s). Stream may not be reaching the Home app.`,
         );
       }
     }, STREAM_INITIAL_GRACE_MS);
@@ -257,11 +253,13 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     videoParams.setup(this.camera.cameraConfig, request);
     videoParams.setRTPTarget(sessionInfo, request);
 
-    const isCodecSupported = request.audio.codec === AudioStreamingCodecType.OPUS
-      || request.audio.codec === AudioStreamingCodecType.AAC_ELD;
+    const isCodecSupported =
+      request.audio.codec === AudioStreamingCodecType.OPUS || request.audio.codec === AudioStreamingCodecType.AAC_ELD;
 
     if (!isCodecSupported) {
-      this.log.warn(`An unsupported audio codec (type: ${request.audio.codec}) was requested. Audio streaming will be omitted.`);
+      this.log.warn(
+        `An unsupported audio codec (type: ${request.audio.codec}) was requested. Audio streaming will be omitted.`,
+      );
     }
 
     let audioParams: FFmpegParameters | undefined;
@@ -279,10 +277,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
    *
    * @returns `true` when the stream is a P2P livestream, `false` for RTSP.
    */
-  private async configureStreamInput(
-    videoParams: FFmpegParameters,
-    audioParams?: FFmpegParameters,
-  ): Promise<boolean> {
+  private async configureStreamInput(videoParams: FFmpegParameters, audioParams?: FFmpegParameters): Promise<boolean> {
     if (isRtspReady(this.device, this.camera.cameraConfig)) {
       const url = this.device.getPropertyValue(PropertyName.DeviceRTSPStreamUrl) as string;
       this.log.debug('RTSP URL: ' + url);
@@ -293,7 +288,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
 
     this.log.debug(
       `Using P2P local livestream for ${this.device.getName()} ` +
-      `(serial: ${this.device.getSerial()}, type: ${this.device.getDeviceType()})`,
+        `(serial: ${this.device.getSerial()}, type: ${this.device.getDeviceType()})`,
     );
     const streamData = await this.localLivestreamManager.getLocalLiveStream('livestream');
     this.log.debug('Livestream obtained successfully. Setting up FFmpeg input streams...');
@@ -359,8 +354,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         const audioTimeout = setTimeout(() => {
           if (!audioStarted) {
             this.log.warn(
-              `No audio data received from ${this.device.getName()} — ` +
-              'killing audio process (video continues).',
+              `No audio data received from ${this.device.getName()} — ` + 'killing audio process (video continues).',
             );
             audioProcess.stop();
             activeSession.audioProcess = undefined;
@@ -414,11 +408,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       talkbackParams.setTalkbackChannels(this.camera.cameraConfig.talkbackChannels);
     }
 
-    activeSession.talkbackStream = new TalkbackStream(
-      this.camera.platform,
-      this.device,
-      this.log,
-    );
+    activeSession.talkbackStream = new TalkbackStream(this.camera.platform, this.device, this.log);
     activeSession.returnProcess = new FFmpeg('[Talkback Process]', talkbackParams, this.ffmpegLog);
     activeSession.returnProcess.on('error', (error) => {
       this.log.error('Talkback process ended with error: ' + error);
@@ -463,7 +453,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       case StreamRequestTypes.RECONFIGURE:
         this.log.debug(
           `Reconfigure request: ${request.video.width}x${request.video.height}, ` +
-          `${request.video.fps} fps, ${request.video.max_bit_rate} kbps (Ignored)`,
+            `${request.video.fps} fps, ${request.video.max_bit_rate} kbps (Ignored)`,
         );
         callback();
         break;
@@ -494,19 +484,25 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     }
 
     const cleanupSteps: Array<[string, () => void]> = [
-      ['returnAudio FFmpeg process', () => {
-        session.talkbackStream?.stopTalkbackStream();
-        session.returnProcess?.stdout?.unpipe();
-        session.returnProcess?.stop();
-      }],
+      [
+        'returnAudio FFmpeg process',
+        () => {
+          session.talkbackStream?.stopTalkbackStream();
+          session.returnProcess?.stdout?.unpipe();
+          session.returnProcess?.stop();
+        },
+      ],
       ['video FFmpeg process', () => session.videoProcess?.stop()],
       ['audio FFmpeg process', () => session.audioProcess?.stop()],
       ['socket', () => session.socket?.close()],
-      ['Eufy Station livestream', () => {
-        if (!isRtspReady(this.device, this.camera.cameraConfig)) {
-          this.localLivestreamManager.stopLocalLiveStream();
-        }
-      }],
+      [
+        'Eufy Station livestream',
+        () => {
+          if (!isRtspReady(this.device, this.camera.cameraConfig)) {
+            this.localLivestreamManager.stopLocalLiveStream();
+          }
+        },
+      ],
     ];
 
     for (const [label, cleanup] of cleanupSteps) {

@@ -1,13 +1,7 @@
-// Servicing and caching strategy inspired 
+// Servicing and caching strategy inspired
 // by homebridge-ring — https://github.com/dgreif/ring
 
-import {
-  PlatformAccessory,
-  Characteristic,
-  CharacteristicValue,
-  Service,
-  WithUUID,
-} from 'homebridge';
+import { PlatformAccessory, Characteristic, CharacteristicValue, Service, WithUUID } from 'homebridge';
 import { EufySecurityPlatform } from '../platform.js';
 import { DeviceType, DeviceEvents, PropertyValue, Device, Station, StationEvents } from 'eufy-security-client';
 import { EventEmitter } from 'events';
@@ -22,21 +16,14 @@ import { ILogObj, Logger } from 'tslog';
  * @param {WithUUID<typeof Service> | Service} serviceType - The service type to be checked.
  * @returns {boolean} Returns true if the serviceType is an instance of Service, otherwise false.
  */
-function isServiceInstance(
-  serviceType: WithUUID<typeof Service> | Service,
-): serviceType is Service {
-  return (
-    typeof serviceType === 'object' &&
-    serviceType !== null &&
-    'characteristics' in serviceType
-  );
+function isServiceInstance(serviceType: WithUUID<typeof Service> | Service): serviceType is Service {
+  return typeof serviceType === 'object' && serviceType !== null && 'characteristics' in serviceType;
 }
 
-export type CharacteristicType = WithUUID<{ new(): Characteristic }>;
+export type CharacteristicType = WithUUID<{ new (): Characteristic }>;
 export type ServiceType = WithUUID<typeof Service> | Service;
 
 export abstract class BaseAccessory extends EventEmitter {
-
   /**
    * Cameras accumulate many listeners (property changes, events, snapshots,
    * streaming).  Raise the limit to prevent MaxListenersExceededWarning in
@@ -89,7 +76,7 @@ export abstract class BaseAccessory extends EventEmitter {
   constructor(
     public readonly platform: EufySecurityPlatform,
     public readonly accessory: PlatformAccessory,
-     
+
     public device: any,
   ) {
     super();
@@ -185,12 +172,10 @@ export abstract class BaseAccessory extends EventEmitter {
     }
   }
 
-   
   protected handleRawPropertyChange(device: any, type: number, value: string): void {
     this.log.debug(`Raw Property Changes:`, type, value);
   }
 
-   
   protected handlePropertyChange(device: any, name: string, value: PropertyValue): void {
     this.log.debug(`Property Changes:`, name, value);
   }
@@ -219,18 +204,17 @@ export abstract class BaseAccessory extends EventEmitter {
     serviceType: ServiceType;
     serviceSubType?: string;
     name?: string;
-     
+
     getValue?: (data: any, characteristic?: Characteristic, service?: Service) => any;
-     
+
     setValue?: (value: any, characteristic?: Characteristic, service?: Service) => any;
-     
+
     onValue?: (service: Service, characteristic: Characteristic) => any;
-     
+
     onSimpleValue?: any;
     onMultipleValue?: (keyof DeviceEvents | StationEvents)[];
     setValueDebounceTime?: number;
   }) {
-
     this.log.debug(`REGISTER CHARACTERISTIC ${serviceType.name} / ${characteristicType.name} / ${name}`);
 
     const service = this.getService(serviceType, name, serviceSubType);
@@ -267,7 +251,6 @@ export abstract class BaseAccessory extends EventEmitter {
     }
 
     if (setValue && setValueDebounceTime) {
-
       let timeoutId: NodeJS.Timeout | null = null;
 
       characteristic.onSet(async (value: CharacteristicValue) => {
@@ -280,7 +263,6 @@ export abstract class BaseAccessory extends EventEmitter {
           setValue(value, characteristic, service);
         }, setValueDebounceTime);
       });
-
     } else if (setValue) {
       characteristic.onSet(async (value: CharacteristicValue) => {
         await setValue(value, characteristic, service);
@@ -288,7 +270,6 @@ export abstract class BaseAccessory extends EventEmitter {
     }
 
     if (onSimpleValue) {
-       
       this.device.on(onSimpleValue, (device: any, value: any) => {
         this.log.info(`ON '${serviceType.name} / ${characteristicType.name} / ${onSimpleValue}':`, value);
         characteristic.updateValue(value);
@@ -302,15 +283,13 @@ export abstract class BaseAccessory extends EventEmitter {
 
     if (onMultipleValue) {
       // Attach the common event handler to each event type
-      onMultipleValue.forEach(eventType => {
-         
+      onMultipleValue.forEach((eventType) => {
         this.device.on(eventType as keyof any, (device: any, value: any) => {
           this.log.info(`ON '${serviceType.name} / ${characteristicType.name} / ${eventType}':`, value);
           characteristic.updateValue(value);
         });
       });
     }
-
   }
 
   /**
@@ -322,26 +301,18 @@ export abstract class BaseAccessory extends EventEmitter {
    * @returns {Service} Returns the existing or newly created service.
    * @throws Will throw an error if there are overlapping services.
    */
-  public getService(
-    serviceType: ServiceType,
-    name = this.name,
-    subType?: string,
-  ): Service {
-
+  public getService(serviceType: ServiceType, name = this.name, subType?: string): Service {
     if (isServiceInstance(serviceType)) {
       return serviceType;
     }
 
-    const existingService = subType ? this.accessory.getServiceById(serviceType, subType) : this.accessory.getService(serviceType);
+    const existingService = subType
+      ? this.accessory.getServiceById(serviceType, subType)
+      : this.accessory.getService(serviceType);
 
-    const service = existingService ||
-      this.accessory.addService(serviceType, name, subType!);
+    const service = existingService || this.accessory.addService(serviceType, name, subType!);
 
-    if (
-      existingService &&
-      existingService.displayName &&
-      name !== existingService.displayName
-    ) {
+    if (existingService && existingService.displayName && name !== existingService.displayName) {
       throw new Error(
         `Overlapping services for device ${this.name} - ${name} != ${existingService.displayName} - ${serviceType}`,
       );
@@ -356,14 +327,10 @@ export abstract class BaseAccessory extends EventEmitter {
 
   protected pruneUnusedServices() {
     this.accessory.services.forEach((service) => {
-      if (
-        !this.servicesInUse.includes(service) &&
-        !BaseAccessory.CAMERA_CONTROLLER_SERVICE_UUIDS.has(service.UUID)
-      ) {
+      if (!this.servicesInUse.includes(service) && !BaseAccessory.CAMERA_CONTROLLER_SERVICE_UUIDS.has(service.UUID)) {
         this.log.debug(`Pruning unused service ${service.UUID} ${service.displayName || service.name}`);
         this.accessory.removeService(service);
       }
     });
   }
-
 }
