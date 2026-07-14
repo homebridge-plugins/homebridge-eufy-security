@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge Eufy Security",
   "name": "@homebridge-plugins/homebridge-eufy-security",
-  "version": "4.6.2",
+  "version": "4.7.0",
   "description": "Control Eufy Security from homebridge.",
   "type": "module",
   "license": "Apache-2.0",
@@ -43,7 +43,7 @@
   ],
   "dependencies": {
     "@homebridge/plugin-ui-utils": "^2.2.5",
-    "eufy-security-client": "dev",
+    "eufy-security-client": "^4.1.1-1",
     "ffmpeg-for-homebridge": "2.2.2",
     "pick-port": "^2.2.1",
     "rotating-file-stream": "^3.2.9",
