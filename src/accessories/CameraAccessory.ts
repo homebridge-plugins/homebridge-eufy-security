@@ -61,6 +61,9 @@ export class CameraAccessory extends DeviceAccessory {
 
   public readonly cameraConfig: CameraConfig;
 
+  /** Display name prefix for services. Garage cameras use "Garage Camera" instead of the device name. */
+  private readonly servicePrefix: string;
+
   public hardwareTranscoding: boolean = true;
   public hardwareDecoding: boolean = true;
   public timeshift: boolean = false;
@@ -110,6 +113,8 @@ export class CameraAccessory extends DeviceAccessory {
 
     this.cameraStatus = { isEnabled: false, timestamp: 0 }; // Initialize the cameraStatus object
 
+    this.servicePrefix = device.isGarageCamera() ? 'Garage Camera' : this.name;
+
     this.log.debug(`Constructed Camera`);
 
     this.cameraConfig = this.getCameraConfig();
@@ -140,7 +145,27 @@ export class CameraAccessory extends DeviceAccessory {
     this.setupLightButton();
     this.setupChimeButton();
 
+    // For garage cameras, set ConfiguredName on all named services so
+    // HomeKit shows descriptive names for accessories (buttons, sensors, etc.)
+    if (this.device.isGarageCamera()) {
+      this.applyServiceNames();
+    }
+
     this.pruneUnusedServices();
+  }
+
+  private applyServiceNames() {
+    for (const service of this.accessory.services) {
+      if (service.UUID === SERV.AccessoryInformation.UUID) continue;
+      const name = service.displayName;
+      if (!name) continue;
+
+      if (!service.testCharacteristic(CHAR.ConfiguredName)) {
+        service.addOptionalCharacteristic(CHAR.ConfiguredName);
+      }
+      service.updateCharacteristic(CHAR.ConfiguredName, name);
+      service.updateCharacteristic(CHAR.Name, name);
+    }
   }
 
   private setupCamera() {
@@ -191,7 +216,7 @@ export class CameraAccessory extends DeviceAccessory {
     this.registerCharacteristic({
       serviceType: platformServiceMapping[serviceType] || SERV.Switch,
       characteristicType: CHAR.On,
-      name: this.accessory.displayName + ' ' + serviceName,
+      name: this.servicePrefix + ' ' + serviceName,
       serviceSubType: serviceName,
       getValue: (data, characteristic) => this.getCameraPropertyValue(characteristic, propertyName),
       setValue: (value, characteristic) => this.setCameraPropertyValue(characteristic, propertyName, value),
@@ -203,7 +228,12 @@ export class CameraAccessory extends DeviceAccessory {
   }
 
   private async setupMotionButton() {
-    this.setupButtonService('Motion', this.cameraConfig.motionButton, PropertyName.DeviceMotionDetection, 'switch');
+    this.setupButtonService(
+      'Motion Sensor Enabled',
+      this.cameraConfig.motionButton,
+      PropertyName.DeviceMotionDetection,
+      'switch',
+    );
   }
 
   private async setupLightButton() {
@@ -267,6 +297,8 @@ export class CameraAccessory extends DeviceAccessory {
     this.registerCharacteristic({
       serviceType: SERV.MotionSensor,
       characteristicType: CHAR.MotionDetected,
+      name: this.servicePrefix + ' Motion Detected',
+      serviceSubType: 'Motion Sensor',
       getValue: () => this.device.getPropertyValue(PropertyName.DeviceMotionDetected),
       onValue: (service, characteristic) => {
         this.eventTypesToHandle.forEach((eventType) => {
@@ -347,6 +379,8 @@ export class CameraAccessory extends DeviceAccessory {
     this.registerCharacteristic({
       serviceType: SERV.MotionSensor,
       characteristicType: CHAR.MotionDetected,
+      name: this.servicePrefix + ' Motion Detected',
+      serviceSubType: 'Motion Sensor',
       getValue: () => this.device.getPropertyValue(PropertyName.DeviceMotionDetected),
       onMultipleValue: this.eventTypesToHandle,
     });
@@ -356,6 +390,8 @@ export class CameraAccessory extends DeviceAccessory {
     this.registerCharacteristic({
       serviceType: SERV.MotionSensor,
       characteristicType: CHAR.StatusTampered,
+      name: this.servicePrefix + ' Motion Detected',
+      serviceSubType: 'Motion Sensor',
       getValue: () => {
         const tampered = this.device.getPropertyValue(PropertyName.DeviceEnabled);
         this.log.debug(`TAMPERED? ${!tampered}`);
@@ -555,7 +591,7 @@ export class CameraAccessory extends DeviceAccessory {
         delegate: this.recordingDelegate as RecordingDelegate,
       },
       sensors: {
-        motion: this.getService(SERV.MotionSensor),
+        motion: this.getService(SERV.MotionSensor, this.servicePrefix + ' Motion Detected', 'Motion Sensor'),
         occupancy: undefined,
       },
     };

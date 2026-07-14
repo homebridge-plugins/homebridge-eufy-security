@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge Eufy Security",
   "name": "@homebridge-plugins/homebridge-eufy-security",
-  "version": "4.7.1",
+  "version": "4.7.2",
   "description": "Control Eufy Security from homebridge.",
   "type": "module",
   "license": "Apache-2.0",

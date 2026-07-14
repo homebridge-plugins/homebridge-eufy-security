@@ -12,6 +12,7 @@ import { MotionSensorAccessory } from './accessories/MotionSensorAccessory.js';
 import { CameraAccessory } from './accessories/CameraAccessory.js';
 import { LockAccessory } from './accessories/LockAccessory.js';
 import { SmartDropAccessory } from './accessories/SmartDropAccessory.js';
+import { GarageDoorAccessory } from './accessories/GarageDoorAccessory.js';
 import { AutoSyncStationAccessory } from './accessories/AutoSyncStationAccessory.js';
 
 import {
@@ -25,6 +26,7 @@ import {
   UserType,
   Lock,
   SmartDrop,
+  PropertyName,
   libVersion,
   LogLevel,
 } from 'eufy-security-client';
@@ -963,6 +965,55 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     if (Device.isCamera(type) || Device.isLockWifiVideo(type)) {
       log.debug(accessory.displayName + ' isCamera!');
       new CameraAccessory(this, accessory, device as Camera);
+
+      // Register garage door(s) as separate accessories for individual naming
+      if ((device as Camera).isGarageCamera()) {
+        this.registerGarageDoors(device as Camera, container);
+      }
+    }
+  }
+
+  private registerGarageDoors(device: Camera, container: DeviceContainer) {
+    const cameraConfig = this.config.cameras?.find((e) => e.serialNumber === device.getSerial()) ?? {};
+
+    const doors: { doorId: 1 | 2; prop: PropertyName; enableKey: string; nameKey: string }[] = [
+      { doorId: 1, prop: PropertyName.DeviceDoor1Open, enableKey: 'enableDoor1', nameKey: 'door1Name' },
+      { doorId: 2, prop: PropertyName.DeviceDoor2Open, enableKey: 'enableDoor2', nameKey: 'door2Name' },
+    ];
+
+    for (const door of doors) {
+      const enabled = (cameraConfig as any)[door.enableKey] ?? door.doorId === 1;
+      if (!enabled || !device.hasProperty(door.prop)) continue;
+
+      const doorName = (cameraConfig as any)[door.nameKey] || `Garage Door ${door.doorId}`;
+      const doorSerial = device.getSerial() + `_door_${door.doorId}`;
+      const uuid = HAP.uuid.generate('d1_' + doorSerial);
+
+      const cachedAccessory = this.accessories.find((a) => a.UUID === uuid);
+      if (cachedAccessory) {
+        this.accessories.splice(this.accessories.indexOf(cachedAccessory), 1);
+      }
+
+      const doorAccessory = cachedAccessory || new this.api.platformAccessory(doorName, uuid);
+
+      doorAccessory.context['device'] = container.deviceIdentifier;
+      doorAccessory.displayName = doorName;
+
+      new GarageDoorAccessory(this, doorAccessory, device, door.doorId);
+
+      if (this.activeAccessoryIds.indexOf(doorAccessory.UUID) === -1) {
+        this.activeAccessoryIds.push(doorAccessory.UUID);
+      }
+
+      if (cachedAccessory) {
+        this.api.updatePlatformAccessories([doorAccessory]);
+        log.info(`Updating existing accessory: ${doorAccessory.displayName}`);
+      } else {
+        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [doorAccessory]);
+        log.info(`Registering new accessory: ${doorAccessory.displayName}`);
+      }
+
+      this.registeredAccessories.set(doorAccessory.UUID, doorAccessory);
     }
   }
 }

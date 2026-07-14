@@ -33,6 +33,10 @@ export type CameraConfig = {
   talkbackChannels?: number;
   hsvRecordingDuration?: number;
   indoorChimeButton?: boolean;
+  enableDoor1?: boolean;
+  enableDoor2?: boolean;
+  door1Name?: string;
+  door2Name?: string;
 };
 
 export const DEFAULT_CAMERACONFIG_VALUES: CameraConfig = {
@@ -53,6 +57,8 @@ export const DEFAULT_CAMERACONFIG_VALUES: CameraConfig = {
   snapshotHandlingMethod: SnapshotHandlingMethod.CloudOnly,
   delayCameraSnapshot: false,
   indoorChimeButton: false,
+  enableDoor1: true,
+  enableDoor2: false,
 };
 
 export type VideoConfig = {

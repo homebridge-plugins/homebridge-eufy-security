@@ -155,14 +155,30 @@ const DeviceDetailView = {
         },
       });
 
-      if (device.DeviceMotionDetection) {
+    }
+
+    // Garage door toggles (simple settings level)
+    if (device.isGarageCamera) {
+      if (device.hasDoor1) {
         Toggle.render(simpleSection, {
-          id: 'toggle-motion',
-          label: 'Motion Detection',
-          help: 'Expose motion detection as a sensor in HomeKit.',
-          checked: deviceConfig.motionButton !== false,
+          id: 'toggle-door1',
+          label: 'Door 1',
+          help: 'Expose garage door 1 as a GarageDoorOpener in HomeKit.',
+          checked: deviceConfig.enableDoor1 !== false,
           onChange: async (checked) => {
-            await Config.updateDeviceConfig(device.uniqueId, { motionButton: checked });
+            await Config.updateDeviceConfig(device.uniqueId, { enableDoor1: checked });
+          },
+        });
+      }
+
+      if (device.hasDoor2) {
+        Toggle.render(simpleSection, {
+          id: 'toggle-door2',
+          label: 'Door 2',
+          help: 'Expose garage door 2 as a GarageDoorOpener in HomeKit.',
+          checked: !!deviceConfig.enableDoor2,
+          onChange: async (checked) => {
+            await Config.updateDeviceConfig(device.uniqueId, { enableDoor2: checked });
           },
         });
       }
@@ -282,10 +298,22 @@ const DeviceDetailView = {
       btnTitle.textContent = 'Camera Buttons';
       advSection.appendChild(btnTitle);
 
+      if (device.DeviceMotionDetection) {
+        Toggle.render(advSection, {
+          id: 'toggle-motion',
+          label: 'Motion Detection Toggle',
+          help: 'Adds a virtual switch to HomeKit that lets you turn motion detection on or off. The motion sensor itself is always active — this only controls whether detection events are triggered.',
+          checked: !!deviceConfig.motionButton,
+          onChange: async (checked) => {
+            await Config.updateDeviceConfig(device.uniqueId, { motionButton: checked });
+          },
+        });
+      }
+
       Toggle.render(advSection, {
         id: 'toggle-enable-btn',
-        label: 'Enable Switch',
-        help: 'Add a switch to enable/disable the camera from HomeKit.',
+        label: 'Camera Enable Toggle',
+        help: 'Adds a virtual switch to HomeKit that lets you enable or disable the camera. When the camera is disabled, streaming and recording stop but the device remains registered.',
         checked: !!deviceConfig.enableButton,
         onChange: async (checked) => {
           await Config.updateDeviceConfig(device.uniqueId, { enableButton: checked });
@@ -295,8 +323,8 @@ const DeviceDetailView = {
       if (device.DeviceLight) {
         Toggle.render(advSection, {
           id: 'toggle-light-btn',
-          label: 'Light Switch',
-          help: 'Add a switch to control the camera\'s spotlight/floodlight.',
+          label: 'Spotlight / Floodlight Toggle',
+          help: 'Adds a virtual switch to HomeKit that lets you turn the camera\'s built-in spotlight or floodlight on and off.',
           checked: !!deviceConfig.lightButton,
           onChange: async (checked) => {
             await Config.updateDeviceConfig(device.uniqueId, { lightButton: checked });
@@ -307,8 +335,8 @@ const DeviceDetailView = {
       if (device.DeviceChimeIndoor) {
         Toggle.render(advSection, {
           id: 'toggle-chime-btn',
-          label: 'Indoor Chime Switch',
-          help: 'Add a switch to control the indoor chime.',
+          label: 'Indoor Chime Toggle',
+          help: 'Adds a virtual switch to HomeKit that lets you mute or unmute the indoor chime when the doorbell is pressed.',
           checked: !!deviceConfig.indoorChimeButton,
           onChange: async (checked) => {
             await Config.updateDeviceConfig(device.uniqueId, { indoorChimeButton: checked });
