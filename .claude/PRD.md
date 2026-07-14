@@ -14,8 +14,8 @@ Homebridge users with Eufy Security hardware who want native HomeKit integration
 
 | Requirement | Value |
 |---|---|
-| Node.js | 20, 22, or 24 |
-| Homebridge | >=1.9.0 or ^2.0.0-beta |
+| Node.js | >=24.5.0 |
+| Homebridge | ^2.0.0 |
 | Eufy Account | Dedicated guest account (admin accounts blocked) |
 | FFmpeg | Bundled via `ffmpeg-for-homebridge` |
 

@@ -2,8 +2,7 @@ import { PlatformAccessory } from 'homebridge';
 import { EufySecurityPlatform } from '../platform.js';
 import { DeviceAccessory } from './Device.js';
 
- 
-// @ts-ignore  
+// @ts-ignore
 import { EntrySensor, PropertyName } from 'eufy-security-client';
 import { CHAR, SERV } from '../utils/utils.js';
 
@@ -18,7 +17,6 @@ import { CHAR, SERV } from '../utils/utils.js';
  * @extends DeviceAccessory
  */
 export class EntrySensorAccessory extends DeviceAccessory {
-
   /**
    * Constructor for EntrySensorAccessory.
    *
@@ -26,11 +24,7 @@ export class EntrySensorAccessory extends DeviceAccessory {
    * @param {PlatformAccessory} accessory - The platform-specific accessory.
    * @param {EntrySensor} device - The entry sensor device being represented.
    */
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: EntrySensor,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: EntrySensor) {
     // Call the constructor of the parent class DeviceAccessory.
     super(platform, accessory, device);
 
@@ -39,7 +33,6 @@ export class EntrySensorAccessory extends DeviceAccessory {
 
     // Check if the device has the 'sensorOpen' property.
     if (this.device.hasProperty('sensorOpen')) {
-
       // Register the Contact Sensor characteristic.
       this.registerCharacteristic({
         serviceType: SERV.ContactSensor,
@@ -50,7 +43,6 @@ export class EntrySensorAccessory extends DeviceAccessory {
 
       // Initialize the sensor service.
       this.initSensorService();
-
     } else {
       // Log an error if the 'sensorOpen' property is not available for this device.
       this.log.error(`has no sensorOpen`);

@@ -1,10 +1,4 @@
-import {
-  API,
-  DynamicPlatformPlugin,
-  Logger,
-  PlatformAccessory,
-  APIEvent,
-} from 'homebridge';
+import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, APIEvent } from 'homebridge';
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 
@@ -92,7 +86,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     public config: EufySecurityPlatformConfig,
     public readonly api: API,
   ) {
-
     this.eufyPath = this.api.user.storagePath() + '/eufysecurity';
 
     if (!fs.existsSync(this.eufyPath)) {
@@ -108,10 +101,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
     // Initialize debug recording manager when debugLivestream is enabled.
     if (this.config.debugLivestream) {
-      this.debugRecordingManager = new DebugRecordingManager(
-        log,
-        this.eufyPath,
-      );
+      this.debugRecordingManager = new DebugRecordingManager(log, this.eufyPath);
     }
 
     this.initSetup();
@@ -128,7 +118,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     this.config = config as EufySecurityPlatformConfig;
 
     // Iterates over each key in the DEFAULT_CONFIG_VALUES object.
-    Object.keys(DEFAULT_CONFIG_VALUES).forEach(key => {
+    Object.keys(DEFAULT_CONFIG_VALUES).forEach((key) => {
       // Checks if the corresponding property in the config object is undefined or null.
       // If it is, assigns the default value from DEFAULT_CONFIG_VALUES to it.
       this.config[key] ??= DEFAULT_CONFIG_VALUES[key];
@@ -141,7 +131,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       'hkHome',
       'hkAway',
       'hkNight',
-      'hkOff'
+      'hkOff',
     ];
 
     // Iterate over each property in the config object
@@ -149,7 +139,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       // Check if the property is one of the numeric properties
       if (numericProperties.includes(key)) {
         // Parse the value to ensure it is of the correct type (number)
-        this.config[key] = (typeof value === 'string') ? parseInt(value as string) : value;
+        this.config[key] = typeof value === 'string' ? parseInt(value as string) : value;
       }
     });
   }
@@ -169,8 +159,10 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       stylePrettyLogs: true, // Enable styling for logs
       minLevel: 3, // Minimum log level to display (3 corresponds to INFO)
       prettyLogTimeZone: 'local' as 'local' | 'local', // Time zone for log timestamps
-      prettyLogStyles: { // Styles for different log elements
-        logLevelName: { // Styles for log level names
+      prettyLogStyles: {
+        // Styles for different log elements
+        logLevelName: {
+          // Styles for log level names
           '*': ['bold', 'black', 'bgWhiteBright', 'dim'], // Default style
           SILLY: ['bold', 'white'], // Style for SILLY level
           TRACE: ['bold', 'whiteBright'], // Style for TRACE level
@@ -193,7 +185,8 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     // Modify log options if detailed logging is enabled
     if (this.config.enableDetailedLogging) {
       logOptions.name = `[EufySecurity-${LIB_VERSION}]`; // Modify logger name with plugin version
-      logOptions.prettyLogTemplate = '[{{mm}}/{{dd}}/{{yyyy}} {{hh}}:{{MM}}:{{ss}}]\t{{name}}\t{{logLevelName}}\t[{{fileNameWithLine}}]\t'; // Modify log template
+      logOptions.prettyLogTemplate =
+        '[{{mm}}/{{dd}}/{{yyyy}} {{hh}}:{{MM}}:{{ss}}]\t{{name}}\t{{logLevelName}}\t[{{fileNameWithLine}}]\t'; // Modify log template
       logOptions.minLevel = 2; // Adjust minimum log level
     }
 
@@ -206,16 +199,13 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
   // This function is responsible for identifying the hardware and operating system environment the application is running on.
   private probeHwOs(): void {
-
     // Start off with a generic identifier.
     this._hostSystem = 'generic';
 
     // Take a look at the platform we're on for an initial hint of what we are.
     switch (platform) {
-
       // The beloved macOS.
       case 'darwin':
-
         // For macOS, we check the CPU model to determine if it's an Apple CPU or an Intel CPU.
         this._hostSystem = 'macOS.' + (os.cpus()[0].model.includes('Apple') ? 'Apple' : 'Intel');
 
@@ -223,21 +213,17 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
       // The indomitable Linux.
       case 'linux':
-
         // Let's further see if we're a small, but scrappy, Raspberry Pi.
         try {
-
           // As of the 4.9 kernel, Raspberry Pi prefers to be identified using this method and has deprecated cpuinfo.
           const systemId = readFileSync('/sys/firmware/devicetree/base/model', { encoding: 'utf8' });
 
           // Check if it's a Raspberry Pi 4.
           if (/Raspberry Pi (Compute Module )?4/.test(systemId)) {
-
             // If it's a Pi 4, we identify the system as running Raspbian.
             this._hostSystem = 'raspbian';
           }
         } catch {
-
           // Errors encountered while attempting to identify the system are ignored.
           // We prioritize getting system information through hints rather than comprehensive detection.
         }
@@ -245,7 +231,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
         break;
 
       default:
-
         // We aren't trying to solve for every system type.
         // If the platform doesn't match macOS or Linux, we keep the generic identifier.
         break;
@@ -258,7 +243,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
   }
 
   private initSetup() {
-
     log.debug('plugin data store:', this.eufyPath);
     log.debug('OS is', this.hostSystem);
     log.debug('Using bropats @homebridge-eufy-security/eufy-security-client library in version ', libVersion);
@@ -273,7 +257,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
     const nativePKCS1Restored = nodeMajor > 24 || (nodeMajor === 24 && nodeMinor >= 5);
     if (nativePKCS1Restored && this.config.enableEmbeddedPKCS1Support) {
-      log.info('Native PKCS1 padding support available (Node.js >= 24.5.0) — ignoring enableEmbeddedPKCS1Support config option');
+      log.info(
+        'Native PKCS1 padding support available (Node.js >= 24.5.0) — ignoring enableEmbeddedPKCS1Support config option',
+      );
     }
 
     const eufyConfig = {
@@ -288,7 +274,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       enableEmbeddedPKCS1Support: nativePKCS1Restored ? false : this.config.enableEmbeddedPKCS1Support,
       eventDurationSeconds: 10,
       logging: {
-        level: (this.config.enableDetailedLogging) ? LogLevel.Debug : LogLevel.Info,
+        level: this.config.enableDetailedLogging ? LogLevel.Debug : LogLevel.Info,
       },
     } as EufySecurityConfig;
 
@@ -340,7 +326,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
     if (this.config.CameraMaxLivestreamDuration > 86400) {
       this.config.CameraMaxLivestreamDuration = 86400;
-      log.warn('Your maximum livestream duration value is too large. Since this can cause problems it was reset to 86400 seconds (1 day maximum).');
+      log.warn(
+        'Your maximum livestream duration value is too large. Since this can cause problems it was reset to 86400 seconds (1 day maximum).',
+      );
     }
 
     this.eufyClient.setCameraMaxLivestreamDuration(this.config.CameraMaxLivestreamDuration);
@@ -356,7 +344,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     try {
       this.eufyClient = await EufySecurity.initialize(
         eufyConfig,
-        (this.config.enableDetailedLogging) ? tsLogger : undefined
+        this.config.enableDetailedLogging ? tsLogger : undefined,
       );
 
       // Each camera adds listeners (livestream, talkback) on top of the base ones.
@@ -412,7 +400,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
         `);
         await this.pluginShutdown();
       });
-
     } catch (e) {
       log.error(`Error while setup: ${e}`);
       return false;
@@ -423,13 +410,21 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       log.debug('EufyClient connected ' + this.eufyClient?.isConnected?.());
     } catch (e) {
       log.error(`Error authenticating Eufy: ${e}`);
-      try { this.eufyClient.close(); } catch { /* ignore cleanup errors */ }
+      try {
+        this.eufyClient.close();
+      } catch {
+        /* ignore cleanup errors */
+      }
       return false;
     }
 
     if (!this.eufyClient?.isConnected?.()) {
-      log.error('Not connected can\'t continue!');
-      try { this.eufyClient.close(); } catch { /* ignore cleanup errors */ }
+      log.error("Not connected can't continue!");
+      try {
+        this.eufyClient.close();
+      } catch {
+        /* ignore cleanup errors */
+      }
       return false;
     }
 
@@ -450,17 +445,20 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
   }
 
   private async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
    * Defines an accessory for a device or station.
-   * 
+   *
    * @param deviceContainer The container holding information about the device or station.
    * @param isStation A boolean indicating whether the container represents a station.
    * @returns A tuple containing the created or cached accessory and a boolean indicating whether the accessory was cached.
    */
-  private defineAccessory(deviceContainer: StationContainer | DeviceContainer, isStation: boolean): [PlatformAccessory, boolean] {
+  private defineAccessory(
+    deviceContainer: StationContainer | DeviceContainer,
+    isStation: boolean,
+  ): [PlatformAccessory, boolean] {
     // Generate UUID for the accessory based on device's unique identifier and whether it's a station
     const uuid = this.generateUUID(deviceContainer.deviceIdentifier.uniqueId, isStation);
 
@@ -473,13 +471,13 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     }
 
     // Determine if the device is a camera
-    const isCamera: boolean = (deviceContainer.eufyDevice instanceof Device)
-      ? deviceContainer.eufyDevice.isCamera()
-      : false;
+    const isCamera: boolean =
+      deviceContainer.eufyDevice instanceof Device ? deviceContainer.eufyDevice.isCamera() : false;
 
     // Create a new accessory if not cached, otherwise use the cached one
-    const accessory = cachedAccessory
-      || new this.api.platformAccessory(
+    const accessory =
+      cachedAccessory ||
+      new this.api.platformAccessory(
         deviceContainer.deviceIdentifier.displayName,
         uuid,
         isCamera ? HAP.Categories.CAMERA : HAP.Categories.SECURITY_SYSTEM,
@@ -494,7 +492,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
   /**
    * Adds or updates an accessory for a device or station.
-   * 
+   *
    * @param deviceContainer The container holding information about the device or station.
    * @param isStation A boolean indicating whether the container represents a station.
    */
@@ -543,7 +541,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
   private async stationAdded(station: Station) {
     try {
-
       if (this.config.ignoreStations.includes(station.getSerial())) {
         log.debug(`${station.getName()}: Station ignored`);
         return;
@@ -574,7 +571,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       this.pendingStations.push(station);
       log.debug(`${station.getName()}: Station queued for processing`);
       this.resetDiscoveryDebounce();
-
     } catch (error) {
       log.error(`Error in stationAdded:, ${error}`);
     }
@@ -590,7 +586,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       // Check if the device is a keypad and ignore it from the start
       const deviceType = device.getDeviceType();
       if (Device.isKeyPad(deviceType)) {
-        log.warn(`${device.getName()}: The keypad is ignored as it serves no purpose in this plugin. You can ignore this message.`);
+        log.warn(
+          `${device.getName()}: The keypad is ignored as it serves no purpose in this plugin. You can ignore this message.`,
+        );
         return;
       }
 
@@ -604,7 +602,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       this.pendingDevices.push(device);
       log.debug(`${device.getName()}: Device queued for processing`);
       this.resetDiscoveryDebounce();
-
     } catch (error) {
       log.error(`Error in deviceAdded: ${error}`);
     }
@@ -635,7 +632,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
   private removeAccessoryByUUID(uuid: string, displayName: string): void {
     const accessory = this.registeredAccessories.get(uuid);
     if (!accessory) {
-      log.debug(`No registered accessory found for UUID ${uuid} (${displayName}) — may have been ignored or already removed`);
+      log.debug(
+        `No registered accessory found for UUID ${uuid} (${displayName}) — may have been ignored or already removed`,
+      );
       return;
     }
 
@@ -720,7 +719,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
    * Only creates station entities if:
    * 1. It's a hub/base station (Device.isStation) OR
    * 2. It has at least one device attached
-   * 
+   *
    * All discovered devices are processed since they are already verified by bropat/eufy-security-client.
    */
   /**
@@ -735,7 +734,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     const delaySec = EufySecurityPlatform.DISCOVERY_DEBOUNCE_SEC;
     log.debug(
       `Discovery debounce reset — will process in ${delaySec}s if no more devices arrive ` +
-      `(${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s) queued)`,
+        `(${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s) queued)`,
     );
     this.discoveryDebounceTimeout = setTimeout(async () => {
       await this.processPendingDevices();
@@ -744,12 +743,14 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
   }
 
   private async processPendingDevices(): Promise<void> {
-    log.debug(`[PROCESSING START] Processing ${this.pendingStations.length} stations and ${this.pendingDevices.length} devices`);
+    log.debug(
+      `[PROCESSING START] Processing ${this.pendingStations.length} stations and ${this.pendingDevices.length} devices`,
+    );
 
     if (this.pendingStations.length === 0 || this.pendingDevices.length === 0) {
       log.warn(
         `[DISCOVERY WARNING] Discovery finished with ${this.pendingStations.length} station(s) and ${this.pendingDevices.length} devices(s). ` +
-        'If this is unexpected, please verify your Eufy account has devices and the credentials used are for a guest admin account.',
+          'If this is unexpected, please verify your Eufy account has devices and the credentials used are for a guest admin account.',
       );
     }
 
@@ -767,7 +768,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
 
         // Skip devices that the client declares as unsupported
         if (!Device.isSupported(deviceType)) {
-          log.warn(`[DEVICE SKIP] "${device.getName()}" (type ${deviceType}) is unsupported by eufy-security-client — skipping accessory creation`);
+          log.warn(
+            `[DEVICE SKIP] "${device.getName()}" (type ${deviceType}) is unsupported by eufy-security-client — skipping accessory creation`,
+          );
           continue;
         }
 
@@ -803,7 +806,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       // For standalone cameras acting as their own station, fall back to Device.isSupported().
       const isKnownStation = Device.isStation(stationType);
       if (!isKnownStation && !Device.isSupported(stationType)) {
-        log.warn(`[STATION SKIP] "${station.getName()}" (type ${stationType}) is unsupported by eufy-security-client — skipping accessory creation`);
+        log.warn(
+          `[STATION SKIP] "${station.getName()}" (type ${stationType}) is unsupported by eufy-security-client — skipping accessory creation`,
+        );
         continue;
       }
 
@@ -834,7 +839,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       }
     }
 
-    log.debug(`[STATIONS COMPLETE] ${this.pendingStations.length - stationsSkipped} stations created, ${stationsSkipped} skipped`);
+    log.debug(
+      `[STATIONS COMPLETE] ${this.pendingStations.length - stationsSkipped} stations created, ${stationsSkipped} skipped`,
+    );
 
     // Persist the discovered accessories for the UI (immediate, no debounce)
     this.accessoriesStore?.persistNow();
@@ -850,7 +857,6 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
   }
 
   private async pluginShutdown() {
-
     // Ensure a single shutdown to prevent corruption of the persistent file.
     // This also enables captcha through the GUI and prevents repeated captcha or 2FA prompts upon plugin restart.
     if (this.already_shutdown) {
@@ -909,11 +915,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private register_station(
-    accessory: PlatformAccessory,
-    container: StationContainer,
-  ): void {
-
+  private register_station(accessory: PlatformAccessory, container: StationContainer): void {
     log.debug(accessory.displayName + ' UUID:' + accessory.UUID);
 
     const type = container.deviceIdentifier.type;
@@ -922,7 +924,9 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     if (!Device.isStation(type)) {
       // Standalone Lock or Doorbell doesn't have Security Control
       if (Device.isDoorbell(type) || Device.isLock(type)) {
-        throw new Error(`looks station but it's not could imply some errors! Type: ${type}. You can ignore this message.`);
+        throw new Error(
+          `looks station but it's not could imply some errors! Type: ${type}. You can ignore this message.`,
+        );
       }
     }
 
@@ -933,11 +937,7 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private register_device(
-    accessory: PlatformAccessory,
-    container: DeviceContainer,
-  ): void {
-
+  private register_device(accessory: PlatformAccessory, container: DeviceContainer): void {
     log.debug(accessory.displayName + ' UUID:' + accessory.UUID);
     const device = container.eufyDevice;
     const type = container.deviceIdentifier.type;
@@ -971,13 +971,10 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
         this.registerGarageDoors(device as Camera, container);
       }
     }
-
   }
 
   private registerGarageDoors(device: Camera, container: DeviceContainer) {
-    const cameraConfig = this.config.cameras?.find(
-      e => e.serialNumber === device.getSerial(),
-    ) ?? {};
+    const cameraConfig = this.config.cameras?.find((e) => e.serialNumber === device.getSerial()) ?? {};
 
     const doors: { doorId: 1 | 2; prop: PropertyName; enableKey: string; nameKey: string }[] = [
       { doorId: 1, prop: PropertyName.DeviceDoor1Open, enableKey: 'enableDoor1', nameKey: 'door1Name' },
@@ -985,20 +982,19 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
     ];
 
     for (const door of doors) {
-      const enabled = (cameraConfig as any)[door.enableKey] ?? (door.doorId === 1);
+      const enabled = (cameraConfig as any)[door.enableKey] ?? door.doorId === 1;
       if (!enabled || !device.hasProperty(door.prop)) continue;
 
       const doorName = (cameraConfig as any)[door.nameKey] || `Garage Door ${door.doorId}`;
       const doorSerial = device.getSerial() + `_door_${door.doorId}`;
       const uuid = HAP.uuid.generate('d1_' + doorSerial);
 
-      const cachedAccessory = this.accessories.find(a => a.UUID === uuid);
+      const cachedAccessory = this.accessories.find((a) => a.UUID === uuid);
       if (cachedAccessory) {
         this.accessories.splice(this.accessories.indexOf(cachedAccessory), 1);
       }
 
-      const doorAccessory = cachedAccessory
-        || new this.api.platformAccessory(doorName, uuid);
+      const doorAccessory = cachedAccessory || new this.api.platformAccessory(doorName, uuid);
 
       doorAccessory.context['device'] = container.deviceIdentifier;
       doorAccessory.displayName = doorName;
@@ -1020,5 +1016,4 @@ export class EufySecurityPlatform implements DynamicPlatformPlugin {
       this.registeredAccessories.set(doorAccessory.UUID, doorAccessory);
     }
   }
-
 }

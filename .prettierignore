@@ -1,0 +1,7 @@
+node_modules/
+dist/
+media/
+homebridge-ui/
+package-lock.json
+*.log
+src/version.ts

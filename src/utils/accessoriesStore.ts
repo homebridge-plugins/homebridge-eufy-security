@@ -1,10 +1,4 @@
-import {
-  Device,
-  EufySecurity,
-  PropertyName,
-  CommandName,
-  DeviceType,
-} from 'eufy-security-client';
+import { Device, EufySecurity, PropertyName, CommandName, DeviceType } from 'eufy-security-client';
 
 import fs from 'fs';
 
@@ -23,7 +17,6 @@ const HEARTBEAT_SEC = 60;
  * the UI can detect whether the plugin is still running.
  */
 export class AccessoriesStore {
-
   private heartbeatInterval?: NodeJS.Timeout;
 
   constructor(
@@ -65,10 +58,7 @@ export class AccessoriesStore {
         return;
       }
 
-      const [stations, devices] = await Promise.all([
-        this.eufyClient.getStations(),
-        this.eufyClient.getDevices(),
-      ]);
+      const [stations, devices] = await Promise.all([this.eufyClient.getStations(), this.eufyClient.getDevices()]);
 
       // Group devices by their parent station serial
       const devicesByStation = new Map<string, Device[]>();
@@ -100,7 +90,11 @@ export class AccessoriesStore {
           power: computePower(station.getProperties()),
         };
 
-        try { delete stationRecord.properties.picture; } catch { /* ignore */ }
+        try {
+          delete stationRecord.properties.picture;
+        } catch {
+          /* ignore */
+        }
 
         if (!isKnownStation) {
           if (!Device.isSupported(stationType)) {
@@ -154,7 +148,11 @@ export class AccessoriesStore {
             power: computePower(device.getProperties()),
           };
 
-          try { delete deviceRecord.properties.picture; } catch { /* ignore */ }
+          try {
+            delete deviceRecord.properties.picture;
+          } catch {
+            /* ignore */
+          }
 
           if (stationRecord.unsupported) {
             deviceRecord.unsupported = true;

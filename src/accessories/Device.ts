@@ -1,25 +1,14 @@
-import {
-  PlatformAccessory,
-  Characteristic,
-  CharacteristicValue,
-  Service,
-  WithUUID,
-} from 'homebridge';
+import { PlatformAccessory, Characteristic, CharacteristicValue, Service, WithUUID } from 'homebridge';
 import { EufySecurityPlatform } from '../platform.js';
 import { BaseAccessory } from './BaseAccessory.js';
 import { Device, PropertyName } from 'eufy-security-client';
 import { CHAR, SERV } from '../utils/utils.js';
 
-export type CharacteristicType = WithUUID<{ new(): Characteristic }>;
+export type CharacteristicType = WithUUID<{ new (): Characteristic }>;
 export type ServiceType = WithUUID<typeof Service> | Service;
 
 export abstract class DeviceAccessory extends BaseAccessory {
-
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: Device,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: Device) {
     super(platform, accessory, device);
   }
 
@@ -47,9 +36,7 @@ export abstract class DeviceAccessory extends BaseAccessory {
     value: CharacteristicValue,
   ): void {
     this.log.debug(`ON '${serviceType.name}': ${value}`);
-    this.getService(serviceType)
-      .getCharacteristic(characteristicType)
-      .updateValue(value);
+    this.getService(serviceType).getCharacteristic(characteristicType).updateValue(value);
   }
 
   initSensorService() {

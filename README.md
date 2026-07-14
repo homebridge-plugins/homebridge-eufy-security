@@ -35,11 +35,11 @@
 
 | Requirement | |
 |---|---|
-| [Homebridge](https://homebridge.io) | `>=1.9.0` |
-| Node.js | `20`, `22` or `24` |
+| [Homebridge](https://homebridge.io) | `>=2.0.0` |
+| Node.js | `>=24.5.0` |
 | Eufy Account | A [dedicated guest account](https://support.eufylife.com/s/article/Share-Your-eufySecurity-Devices-With-Your-Family) is **mandatory** |
 
-> **💡 Node.js & RSA_PKCS1_PADDING** — Node.js `18.19.1+`, `20.11.1+` and `21.6.2+` removed `RSA_PKCS1_PADDING` which affects P2P livestream on some devices. The plugin includes a built-in **Embedded PKCS1 Support** setting that works around this on Node.js 20 and 22. Node.js `24.5.0+` restores native support. See the [compatibility guide](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Node.js-Compatibility-with-Eufy-Security-Plugin) for details.
+> **💡 Node.js & RSA_PKCS1_PADDING** — Node.js `24.5.0+` restores native `RSA_PKCS1_PADDING`, so P2P livestream works out of the box and no workaround is needed. See the [compatibility guide](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Node.js-Compatibility-with-Eufy-Security-Plugin) for details.
 
 ---
 

@@ -7,6 +7,8 @@ import { HomebridgePluginUiServer } from '@homebridge/plugin-ui-utils';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import os from 'os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { encryptDiagnostics } from './diagnosticsCrypto.js';
 
 const require = createRequire(import.meta.url);
@@ -22,14 +24,22 @@ class UiServer extends HomebridgePluginUiServer {
   log;
   tsLog;
   storagePath;
-  storedAccessories_file;
+  storedAccessoriesPath;
+  unsupportedPath;
 
   adminAccountUsed = false;
 
   // Batch processing for stations and devices
   pendingStations = [];
   pendingDevices = [];
-  processingTimeout;
+
+  // Timer handles — declared here for visibility; cleared via scoped helpers below
+  /** @type {ReturnType<typeof setTimeout>|null} */ _loginTimeout = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ processingTimeout = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ _closeTimeout = null;
+  /** @type {ReturnType<typeof setInterval>|null} */ _debounceTickInterval = null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ _discoveryInactivityTimeout = null;
+  /** @type {ReturnType<typeof setInterval>|null} */ _discoveryInactivityTickInterval = null;
 
   /** Set to true when the user clicks "Skip" in the UI to abort the unsupported intel wait. */
   _skipIntelWait = false;
@@ -69,8 +79,8 @@ class UiServer extends HomebridgePluginUiServer {
     super();
 
     this.storagePath = this.homebridgeStoragePath + '/eufysecurity';
-    this.storedAccessories_file = this.storagePath + '/accessories.json';
-    this.unsupported_file = this.storagePath + '/unsupported.json';
+    this.storedAccessoriesPath = this.storagePath + '/accessories.json';
+    this.unsupportedPath = this.storagePath + '/unsupported.json';
     this.config.persistentDir = this.storagePath;
 
     this.initLogger();
@@ -169,9 +179,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   initTransportStreams() {
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
-    }
+    fs.mkdirSync(this.storagePath, { recursive: true });
 
     const logStreams = [
       { name: 'configui-server.log', logger: this.log },
@@ -246,6 +254,17 @@ class UiServer extends HomebridgePluginUiServer {
     };
   }
 
+  /** Emit a discovery progress event to the UI. */
+  _emitProgress(phase, progress, message) {
+    this.pushEvent('discoveryProgress', {
+      phase,
+      progress,
+      stations: this.pendingStations.length,
+      devices: this.pendingDevices.length,
+      message,
+    });
+  }
+
   async deleteFileIfExists(filePath) {
     try {
       await fs.promises.unlink(filePath);
@@ -261,7 +280,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async resetAccessoryData() {
-    return this.deleteFileIfExists(this.storedAccessories_file);
+    return this.deleteFileIfExists(this.storedAccessoriesPath);
   }
 
   async checkCache() {
@@ -282,11 +301,13 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async login(options) {
+    this._clearLoginTimeout();
+
     // Block login if the plugin is already running (accessories updated within 90s)
     if (!this.eufyClient) {
       try {
-        if (fs.existsSync(this.storedAccessories_file)) {
-          const data = JSON.parse(fs.readFileSync(this.storedAccessories_file, 'utf-8'));
+        if (fs.existsSync(this.storedAccessoriesPath)) {
+          const data = JSON.parse(fs.readFileSync(this.storedAccessoriesPath, 'utf-8'));
           if (data?.storedAt) {
             const ageMs = Date.now() - new Date(data.storedAt).getTime();
             if (ageMs < 90_000) {
@@ -353,8 +374,8 @@ class UiServer extends HomebridgePluginUiServer {
         this.eufyClient?.on('connect', () => this.log.debug('Connected!'));
         this.eufyClient?.on('close', () => this.log.debug('Closed!'));
       } catch (error) {
-        this.log.error(error);
-        this.pushEvent('authError', { message: `Initialization failed: ${error.message || error}` });
+        this.log.error('EufySecurity init failed:', error);
+        this.pushEvent('authError', { message: 'Initialization failed. Check the logs for details.' });
         this._discoveryPhase = 'idle';
         return { success: false };
       }
@@ -373,52 +394,46 @@ class UiServer extends HomebridgePluginUiServer {
           .then(() => this.log.debug('connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => this.log.error(error));
       } catch (error) {
-        this.log.error(error);
-        clearTimeout(this._loginTimeout);
-        this.pushEvent('authError', { message: 'Login error: ' + (error.message || error) });
+        this.log.error('Login error:', error);
+        this._clearLoginTimeout();
+        this.pushEvent('authError', { message: 'Login failed. Check the logs for details.' });
       }
     } else if (options && options.verifyCode) {
       this.log.debug('login with TFA code');
-      this.pushEvent('discoveryProgress', {
-        phase: 'authenticating',
-        progress: 10,
-        message: 'Verifying TFA code...',
-      });
+      this._emitProgress('authenticating', 10, 'Verifying TFA code...');
       try {
         this._registerOneTimeAuthHandlers();
         this.eufyClient?.connect({ verifyCode: options.verifyCode, force: false })
           .then(() => this.log.debug('TFA connect resolved, connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => {
-            this.log.error('TFA connect error: ' + error);
-            clearTimeout(this._loginTimeout);
-            this.pushEvent('authError', { message: 'TFA verification failed: ' + (error.message || error) });
+            this.log.error('TFA connect error:', error);
+            this._clearLoginTimeout();
+            this.pushEvent('authError', { message: 'TFA verification failed. Check the logs for details.' });
           });
       } catch (error) {
-        clearTimeout(this._loginTimeout);
-        this.pushEvent('authError', { message: 'TFA verification error: ' + (error.message || error) });
+        this.log.error('TFA verification error:', error);
+        this._clearLoginTimeout();
+        this.pushEvent('authError', { message: 'TFA verification failed. Check the logs for details.' });
       }
     } else if (options && options.captcha) {
       this.log.debug('login with captcha');
-      this.pushEvent('discoveryProgress', {
-        phase: 'authenticating',
-        progress: 10,
-        message: 'Verifying captcha...',
-      });
+      this._emitProgress('authenticating', 10, 'Verifying captcha...');
       try {
         this._registerOneTimeAuthHandlers();
         this.eufyClient?.connect({ captcha: { captchaCode: options.captcha.captchaCode, captchaId: options.captcha.captchaId }, force: false })
           .then(() => this.log.debug('Captcha connect resolved, connected?: ' + this.eufyClient?.isConnected()))
           .catch((error) => {
-            this.log.error('Captcha connect error: ' + error);
-            clearTimeout(this._loginTimeout);
-            this.pushEvent('authError', { message: 'Captcha verification failed: ' + (error.message || error) });
+            this.log.error('Captcha connect error:', error);
+            this._clearLoginTimeout();
+            this.pushEvent('authError', { message: 'Captcha verification failed. Check the logs for details.' });
           });
       } catch (error) {
-        clearTimeout(this._loginTimeout);
-        this.pushEvent('authError', { message: 'Captcha verification error: ' + (error.message || error) });
+        this.log.error('Captcha verification error:', error);
+        this._clearLoginTimeout();
+        this.pushEvent('authError', { message: 'Captcha verification failed. Check the logs for details.' });
       }
     } else {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       this.pushEvent('authError', { message: 'Unsupported login method.' });
     }
 
@@ -429,24 +444,20 @@ class UiServer extends HomebridgePluginUiServer {
   /** Register once-only auth event handlers (TFA, captcha, connect) on the eufy client. */
   _registerOneTimeAuthHandlers() {
     this.eufyClient?.once('tfa request', () => {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       this.pushEvent('tfaRequest', {});
     });
     this.eufyClient?.once('captcha request', (id, captcha) => {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       this.pushEvent('captchaRequest', { id, captcha });
     });
     this.eufyClient?.once('connect', () => {
-      clearTimeout(this._loginTimeout);
+      this._clearLoginTimeout();
       if (this.adminAccountUsed) {
         return;
       }
       this.pushEvent('authSuccess', {});
-      this.pushEvent('discoveryProgress', {
-        phase: 'authenticating',
-        progress: 15,
-        message: 'Authenticated — waiting for devices...',
-      });
+      this._emitProgress('authenticating', 15, 'Authenticated — waiting for devices...');
       this._startDiscoveryInactivityTimer();
     });
   }
@@ -465,11 +476,7 @@ class UiServer extends HomebridgePluginUiServer {
       const elapsed = Math.floor((Date.now() - start) / 1000);
       const remaining = Math.max(0, totalSec - elapsed);
       const pct = Math.min(95, 15 + Math.floor((elapsed / totalSec) * 80));
-      this.pushEvent('discoveryProgress', {
-        phase: 'waitingForDevices',
-        progress: pct,
-        message: `Authenticated — waiting for devices... ${remaining}s`,
-      });
+      this._emitProgress('waitingForDevices', pct, `Authenticated — waiting for devices... ${remaining}s`);
     }, 1000);
 
     this._discoveryInactivityTimeout = setTimeout(() => {
@@ -486,11 +493,7 @@ class UiServer extends HomebridgePluginUiServer {
       } catch (error) {
         this.log.error('Error storing empty accessories:', error);
       }
-      this.pushEvent('discoveryProgress', {
-        phase: 'done',
-        progress: 100,
-        message: 'No devices found.',
-      });
+      this._emitProgress('done', 100, 'No devices found.');
       this.pushEvent('addAccessory', { stations: [], noDevices: true });
       this.eufyClient?.removeAllListeners();
       this.eufyClient?.close();
@@ -522,35 +525,35 @@ class UiServer extends HomebridgePluginUiServer {
     `);
   }
 
-  /** Clear all pending timers (login, processing, close, debounce tick, discovery inactivity). */
-  _clearAllTimers() {
+  /** Clear the login timeout. */
+  _clearLoginTimeout() {
     clearTimeout(this._loginTimeout);
     this._loginTimeout = null;
-    if (this.processingTimeout) {
-      clearTimeout(this.processingTimeout);
-      this.processingTimeout = null;
-    }
-    if (this._closeTimeout) {
-      clearTimeout(this._closeTimeout);
-      this._closeTimeout = null;
-    }
-    if (this._debounceTickInterval) {
-      clearInterval(this._debounceTickInterval);
-      this._debounceTickInterval = null;
-    }
-    this._clearDiscoveryInactivityTimer();
+  }
+
+  /** Clear debounce-related timers (processing, close, tick interval). */
+  _clearDebounceTimers() {
+    clearTimeout(this.processingTimeout);
+    this.processingTimeout = null;
+    clearTimeout(this._closeTimeout);
+    this._closeTimeout = null;
+    clearInterval(this._debounceTickInterval);
+    this._debounceTickInterval = null;
   }
 
   /** Clear the post-auth discovery inactivity timer. */
   _clearDiscoveryInactivityTimer() {
-    if (this._discoveryInactivityTickInterval) {
-      clearInterval(this._discoveryInactivityTickInterval);
-      this._discoveryInactivityTickInterval = null;
-    }
-    if (this._discoveryInactivityTimeout) {
-      clearTimeout(this._discoveryInactivityTimeout);
-      this._discoveryInactivityTimeout = null;
-    }
+    clearInterval(this._discoveryInactivityTickInterval);
+    this._discoveryInactivityTickInterval = null;
+    clearTimeout(this._discoveryInactivityTimeout);
+    this._discoveryInactivityTimeout = null;
+  }
+
+  /** Clear all pending timers. */
+  _clearAllTimers() {
+    this._clearLoginTimeout();
+    this._clearDebounceTimers();
+    this._clearDiscoveryInactivityTimer();
   }
 
   /** Parse a semver string (e.g. '4.4.2-beta.18') into [major, minor, patch]. */
@@ -560,12 +563,12 @@ class UiServer extends HomebridgePluginUiServer {
 
   async loadStoredAccessories() {
     try {
-      if (!fs.existsSync(this.storedAccessories_file)) {
+      if (!fs.existsSync(this.storedAccessoriesPath)) {
         this.log.debug('Stored accessories file does not exist.');
         return [];
       }
 
-      const storedData = await fs.promises.readFile(this.storedAccessories_file, { encoding: 'utf-8' });
+      const storedData = await fs.promises.readFile(this.storedAccessoriesPath, { encoding: 'utf-8' });
       const { version: storedVersion, storedAt, stations: storedAccessories } = JSON.parse(storedData);
 
       // --- Cache age check (30 days) ---
@@ -610,10 +613,6 @@ class UiServer extends HomebridgePluginUiServer {
     }
   }
 
-  async delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
   async _onStationDiscovered(station) {
     if (this.adminAccountUsed) {
       return;
@@ -628,13 +627,7 @@ class UiServer extends HomebridgePluginUiServer {
     this.pendingStations.push(station);
     this.log.debug(`${station.getName()}: Station queued for processing`);
     this._discoveryPhase = 'queuing';
-    this.pushEvent('discoveryProgress', {
-      phase: 'queuing',
-      progress: 30,
-      stations: this.pendingStations.length,
-      devices: this.pendingDevices.length,
-      message: `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`,
-    });
+    this._emitProgress('queuing', 30, `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`);
     this._restartDiscoveryDebounce();
   }
 
@@ -654,19 +647,14 @@ class UiServer extends HomebridgePluginUiServer {
     this.pendingDevices.push(device);
     this.log.debug(`${device.getName()}: Device queued for processing`);
     this._discoveryPhase = 'queuing';
-    this.pushEvent('discoveryProgress', {
-      phase: 'queuing',
-      progress: 30,
-      stations: this.pendingStations.length,
-      devices: this.pendingDevices.length,
-      message: `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`,
-    });
+    this._emitProgress('queuing', 30, `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s)...`);
     this._restartDiscoveryDebounce();
   }
 
   /** Restart the debounce timer — processing fires after DISCOVERY_DEBOUNCE_SEC of silence. */
   _restartDiscoveryDebounce() {
-    this._clearAllTimers();
+    this._clearDebounceTimers();
+    this._clearDiscoveryInactivityTimer();
     const delaySec = UiServer.DISCOVERY_DEBOUNCE_SEC;
     this.log.debug(
       `Discovery debounce reset — will process in ${delaySec}s if no more devices arrive ` +
@@ -679,13 +667,7 @@ class UiServer extends HomebridgePluginUiServer {
       const elapsed = (Date.now() - debounceStart) / 1000;
       const pct = Math.min(95, 30 + Math.floor((elapsed / delaySec) * 65));
       const remaining = Math.max(0, Math.ceil(delaySec - elapsed));
-      this.pushEvent('discoveryProgress', {
-        phase: 'queuing',
-        progress: pct,
-        stations: this.pendingStations.length,
-        devices: this.pendingDevices.length,
-        message: `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s) — waiting for more... ${remaining}s`,
-      });
+      this._emitProgress('queuing', pct, `Discovered ${this.pendingStations.length} station(s), ${this.pendingDevices.length} device(s) — waiting for more... ${remaining}s`);
     }, 1000);
 
     this.processingTimeout = setTimeout(() => {
@@ -706,13 +688,7 @@ class UiServer extends HomebridgePluginUiServer {
     this.log.debug(`Processing ${this.pendingStations.length} stations and ${this.pendingDevices.length} devices`);
 
     this._discoveryPhase = 'processing';
-    this.pushEvent('discoveryProgress', {
-      phase: 'processing',
-      progress: 95,
-      stations: this.pendingStations.length,
-      devices: this.pendingDevices.length,
-      message: `Processing ${this.pendingStations.length} station(s) and ${this.pendingDevices.length} device(s)...`,
-    });
+    this._emitProgress('processing', 95, `Processing ${this.pendingStations.length} station(s) and ${this.pendingDevices.length} device(s)...`);
 
     if (this.pendingStations.length === 0 || this.pendingDevices.length === 0) {
       this.log.warn(
@@ -754,15 +730,11 @@ class UiServer extends HomebridgePluginUiServer {
       const pollMs = 1000;
       let waited = 0;
       while (waited < UNSUPPORTED_INTEL_WAIT_MS && !this._skipIntelWait) {
-        await this.delay(pollMs);
+        await delay(pollMs);
         waited += pollMs;
         const pct = Math.min(95, 50 + Math.floor((waited / UNSUPPORTED_INTEL_WAIT_MS) * 45));
         const remaining = Math.max(0, Math.ceil((UNSUPPORTED_INTEL_WAIT_MS - waited) / 1000));
-        this.pushEvent('discoveryProgress', {
-          phase: 'unsupportedWait',
-          progress: pct,
-          message: `Collecting data for ${unsupportedItems.length} unsupported device(s)... ${remaining}s`,
-        });
+        this._emitProgress('unsupportedWait', pct, `Collecting data for ${unsupportedItems.length} unsupported device(s)... ${remaining}s`);
       }
 
       if (this._skipIntelWait) {
@@ -772,11 +744,7 @@ class UiServer extends HomebridgePluginUiServer {
       }
     }
 
-    this.pushEvent('discoveryProgress', {
-      phase: 'buildingStations',
-      progress: 96,
-      message: 'Building station list...',
-    });
+    this._emitProgress('buildingStations', 96, 'Building station list...');
 
     // Process queued stations
     for (const station of this.pendingStations) {
@@ -844,11 +812,7 @@ class UiServer extends HomebridgePluginUiServer {
       this.stations.push(s);
     }
 
-    this.pushEvent('discoveryProgress', {
-      phase: 'buildingDevices',
-      progress: 98,
-      message: 'Building device list...',
-    });
+    this._emitProgress('buildingDevices', 98, 'Building device list...');
 
     // Process queued devices and attach them to stations
     for (const device of this.pendingDevices) {
@@ -931,22 +895,16 @@ class UiServer extends HomebridgePluginUiServer {
       this.log.error('Error storing accessories:', error);
     }
 
-    this.pushEvent('discoveryProgress', {
-      phase: 'done',
-      progress: 100,
-      message: 'Discovery complete!',
-    });
+    this._emitProgress('done', 100, 'Discovery complete!');
 
     this.pushEvent('addAccessory', { stations: this.stations, extendedDiscovery: unsupportedItems.length > 0 });
   }
 
   /** Persist discovered stations/devices to accessories.json. */
   storeAccessories() {
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
-    }
+    fs.mkdirSync(this.storagePath, { recursive: true });
     const dataToStore = { version: LIB_VERSION, storedAt: new Date().toISOString(), stations: this.stations };
-    fs.writeFileSync(this.storedAccessories_file, JSON.stringify(dataToStore));
+    fs.writeFileSync(this.storedAccessoriesPath, JSON.stringify(dataToStore));
   }
 
   // ── Sensitive-field redaction ──────────────────────────────────────────────
@@ -1049,70 +1007,47 @@ class UiServer extends HomebridgePluginUiServer {
     for (const station of pendingStations) {
       const stationType = station.getDeviceType();
       if (!Device.isStation(stationType) && !Device.isSupported(stationType)) {
-        unsupportedEntries.push(this._buildUnsupportedStationEntry(station));
+        unsupportedEntries.push(this._buildUnsupportedEntry(station, 'station'));
       }
     }
 
     // Collect unsupported devices
     for (const device of pendingDevices) {
       if (!Device.isSupported(device.getDeviceType())) {
-        unsupportedEntries.push(this._buildUnsupportedDeviceEntry(device));
+        unsupportedEntries.push(this._buildUnsupportedEntry(device, 'device'));
       }
     }
 
-    if (!fs.existsSync(this.storagePath)) {
-      fs.mkdirSync(this.storagePath, { recursive: true });
-    }
+    fs.mkdirSync(this.storagePath, { recursive: true });
 
     const dataToStore = { version: LIB_VERSION, storedAt: new Date().toISOString(), devices: unsupportedEntries };
-    fs.writeFileSync(this.unsupported_file, JSON.stringify(dataToStore));
+    fs.writeFileSync(this.unsupportedPath, JSON.stringify(dataToStore));
     this.log.debug(`Persisted ${unsupportedEntries.length} unsupported device(s) to unsupported.json`);
   }
 
-  /** Build a triage-ready intel object for an unsupported device. */
-  _buildUnsupportedDeviceEntry(device) {
-    const rawDevice = device.getRawDevice ? device.getRawDevice() : {};
-    const rawProps = device.getRawProperties ? device.getRawProperties() : {};
+  /** Build a triage-ready intel object for an unsupported device or station. */
+  _buildUnsupportedEntry(item, kind) {
+    const isStation = kind === 'station';
+    const rawData = isStation
+      ? (item.getRawStation ? item.getRawStation() : {})
+      : (item.getRawDevice ? item.getRawDevice() : {});
+    const rawProps = item.getRawProperties ? item.getRawProperties() : {};
 
-    const wifiSsid = rawDevice.wifi_ssid || undefined;
-    const localIp = rawDevice.ip_addr || rawDevice.local_ip || undefined;
-
-    return {
-      uniqueId: device.getSerial(),
-      displayName: device.getName(),
-      type: device.getDeviceType(),
-      typename: DeviceType[device.getDeviceType()] || undefined,
-      stationSerialNumber: device.getStationSerial(),
-      model: rawDevice.device_model,
-      hardwareVersion: rawDevice.main_hw_version,
-      softwareVersion: rawDevice.main_sw_version,
-      wifiSsid: wifiSsid ? UiServer._partialMask(wifiSsid, 3, 0) : undefined,
-      localIp: localIp ? UiServer._partialMask(localIp, 3, 0) : undefined,
-      rawDevice: UiServer._redactSensitiveFields(rawDevice),
-      rawProperties: rawProps,
-    };
-  }
-
-  /** Build a triage-ready intel object for an unsupported standalone station. */
-  _buildUnsupportedStationEntry(station) {
-    const rawStation = station.getRawStation ? station.getRawStation() : {};
-    const rawProps = station.getRawProperties ? station.getRawProperties() : {};
-
-    const wifiSsid = rawStation.wifi_ssid || undefined;
-    const localIp = rawStation.ip_addr || undefined;
+    const wifiSsid = rawData.wifi_ssid || undefined;
+    const localIp = rawData.ip_addr || rawData.local_ip || undefined;
 
     return {
-      uniqueId: station.getSerial(),
-      displayName: station.getName(),
-      type: station.getDeviceType(),
-      typename: DeviceType[station.getDeviceType()] || undefined,
-      stationSerialNumber: station.getSerial(),
-      model: rawStation.station_model,
-      hardwareVersion: rawStation.main_hw_version,
-      softwareVersion: rawStation.main_sw_version,
+      uniqueId: item.getSerial(),
+      displayName: item.getName(),
+      type: item.getDeviceType(),
+      typename: DeviceType[item.getDeviceType()] || undefined,
+      stationSerialNumber: isStation ? item.getSerial() : item.getStationSerial(),
+      model: rawData[isStation ? 'station_model' : 'device_model'],
+      hardwareVersion: rawData.main_hw_version,
+      softwareVersion: rawData.main_sw_version,
       wifiSsid: wifiSsid ? UiServer._partialMask(wifiSsid, 3, 0) : undefined,
       localIp: localIp ? UiServer._partialMask(localIp, 3, 0) : undefined,
-      rawDevice: UiServer._redactSensitiveFields(rawStation),
+      rawDevice: UiServer._redactSensitiveFields(rawData),
       rawProperties: rawProps,
     };
   }
@@ -1120,10 +1055,10 @@ class UiServer extends HomebridgePluginUiServer {
   /** Load unsupported device intel from disk. */
   async loadUnsupportedDevices() {
     try {
-      if (!fs.existsSync(this.unsupported_file)) {
+      if (!fs.existsSync(this.unsupportedPath)) {
         return { devices: [] };
       }
-      const data = JSON.parse(await fs.promises.readFile(this.unsupported_file, 'utf-8'));
+      const data = JSON.parse(await fs.promises.readFile(this.unsupportedPath, 'utf-8'));
       return { devices: data.devices || [] };
     } catch (error) {
       this.log.error('Could not load unsupported devices: ' + error);
@@ -1179,13 +1114,13 @@ class UiServer extends HomebridgePluginUiServer {
     const filesToArchive = [...finalLogFiles];
 
     // Include accessories.json for diagnostics
-    if (fs.existsSync(this.storedAccessories_file)) {
-      filesToArchive.push(path.basename(this.storedAccessories_file));
+    if (fs.existsSync(this.storedAccessoriesPath)) {
+      filesToArchive.push(path.basename(this.storedAccessoriesPath));
     }
 
     // Include unsupported.json for diagnostics
-    if (fs.existsSync(this.unsupported_file)) {
-      filesToArchive.push(path.basename(this.unsupported_file));
+    if (fs.existsSync(this.unsupportedPath)) {
+      filesToArchive.push(path.basename(this.unsupportedPath));
     }
 
     this.pushEvent('diagnosticsProgress', { progress: 40, status: 'Checking archive content' });
@@ -1203,7 +1138,7 @@ class UiServer extends HomebridgePluginUiServer {
       // Snapshot files to a temp directory before archiving.
       // Log files are actively written to — reading them directly with tar
       // causes "did not encounter expected EOF" when file size changes mid-read.
-      const os = await import('os');
+
       const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'eufy-diag-'));
       let fileBuffer;
       try {
@@ -1250,17 +1185,17 @@ class UiServer extends HomebridgePluginUiServer {
       'configui-server.log',
       'configui-lib.log',
     ]);
-    const files = await fs.promises.readdir(this.storagePath);
+    const entries = await fs.promises.readdir(this.storagePath, { withFileTypes: true });
     let deleted = 0;
-    for (const file of files) {
-      if (preserved.has(file)) continue;
-      const filePath = path.join(this.storagePath, file);
+    for (const entry of entries) {
+      if (!entry.isFile() || preserved.has(entry.name)) continue;
+      const filePath = path.join(this.storagePath, entry.name);
       try {
         await fs.promises.unlink(filePath);
         deleted++;
-        this.log.debug(`Deleted: ${file}`);
+        this.log.debug(`Deleted: ${entry.name}`);
       } catch (error) {
-        this.log.warn(`Failed to delete ${file}: ${error}`);
+        this.log.warn(`Failed to delete ${entry.name}: ${error}`);
       }
     }
     this.log.info(`Cleaned ${deleted} file(s)`);
@@ -1268,7 +1203,7 @@ class UiServer extends HomebridgePluginUiServer {
   }
 
   async getSystemInfo() {
-    const os = await import('os');
+
     let homebridgeVersion = 'unknown';
     try {
       const hbPkg = require('homebridge/package.json');
@@ -1279,8 +1214,8 @@ class UiServer extends HomebridgePluginUiServer {
 
     let deviceSummary = [];
     try {
-      if (fs.existsSync(this.storedAccessories_file)) {
-        const storedData = JSON.parse(fs.readFileSync(this.storedAccessories_file, 'utf-8'));
+      if (fs.existsSync(this.storedAccessoriesPath)) {
+        const storedData = JSON.parse(fs.readFileSync(this.storedAccessoriesPath, 'utf-8'));
         if (storedData.stations) {
           deviceSummary = storedData.stations.map(s => ({
             name: s.displayName,
@@ -1306,6 +1241,23 @@ class UiServer extends HomebridgePluginUiServer {
       os: `${os.type()} ${os.release()} (${os.arch()})`,
       devices: deviceSummary,
     };
+  }
+
+  /** Resolve and validate a recording filename, returning the absolute path. */
+  _resolveRecordingPath(filename) {
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Missing or invalid filename parameter.');
+    }
+    const recordingsDir = path.join(this.storagePath, 'recordings');
+    const sanitized = path.basename(filename);
+    if (!sanitized.endsWith('.mp4')) {
+      throw new Error('Invalid filename.');
+    }
+    const resolved = path.resolve(path.join(recordingsDir, sanitized));
+    if (!resolved.startsWith(path.resolve(recordingsDir))) {
+      throw new Error('Invalid filename.');
+    }
+    return resolved;
   }
 
   /**
@@ -1347,8 +1299,8 @@ class UiServer extends HomebridgePluginUiServer {
         .sort((a, b) => b.createdAt - a.createdAt);
       return { recordings: files };
     } catch (error) {
-      this.log.error('Error listing debug recordings: ' + error);
-      throw error;
+      this.log.error('Error listing debug recordings:', error);
+      throw new Error('Failed to list debug recordings. Check the logs for details.');
     }
   }
 
@@ -1359,25 +1311,13 @@ class UiServer extends HomebridgePluginUiServer {
    */
   async downloadDebugRecording(options = {}) {
     const { filename, offset: rawOffset = 0, chunkSize: rawChunkSize = 256 * 1024 } = options;
-
-    if (!filename || typeof filename !== 'string') {
-      throw new Error('Missing or invalid filename parameter.');
-    }
+    const resolved = this._resolveRecordingPath(filename);
 
     // Coerce and clamp parameters
     const numOffset = Number(rawOffset) || 0;
+    if (numOffset < 0) throw new Error('Invalid offset.');
     const MAX_CHUNK = 2 * 1024 * 1024; // 2 MB
     const numChunkSize = Math.min(Number(rawChunkSize) || 256 * 1024, MAX_CHUNK);
-
-    const recordingsDir = path.join(this.storagePath, 'recordings');
-    const sanitized = path.basename(filename);
-    const filePath = path.join(recordingsDir, sanitized);
-    const resolved = path.resolve(filePath);
-
-    // Path traversal guard
-    if (!resolved.startsWith(path.resolve(recordingsDir))) {
-      throw new Error('Invalid filename.');
-    }
 
     if (!fs.existsSync(resolved)) {
       throw new Error('Recording file not found.');
@@ -1391,10 +1331,13 @@ class UiServer extends HomebridgePluginUiServer {
       return { data: null, totalSize, offset: numOffset, chunkSize: 0, done: true };
     }
 
-    const fd = fs.openSync(resolved, 'r');
+    const fh = await fs.promises.open(resolved, 'r');
     const buf = Buffer.alloc(readSize);
-    fs.readSync(fd, buf, 0, readSize, numOffset);
-    fs.closeSync(fd);
+    try {
+      await fh.read(buf, 0, readSize, numOffset);
+    } finally {
+      await fh.close();
+    }
 
     const newOffset = numOffset + readSize;
 
@@ -1404,7 +1347,7 @@ class UiServer extends HomebridgePluginUiServer {
       offset: newOffset,
       chunkSize: readSize,
       done: newOffset >= totalSize,
-      filename: sanitized,
+      filename: path.basename(resolved),
     };
   }
 
@@ -1412,26 +1355,14 @@ class UiServer extends HomebridgePluginUiServer {
    * Delete a specific debug recording file.
    */
   async deleteDebugRecording(options = {}) {
-    const { filename } = options;
-
-    if (!filename || typeof filename !== 'string') {
-      throw new Error('Missing or invalid filename parameter.');
-    }
-
-    const recordingsDir = path.join(this.storagePath, 'recordings');
-    const sanitized = path.basename(filename);
-    const filePath = path.join(recordingsDir, sanitized);
-    const resolved = path.resolve(filePath);
-
-    if (!resolved.startsWith(path.resolve(recordingsDir))) {
-      throw new Error('Invalid filename.');
-    }
+    const resolved = this._resolveRecordingPath(options.filename);
 
     if (!fs.existsSync(resolved)) {
       throw new Error('Recording file not found.');
     }
 
     fs.unlinkSync(resolved);
+    const sanitized = path.basename(resolved);
     this.log.info(`Deleted debug recording: ${sanitized}`);
     return { deleted: true, filename: sanitized };
   }

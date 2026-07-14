@@ -61,9 +61,7 @@ export function configureLogStreams(eufyPath: string, omitLogFiles: boolean): vo
   ];
 
   // Lib logs without source-file column
-  const logsWithoutFile = [
-    { name: 'eufy-lib.log', logger: tsLogger },
-  ];
+  const logsWithoutFile = [{ name: 'eufy-lib.log', logger: tsLogger }];
 
   for (const { name, logger } of logsWithFile) {
     const logStream = createStream(name, { path: eufyPath, ...LOG_ROTATION_OPTIONS });
@@ -197,9 +195,7 @@ export class FfmpegLoggerFactory {
           }
         }
 
-        logStream.write(
-          date + '\t' + loggerName + '\t' + level + '\t' + fileNameWithLine + '\t' + message + '\n',
-        );
+        logStream.write(date + '\t' + loggerName + '\t' + level + '\t' + fileNameWithLine + '\t' + message + '\n');
       });
     }
 
@@ -215,8 +211,14 @@ export class Deferred<T> {
   resolve!: (value: T | PromiseLike<T>) => void;
   reject!: (error: Error) => void;
   readonly promise = new Promise<T>((resolve, reject) => {
-    this.resolve = (v) => { this.finished = true; resolve(v); };
-    this.reject = (e) => { this.finished = true; reject(e); };
+    this.resolve = (v) => {
+      this.finished = true;
+      resolve(v);
+    };
+    this.reject = (e) => {
+      this.finished = true;
+      reject(e);
+    };
   });
 }
 

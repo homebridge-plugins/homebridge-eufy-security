@@ -1,4 +1,3 @@
-
 // @ts-ignore
 import { CharacteristicValue, PlatformAccessory } from 'homebridge';
 import { EufySecurityPlatform } from '../platform.js';
@@ -23,7 +22,6 @@ import { CHAR, SERV } from '../utils/utils.js';
  * @see https://github.com/homebridge-plugins/homebridge-eufy-security/issues/770
  */
 export class SmartDropAccessory extends DeviceAccessory {
-
   /**
    * Constructor for SmartDropAccessory.
    *
@@ -31,11 +29,7 @@ export class SmartDropAccessory extends DeviceAccessory {
    * @param {PlatformAccessory} accessory - The platform-specific accessory.
    * @param {SmartDrop} device - The SmartDrop device being represented.
    */
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: SmartDrop,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: SmartDrop) {
     super(platform, accessory, device);
 
     this.log.debug(`Constructed SmartDrop`);
@@ -120,9 +114,7 @@ export class SmartDropAccessory extends DeviceAccessory {
     if (this.device.hasProperty('open')) {
       const isOpen = this.device.getPropertyValue(PropertyName.DeviceOpen);
       this.log.debug(`getLidStatus: ${isOpen}`);
-      return isOpen
-        ? CHAR.LockCurrentState.UNSECURED
-        : CHAR.LockCurrentState.SECURED;
+      return isOpen ? CHAR.LockCurrentState.UNSECURED : CHAR.LockCurrentState.SECURED;
     }
     return CHAR.LockCurrentState.SECURED;
   }
@@ -157,8 +149,6 @@ export class SmartDropAccessory extends DeviceAccessory {
   private getPackageDeliveredStatus(): CharacteristicValue {
     const delivered = this.device.getPropertyValue(PropertyName.DevicePackageDelivered);
     this.log.debug(`getPackageDeliveredStatus: ${delivered}`);
-    return delivered
-      ? CHAR.ContactSensorState.CONTACT_NOT_DETECTED
-      : CHAR.ContactSensorState.CONTACT_DETECTED;
+    return delivered ? CHAR.ContactSensorState.CONTACT_NOT_DETECTED : CHAR.ContactSensorState.CONTACT_DETECTED;
   }
 }

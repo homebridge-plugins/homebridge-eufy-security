@@ -1,13 +1,8 @@
-import {
-  PlatformAccessory,
-  Characteristic,
-  CharacteristicValue,
-} from 'homebridge';
+import { PlatformAccessory, Characteristic, CharacteristicValue } from 'homebridge';
 
 import { EufySecurityPlatform } from '../platform.js';
 import { DeviceAccessory } from './Device.js';
 
-// @ts-ignore
 import { Camera, PropertyName, GarageDoorState } from 'eufy-security-client';
 
 import { CHAR, SERV } from '../utils/utils.js';
@@ -17,7 +12,6 @@ import { CHAR, SERV } from '../utils/utils.js';
  * gets its own tile and name in HomeKit, independent of the parent camera.
  */
 export class GarageDoorAccessory extends DeviceAccessory {
-
   private doorState: number | undefined;
   private currentChar: Characteristic | undefined;
   private targetChar: Characteristic | undefined;
@@ -32,8 +26,7 @@ export class GarageDoorAccessory extends DeviceAccessory {
 
     // Override AccessoryInformation name to match the accessory's display name
     // (BaseAccessory sets it to the device name, which is the camera's name)
-    this.getService(SERV.AccessoryInformation)
-      .updateCharacteristic(CHAR.Name, accessory.displayName);
+    this.getService(SERV.AccessoryInformation).updateCharacteristic(CHAR.Name, accessory.displayName);
 
     this.log.debug(`Constructed GarageDoorAccessory: ${accessory.displayName} (door ${doorId})`);
 
@@ -72,12 +65,10 @@ export class GarageDoorAccessory extends DeviceAccessory {
   }
 
   private setupDoorSensorBattery() {
-    const batteryLevelProp = this.doorId === 1
-      ? PropertyName.DeviceDoorSensor1BatteryLevel
-      : PropertyName.DeviceDoorSensor2BatteryLevel;
-    const lowBatteryProp = this.doorId === 1
-      ? PropertyName.DeviceDoorSensor1LowBattery
-      : PropertyName.DeviceDoorSensor2LowBattery;
+    const batteryLevelProp =
+      this.doorId === 1 ? PropertyName.DeviceDoorSensor1BatteryLevel : PropertyName.DeviceDoorSensor2BatteryLevel;
+    const lowBatteryProp =
+      this.doorId === 1 ? PropertyName.DeviceDoorSensor1LowBattery : PropertyName.DeviceDoorSensor2LowBattery;
 
     if (!this.device.hasProperty(batteryLevelProp)) {
       this.log.debug(`Door ${this.doorId} sensor battery properties not available`);
@@ -100,9 +91,7 @@ export class GarageDoorAccessory extends DeviceAccessory {
         characteristicType: CHAR.StatusLowBattery,
         getValue: () => {
           const isLow = this.device.getPropertyValue(lowBatteryProp);
-          return isLow
-            ? CHAR.StatusLowBattery.BATTERY_LEVEL_LOW
-            : CHAR.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+          return isLow ? CHAR.StatusLowBattery.BATTERY_LEVEL_LOW : CHAR.StatusLowBattery.BATTERY_LEVEL_NORMAL;
         },
       });
     }

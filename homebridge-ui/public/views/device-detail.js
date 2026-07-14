@@ -43,6 +43,12 @@ const DeviceDetailView = {
       return;
     }
 
+    // Keypads have no configurable HomeKit settings — redirect back to dashboard
+    if (accessory.isKeypad === true) {
+      App.navigate('dashboard');
+      return;
+    }
+
     // Header with back button + device image
     this._renderHeader(container, accessory, type);
 
