@@ -15,14 +15,14 @@ For detailed functional requirements, device coverage, configuration options, an
 ```bash
 npm run build          # rimraf dist -> tsc -> copy media/ to dist/
 npm run build-plugin   # rimraf dist -> tsc (no media copy)
-npm run lint           # eslint 'src/**/*.ts' --max-warnings=0
-npm run lint-fix       # eslint with --fix
+npm run lint           # prettier --check 'src/**/*.ts'
+npm run lint-fix       # prettier --write 'src/**/*.ts'
 ```
 
 - No test suite -- there are no unit or integration tests
 - Output: `dist/`
-- `--max-warnings=0` is enforced -- all warnings must be fixed before committing
-- ESLint uses flat config (`eslint.config.mjs`); `@typescript-eslint/no-explicit-any` is globally disabled -- do not add eslint-disable comments for it
+- Formatting is enforced by Prettier (`.prettierrc.json`); `npm run lint` fails on any unformatted file -- run `npm run lint-fix` to auto-format
+- ESLint has been removed (typescript-eslint has no TypeScript 7 compatible release); Prettier is the only style gate
 - Run `npm run lint` and `npm run build` before pushing
 
 ## Architecture
@@ -47,7 +47,7 @@ Entry point `src/index.ts` registers `EufySecurityPlatform` with Homebridge. The
 
 **Constants** in `src/settings.ts`: HKSV segment lengths, snapshot cache ages, streaming bitrate headroom, IDR intervals -- reference this when tuning streaming or recording behaviour.
 
-**Plugin UI** in `homebridge-ui/`: `server.js` (plain JS, eslint-ignored) handles UI server logic and diagnostics generation. The UI and the plugin runtime (`src/`) are **separate processes** that share state through `accessories.json` on disk (written by `src/utils/accessoriesStore.ts`, read by `homebridge-ui/server.js`). Both independently import `eufy-security-client` types (`DeviceType`, `PropertyName`, `Device`, etc.) -- changes to the device/station record shape must be kept in sync between `accessoriesStore.ts` and `server.js`.
+**Plugin UI** in `homebridge-ui/`: `server.js` (plain JS, prettier-ignored) handles UI server logic and diagnostics generation. The UI and the plugin runtime (`src/`) are **separate processes** that share state through `accessories.json` on disk (written by `src/utils/accessoriesStore.ts`, read by `homebridge-ui/server.js`). Both independently import `eufy-security-client` types (`DeviceType`, `PropertyName`, `Device`, etc.) -- changes to the device/station record shape must be kept in sync between `accessoriesStore.ts` and `server.js`.
 
 ### Key source files for device registration and triage
 
@@ -57,8 +57,8 @@ Entry point `src/index.ts` registers `EufySecurityPlatform` with Homebridge. The
 
 - ESM project (`"type": "module"`, `"module": "NodeNext"`) -- imports must use `.js` extensions (NodeNext resolution requires explicit extensions)
 - TypeScript strict mode, ES2022 target (`noImplicitAny: false` relaxes implicit-any checks)
-- Node.js 20, 22, or 24 required
-- Homebridge >=1.9.0 or ^2.0.0-beta
+- Node.js >=24.5.0 required
+- Homebridge ^2.0.0 (1.x no longer supported)
 - Uses `ffmpeg-for-homebridge` for video transcoding
 - `src/version.ts` is auto-generated at prebuild time -- do not edit manually
 - `prepublishOnly` runs lint + build automatically before `npm publish`
