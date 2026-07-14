@@ -10,7 +10,6 @@ import { CHAR, SERV, log } from '../utils/utils.js';
  * Each accessory may expose multiple services of different service types.
  */
 export class AutoSyncStationAccessory {
-
   private static first: boolean = true;
   private static alarmFired: boolean = false;
   private static childs: AutoSyncStationAccessory[] = [];
@@ -33,7 +32,6 @@ export class AutoSyncStationAccessory {
     private accessory: PlatformAccessory,
     private device: Station,
   ) {
-
     // Must be subsecond since station are initiated in //
     let first = false;
     if (AutoSyncStationAccessory.first) {
@@ -53,7 +51,6 @@ export class AutoSyncStationAccessory {
 
       this.device.on('guard mode', this.changeModeToAllChilds.bind(this));
       this.device.on('alarm event', this.fireAlarmToAllChilds.bind(this));
-
     } else {
       log.debug(`${this.accessory.displayName} Constructed Child Station`);
 
@@ -66,7 +63,6 @@ export class AutoSyncStationAccessory {
   }
 
   private initChildEventRegister() {
-
     const first_station = AutoSyncStationAccessory.first_station;
 
     this.device.on('current mode', (station: Station, currentMode: number) => {
@@ -88,7 +84,6 @@ export class AutoSyncStationAccessory {
     });
 
     this.device.on('alarm event', this.fireAlarmToAllChilds.bind(this));
-
   }
 
   /**
@@ -97,7 +92,9 @@ export class AutoSyncStationAccessory {
   private changeModeToAllChilds(station: Station, guardMode: number) {
     log.info(`FWD ${this.name} 'guard mode (${GuardMode[guardMode]})' TO all the childs`);
     AutoSyncStationAccessory.childs.forEach((child, index) => {
-      if (index === 0) { return; } // Already changed so do nothing for him
+      if (index === 0) {
+        return;
+      } // Already changed so do nothing for him
       child.handleSecuritySystemTargetStateSet(guardMode);
     });
   }
@@ -120,11 +117,16 @@ export class AutoSyncStationAccessory {
       return;
     } else {
       AutoSyncStationAccessory.alarmFired = true;
-      log.debug(`SET TIMEOUT ${this.name} 'alarm event' REASON ${AlarmEvent[alarmEvent]} FOR ${manualAlarmSeconds * 4 / 5}sec`);
-      AutoSyncStationAccessory.alarmFiredTimeout.timeout = setTimeout(() => {
-        AutoSyncStationAccessory.alarmFired = false;
-        log.debug(`TIMEOUT ${this.name} 'alarm event' REASON ${AlarmEvent[alarmEvent]}`);
-      }, manualAlarmSeconds * 4 / 5 * 1000);
+      log.debug(
+        `SET TIMEOUT ${this.name} 'alarm event' REASON ${AlarmEvent[alarmEvent]} FOR ${(manualAlarmSeconds * 4) / 5}sec`,
+      );
+      AutoSyncStationAccessory.alarmFiredTimeout.timeout = setTimeout(
+        () => {
+          AutoSyncStationAccessory.alarmFired = false;
+          log.debug(`TIMEOUT ${this.name} 'alarm event' REASON ${AlarmEvent[alarmEvent]}`);
+        },
+        ((manualAlarmSeconds * 4) / 5) * 1000,
+      );
     }
 
     // List of alarm events fired to stop alarm
@@ -133,32 +135,34 @@ export class AutoSyncStationAccessory {
       AlarmEvent.HUB_STOP_BY_APP,
       AlarmEvent.HUB_STOP_BY_HAND,
       AlarmEvent.HUB_STOP_BY_KEYPAD,
-      AlarmEvent.DEV_STOP
+      AlarmEvent.DEV_STOP,
     ];
 
     // Check if the alarm event is a plugin-fired alarm stop event
-    if (pluginFiredAlarmStopEvents.includes(alarmEvent)) { return; }
+    if (pluginFiredAlarmStopEvents.includes(alarmEvent)) {
+      return;
+    }
 
-    const characteristic = first_station.getService(SERV.SecuritySystem)
+    const characteristic = first_station
+      .getService(SERV.SecuritySystem)
       .getCharacteristic(CHAR.SecuritySystemCurrentState);
 
     first_station.onStationAlarmEventPushNotification(characteristic, alarmEvent);
 
     // Iterate over child stations to synchronize the alarm event
-    AutoSyncStationAccessory.childs.forEach(child => {
-
+    AutoSyncStationAccessory.childs.forEach((child) => {
       // Check if the alarm is already handled by the child itself
       if (this.device.getSerial() === child.device.getSerial()) {
         return; // Already fired by itself so do nothing for him
       }
 
       // Log the forwarded alarm event along with the reason and duration
-      log.debug(`FWD ${this.name} 'alarm event' TO ${child.name} REASON ${AlarmEvent[alarmEvent]} FOR ${manualAlarmSeconds}sec`);
+      log.debug(
+        `FWD ${this.name} 'alarm event' TO ${child.name} REASON ${AlarmEvent[alarmEvent]} FOR ${manualAlarmSeconds}sec`,
+      );
       // Trigger the alarm sound on the child station with the specified duration
       child.device.triggerStationAlarmSound(manualAlarmSeconds);
-
     });
-
   }
 
   /**
@@ -166,7 +170,6 @@ export class AutoSyncStationAccessory {
    */
   protected handleSecuritySystemTargetStateSet(mode: number) {
     try {
-
       log.debug(`${this.name} SET StationGuardMode Eufy: ${GuardMode[mode]}(${mode})`);
 
       // Call the device's setGuardMode method to initiate the action
@@ -190,10 +193,8 @@ export class AutoSyncStationAccessory {
         // Store the retry timeout as part of guardModeChangeTimeout
         this.guardModeChangeTimeout.timeout = retryTimeout;
       }, this.guardModeChangeTimeout.delay);
-
     } catch (error) {
       log.error(`${this.name} Error Setting security mode! ${error}`);
     }
   }
-
 }

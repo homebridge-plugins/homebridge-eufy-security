@@ -167,8 +167,8 @@ export class DebugRecordingManager {
   listRecordings(): DebugRecordingFile[] {
     try {
       const files = readdirSync(this.recordingsDir)
-        .filter(f => f.endsWith('.mp4'))
-        .map(filename => this.parseRecordingFilename(filename))
+        .filter((f) => f.endsWith('.mp4'))
+        .map((filename) => this.parseRecordingFilename(filename))
         .filter((f): f is DebugRecordingFile => f !== null)
         .sort((a, b) => b.createdAt - a.createdAt);
       return files;
@@ -294,19 +294,20 @@ export class DebugRecordingManager {
     const fps = videoFps > 0 ? videoFps : 15;
     const args: string[] = [
       '-hide_banner',
-      '-loglevel', 'error',
-      '-fflags', '+genpts',
-      '-r', String(fps),
-      '-f', 'h264',
-      '-i', `tcp://127.0.0.1:${videoPort}`,
+      '-loglevel',
+      'error',
+      '-fflags',
+      '+genpts',
+      '-r',
+      String(fps),
+      '-f',
+      'h264',
+      '-i',
+      `tcp://127.0.0.1:${videoPort}`,
     ];
 
     if (audioPort && audioFormat) {
-      args.push(
-        '-fflags', '+genpts',
-        '-f', audioFormat,
-        '-i', `tcp://127.0.0.1:${audioPort}`,
-      );
+      args.push('-fflags', '+genpts', '-f', audioFormat, '-i', `tcp://127.0.0.1:${audioPort}`);
     }
 
     args.push('-c', 'copy');
@@ -314,11 +315,7 @@ export class DebugRecordingManager {
     if (audioPort && audioFormat) {
       args.push('-bsf:a', 'aac_adtstoasc');
     }
-    args.push(
-      '-f', 'mp4',
-      '-movflags', '+faststart',
-      outputPath,
-    );
+    args.push('-f', 'mp4', '-movflags', '+faststart', outputPath);
 
     return args;
   }
@@ -346,7 +343,9 @@ export class DebugRecordingManager {
         input.on('error', () => {
           if (!socket.destroyed) socket.destroy();
         });
-        socket.on('error', () => { input.unpipe(socket); });
+        socket.on('error', () => {
+          input.unpipe(socket);
+        });
         socket.on('close', () => {
           input.unpipe(socket);
           if (!input.destroyed) input.destroy();
@@ -358,7 +357,9 @@ export class DebugRecordingManager {
         });
       });
 
-      server.on('error', () => { /* ignore */ });
+      server.on('error', () => {
+        /* ignore */
+      });
 
       const killTimeout = setTimeout(() => {
         server.close();
@@ -402,8 +403,7 @@ export class DebugRecordingManager {
     try {
       // Per-camera limit
       const allFiles = this.listRecordings();
-      const cameraFiles = allFiles.filter(f => f.serial === serial)
-        .sort((a, b) => b.createdAt - a.createdAt);
+      const cameraFiles = allFiles.filter((f) => f.serial === serial).sort((a, b) => b.createdAt - a.createdAt);
 
       if (cameraFiles.length > this.maxFilesPerCamera) {
         const toDelete = cameraFiles.slice(this.maxFilesPerCamera);
@@ -431,11 +431,16 @@ export class DebugRecordingManager {
   /** Map legacy type strings to current ones. */
   private normalizeRecordingType(raw?: string): DebugRecordingFile['type'] {
     switch (raw) {
-      case 'hksv': return 'hksv';
-      case 'livestream': return 'livestream';
-      case 'raw': return 'livestream'; // legacy
-      case 'processed': return 'processed';
-      default: return 'processed'; // legacy files without type suffix
+      case 'hksv':
+        return 'hksv';
+      case 'livestream':
+        return 'livestream';
+      case 'raw':
+        return 'livestream'; // legacy
+      case 'processed':
+        return 'processed';
+      default:
+        return 'processed'; // legacy files without type suffix
     }
   }
 
@@ -444,7 +449,9 @@ export class DebugRecordingManager {
     // Types: hksv, livestream (current), raw, processed (legacy)
     // or legacy: <serial>_<ISO-timestamp>.mp4 (processed, from existing debug recording)
     // Timestamp in filename: 2024-03-26T14-30-00-000Z (colons and dots replaced with hyphens)
-    const match = filename.match(/^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)(?:_(hksv|livestream|raw|processed))?\.mp4$/);
+    const match = filename.match(
+      /^([A-Za-z0-9_-]+?)_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3}Z)?)(?:_(hksv|livestream|raw|processed))?\.mp4$/,
+    );
     if (!match) return null;
 
     const filePath = path.join(this.recordingsDir, filename);
@@ -456,9 +463,7 @@ export class DebugRecordingManager {
       const datePart = rawTs.substring(0, tIdx);
       const timePart = rawTs.substring(tIdx + 1);
       // Time part: 14-30-00-000Z → 14:30:00.000Z
-      const restoredTime = timePart
-        .replace(/^(\d{2})-(\d{2})-(\d{2})/, '$1:$2:$3')
-        .replace(/-(\d{3}Z)$/, '.$1');
+      const restoredTime = timePart.replace(/^(\d{2})-(\d{2})-(\d{2})/, '$1:$2:$3').replace(/-(\d{3}Z)$/, '.$1');
       const timestamp = `${datePart} ${restoredTime}`;
 
       return {

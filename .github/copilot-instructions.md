@@ -63,8 +63,7 @@ When updating the `eufy-security-client` version in `package.json`:
 
 ## Linting & Building
 
-- Run `npm run lint` before committing to ensure zero warnings/errors
-- The lint script runs: `eslint 'src/**/*.ts' --max-warnings=0`
-- `@typescript-eslint/no-explicit-any` is globally disabled — do **not** add `eslint-disable` comments for it
-- Fix all warnings; the build enforces `--max-warnings=0`
+- Run `npm run lint` before committing to ensure formatting is clean
+- The lint script runs: `prettier --check 'src/**/*.ts'` — run `npm run lint-fix` to auto-format
+- ESLint has been removed (typescript-eslint has no TypeScript 7 compatible release); Prettier is the only style gate
 - Run `npm run build` before pushing to ensure the project compiles without errors

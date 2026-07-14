@@ -1,4 +1,3 @@
- 
 // @ts-ignore
 import { CharacteristicValue, PlatformAccessory } from 'homebridge';
 import { EufySecurityPlatform } from '../platform.js';
@@ -17,7 +16,6 @@ import { CHAR, SERV } from '../utils/utils.js';
  * @extends DeviceAccessory
  */
 export class LockAccessory extends DeviceAccessory {
-
   /**
    * Constructor for LockAccessory.
    *
@@ -25,11 +23,7 @@ export class LockAccessory extends DeviceAccessory {
    * @param {PlatformAccessory} accessory - The platform-specific accessory.
    * @param {Lock} device - The lock device being represented.
    */
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: Lock,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: Lock) {
     // Call the constructor of the parent class DeviceAccessory.
     super(platform, accessory, device);
 
