@@ -2,8 +2,8 @@ import { Characteristic, PlatformAccessory, CharacteristicValue } from 'homebrid
 
 import { EufySecurityPlatform } from '../platform.js';
 import { BaseAccessory } from './BaseAccessory.js';
- 
-// @ts-ignore  
+
+// @ts-ignore
 import { Station, DeviceType, PropertyName, PropertyValue, AlarmEvent, GuardMode } from 'eufy-security-client';
 import { StationConfig } from '../utils/configTypes.js';
 import { CHAR, SERV, log } from '../utils/utils.js';
@@ -12,7 +12,7 @@ export enum HKGuardMode {
   STAY_ARM = 0,
   AWAY_ARM = 1,
   NIGHT_ARM = 2,
-  DISARM = 3
+  DISARM = 3,
 }
 
 export interface EufyMode {
@@ -26,7 +26,6 @@ export interface EufyMode {
  * Each accessory may expose multiple services of different service types.
  */
 export class StationAccessory extends BaseAccessory {
-
   public readonly stationConfig: StationConfig;
   public readonly hasKeyPad: boolean = false;
   private readonly modes: EufyMode[];
@@ -40,11 +39,7 @@ export class StationAccessory extends BaseAccessory {
     delay: number;
   } = { timeout: null, delay: 5000 };
 
-  constructor(
-    platform: EufySecurityPlatform,
-    accessory: PlatformAccessory,
-    device: Station,
-  ) {
+  constructor(platform: EufySecurityPlatform, accessory: PlatformAccessory, device: Station) {
     super(platform, accessory, device);
 
     this.log.debug(`Constructed Station`);
@@ -73,7 +68,7 @@ export class StationAccessory extends BaseAccessory {
       PropertyName.StationCustom3SecuritySettings,
     ];
 
-    SecuritySettings.forEach(item => {
+    SecuritySettings.forEach((item) => {
       if (this.device.hasPropertyValue(item) && this.getPropertyValue(item) !== '') {
         this.log.debug(`- ${item} :`, this.getPropertyValue(item));
       }
@@ -111,9 +106,7 @@ export class StationAccessory extends BaseAccessory {
       },
     });
 
-    this.getService(SERV.SecuritySystem)
-      .getCharacteristic(CHAR.SecuritySystemTargetState)
-      .setProps({ validValues });
+    this.getService(SERV.SecuritySystem).getCharacteristic(CHAR.SecuritySystemTargetState).setProps({ validValues });
 
     this.registerCharacteristic({
       serviceType: SERV.Switch,
@@ -141,7 +134,7 @@ export class StationAccessory extends BaseAccessory {
    * Gets the station configuration based on several possible sources.
    * Priority is given to custom configurations (if available), then falls back to global configs,
    * and lastly uses default values if neither custom nor global configs are set.
-   * 
+   *
    * @returns {StationConfig} The final configuration settings for the station
    */
   private getStationConfig() {
@@ -162,7 +155,7 @@ export class StationAccessory extends BaseAccessory {
       // Default HomeKit mode for 'Off':
       // - If a keypad is present, set to 6 (Special value)
       // - Otherwise, set to 63 (Default value)
-      hkOff: stationConfig?.hkOff ?? this.hasKeyPad ? 6 : this.platform.config.hkOff,
+      hkOff: (stationConfig?.hkOff ?? this.hasKeyPad) ? 6 : this.platform.config.hkOff,
 
       // Use optional chaining to safely access manualTriggerModes and manualAlarmSeconds
       manualTriggerModes: stationConfig?.manualTriggerModes ?? [],
@@ -201,10 +194,7 @@ export class StationAccessory extends BaseAccessory {
     characteristic.updateValue(homekitCurrentMode);
   }
 
-  private onStationCurrentModePushNotification(
-    characteristic: Characteristic,
-    currentMode: number,
-  ): void {
+  private onStationCurrentModePushNotification(characteristic: Characteristic, currentMode: number): void {
     if (this.guardModeChangeTimeout.timeout) {
       // If there's an existing timeout, clear it
       clearTimeout(this.guardModeChangeTimeout.timeout);
@@ -214,10 +204,7 @@ export class StationAccessory extends BaseAccessory {
     characteristic.updateValue(homekitCurrentMode);
   }
 
-  public onStationAlarmEventPushNotification(
-    characteristic: Characteristic,
-    alarmEvent: AlarmEvent,
-  ): void {
+  public onStationAlarmEventPushNotification(characteristic: Characteristic, alarmEvent: AlarmEvent): void {
     let currentValue = this.device.getPropertyValue(PropertyName.StationCurrentMode);
     if (alarmEvent === 0) {
       // do not resset alarm if alarm was triggered manually
@@ -238,7 +225,7 @@ export class StationAccessory extends BaseAccessory {
         this.alarm_triggered = true;
         characteristic.updateValue(CHAR.SecuritySystemCurrentState.ALARM_TRIGGERED); // Alarm !!!
         break;
-      case 0:  // Alarm off by Hub
+      case 0: // Alarm off by Hub
       case 15: // Alarm off by Keypad
       case 16: // Alarm off by Eufy App
       case 17: // Alarm off by HomeBase button
@@ -261,7 +248,7 @@ export class StationAccessory extends BaseAccessory {
    * Convert a HomeKit mode number to its corresponding Eufy mode number.
    * Searches the `this.modes` array to find a matching HomeKit mode.
    * Throws an error if a matching mode is not found.
-   * 
+   *
    * @param {number} hkMode - The HomeKit mode to convert
    * @returns {number} The corresponding Eufy mode
    * @throws {Error} If a matching mode is not found
@@ -278,7 +265,7 @@ export class StationAccessory extends BaseAccessory {
    * Convert a Eufy mode number to its corresponding HomeKit mode number.
    * Searches the `this.modes` array to find a matching Eufy mode.
    * Throws an error if a matching mode is not found.
-   * 
+   *
    * @param {number} eufyMode - The Eufy mode to convert
    * @returns {number} The corresponding HomeKit mode
    * @throws {Error} If a matching mode is not found
@@ -290,7 +277,6 @@ export class StationAccessory extends BaseAccessory {
     }
     return modeObj.hk;
   }
-
 
   /**
    * Handle requests to get the current value of the 'Security System Current State' characteristic
@@ -305,7 +291,9 @@ export class StationAccessory extends BaseAccessory {
   /**
    * Handle requests to get the current value of the 'Security System Target State' characteristic
    */
-  private handleSecuritySystemTargetStateGet(stateCharacteristic: string = 'handleSecuritySystemTargetStateGet'): CharacteristicValue {
+  private handleSecuritySystemTargetStateGet(
+    stateCharacteristic: string = 'handleSecuritySystemTargetStateGet',
+  ): CharacteristicValue {
     try {
       const currentValue = this.device.getPropertyValue(PropertyName.StationCurrentMode);
       if (currentValue === -1) {
@@ -361,7 +349,6 @@ export class StationAccessory extends BaseAccessory {
       }, this.guardModeChangeTimeout.delay);
 
       this.updateManuelTriggerButton(false);
-
     } catch (error) {
       this.log.error(`Error Setting security mode! ${error}`);
     }
@@ -372,7 +359,8 @@ export class StationAccessory extends BaseAccessory {
   }
 
   private async handleManualTriggerSwitchStateSet(value: CharacteristicValue) {
-    if (value) { // trigger alarm
+    if (value) {
+      // trigger alarm
       try {
         const currentValue = this.device.getPropertyValue(PropertyName.StationCurrentMode);
         if (currentValue === -1) {
@@ -380,16 +368,24 @@ export class StationAccessory extends BaseAccessory {
         }
         // check if alarm is allowed for this guard mode
         // and alarm is not delayed
-        if (this.stationConfig.manualTriggerModes.indexOf(this.convertEufytoHK(currentValue)) !== -1 && !this.alarm_delayed) {
-          this.device.triggerStationAlarmSound(this.stationConfig.manualAlarmSeconds)
-            .then(() => log.debug(
-              this.accessory.displayName, 'alarm manually triggered for ' + this.stationConfig.manualAlarmSeconds + ' seconds.'))
-            .catch(error => this.log.error(`alarm could not be manually triggered: ${error}`));
+        if (
+          this.stationConfig.manualTriggerModes.indexOf(this.convertEufytoHK(currentValue)) !== -1 &&
+          !this.alarm_delayed
+        ) {
+          this.device
+            .triggerStationAlarmSound(this.stationConfig.manualAlarmSeconds)
+            .then(() =>
+              log.debug(
+                this.accessory.displayName,
+                'alarm manually triggered for ' + this.stationConfig.manualAlarmSeconds + ' seconds.',
+              ),
+            )
+            .catch((error) => this.log.error(`alarm could not be manually triggered: ${error}`));
         } else {
-          const message = this.alarm_delayed ?
-            'tried to trigger alarm, but the alarm delayed event was triggered beforehand.' :
-            'tried to trigger alarm, but the current station mode prevents the alarm from being triggered. ' +
-            'Please look in in the configuration if you want to change this behaviour.';
+          const message = this.alarm_delayed
+            ? 'tried to trigger alarm, but the alarm delayed event was triggered beforehand.'
+            : 'tried to trigger alarm, but the current station mode prevents the alarm from being triggered. ' +
+              'Please look in in the configuration if you want to change this behaviour.';
           setTimeout(() => {
             this.log.info(`${message}`);
             this.updateManuelTriggerButton(false);
@@ -399,12 +395,13 @@ export class StationAccessory extends BaseAccessory {
         this.log.error(`handleSecuritySystemTargetStateGet: ${value}`);
         return;
       }
-    } else { // reset alarm
+    } else {
+      // reset alarm
       const resetPromise = this.device.resetStationAlarmSound();
       if (resetPromise) {
         resetPromise
           .then(() => this.log.debug(`alarm manually reset`))
-          .catch(error => this.log.error(`alarm could not be reset: ${error}`));
+          .catch((error) => this.log.error(`alarm could not be reset: ${error}`));
       } else {
         this.log.warn(`resetStationAlarmSound returned undefined`);
       }
@@ -419,10 +416,13 @@ export class StationAccessory extends BaseAccessory {
       clearTimeout(this.alarm_delay_timeout);
     }
 
-    this.alarm_delay_timeout = setTimeout(() => {
-      this.log.debug(`alarm for this station is armed now (due to timeout).`);
-      this.alarm_delayed = false;
-    }, (armDelay + 1) * 1000);
+    this.alarm_delay_timeout = setTimeout(
+      () => {
+        this.log.debug(`alarm for this station is armed now (due to timeout).`);
+        this.alarm_delayed = false;
+      },
+      (armDelay + 1) * 1000,
+    );
   }
 
   public onStationAlarmArmedEvent() {
@@ -448,5 +448,4 @@ export class StationAccessory extends BaseAccessory {
       .getCharacteristic(CHAR.On)
       .updateValue(state);
   }
-
 }

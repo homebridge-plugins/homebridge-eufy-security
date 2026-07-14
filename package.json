@@ -19,13 +19,13 @@
     "url": "https://github.com/homebridge-plugins/homebridge-eufy-security/issues"
   },
   "engines": {
-    "node": "^20 || ^22 || ^24",
-    "homebridge": ">=1.9.0 <1.12.0 || ^2.0.0-beta.0"
+    "node": ">=24.5.0",
+    "homebridge": "^2.0.0"
   },
   "main": "dist/index.js",
   "scripts": {
-    "lint": "eslint 'src/**/*.ts' --max-warnings=0",
-    "lint-fix": "eslint src/** --max-warnings=0 --fix",
+    "lint": "prettier --check 'src/**/*.ts'",
+    "lint-fix": "prettier --write 'src/**/*.ts'",
     "build": "npm run build-plugin && npm run postbuild",
     "build-plugin": "rimraf ./dist && tsc",
     "postbuild": "cp -r ./media ./dist/media",
@@ -42,22 +42,20 @@
     "camera"
   ],
   "dependencies": {
-    "@homebridge/plugin-ui-utils": "^2.2.3",
+    "@homebridge/plugin-ui-utils": "^2.2.5",
     "eufy-security-client": "dev",
     "ffmpeg-for-homebridge": "2.2.2",
-    "pick-port": "^2.2.0",
+    "pick-port": "^2.2.1",
     "rotating-file-stream": "^3.2.9",
-    "tar": "^7.5.15",
-    "tslog": "^4.10.2"
+    "tar": "^7.5.20",
+    "tslog": "^5.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/node": "^25.9.1",
-    "eslint": "^10.4.0",
-    "homebridge": "^1.11.4",
+    "@types/node": "^26.1.1",
+    "homebridge": "^2.1.1",
+    "prettier": "^3.9.5",
     "rimraf": "^6.1.3",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.59.4"
+    "typescript": "^7.0.2"
   },
   "homepage": "https://github.com/homebridge-plugins/homebridge-eufy-security/wiki",
   "author": "homebridge-eufy-security"

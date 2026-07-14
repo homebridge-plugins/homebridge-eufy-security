@@ -1,4 +1,3 @@
- 
 import { ChildProcessWithoutNullStreams } from 'child_process';
 import { Camera, PropertyName } from 'eufy-security-client';
 import {
@@ -37,7 +36,6 @@ const HKSVQuitReason = [
 ];
 
 export class RecordingDelegate implements CameraRecordingDelegate {
-
   private configuration?: CameraRecordingConfiguration;
 
   private forceStopTimeout?: NodeJS.Timeout;
@@ -50,12 +48,16 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     socket: net.Socket;
     process?: ChildProcessWithoutNullStreams;
     ffmpeg?: FFmpeg;
-    generator: AsyncGenerator<{
-      header: Buffer;
-      length: number;
-      type: string;
-      data: Buffer;
-    }, any, unknown>;
+    generator: AsyncGenerator<
+      {
+        header: Buffer;
+        length: number;
+        type: string;
+        data: Buffer;
+      },
+      any,
+      unknown
+    >;
   };
 
   /** Delay before extracting a snapshot from a running HKSV recording (ms). */
@@ -68,9 +70,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     private cameraConfig: CameraConfig,
     private localLivestreamManager: LocalLivestreamManager,
     private snapshotDlg: snapshotDelegate,
-  ) {
-
-  }
+  ) {}
 
   public setController(controller: CameraController) {
     this.controller = controller;
@@ -81,12 +81,9 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   }
 
   private resetMotionSensor(): void {
-    const motionDetected = this.accessory
-      .getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected).value;
+    const motionDetected = this.accessory.getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected).value;
     if (motionDetected) {
-      this.accessory
-        .getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected)
-        .updateValue(false);
+      this.accessory.getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected).updateValue(false);
     }
   }
 
@@ -98,14 +95,10 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   }
 
   private isMotionDetected(): boolean {
-    return !!this.accessory
-      .getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected).value;
+    return !!this.accessory.getService(SERV.MotionSensor)?.getCharacteristic(CHAR.MotionDetected).value;
   }
 
-  private async configureInputSource(
-    videoParams: FFmpegParameters,
-    audioParams: FFmpegParameters,
-  ): Promise<void> {
+  private async configureInputSource(videoParams: FFmpegParameters, audioParams: FFmpegParameters): Promise<void> {
     if (isRtspReady(this.camera, this.cameraConfig)) {
       const url = this.camera.getPropertyValue(PropertyName.DeviceRTSPStreamUrl) as string;
       log.debug(this.camera.getName(), 'RTSP URL: ' + url);
@@ -119,7 +112,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     }
   }
 
-  async * handleRecordingStreamRequest(): AsyncGenerator<RecordingPacket, any, unknown> {
+  async *handleRecordingStreamRequest(): AsyncGenerator<RecordingPacket, any, unknown> {
     this.handlingStreamingRequest = true;
     this.closeReason = undefined;
     log.info(this.camera.getName(), 'requesting recording for HomeKit Secure Video.');
@@ -131,8 +124,10 @@ export class RecordingDelegate implements CameraRecordingDelegate {
         return;
       }
 
-      const audioEnabled = this.cameraConfig.audio !== false
-        && this.controller?.recordingManagement?.recordingManagementService.getCharacteristic(CHAR.RecordingAudioActive).value;
+      const audioEnabled =
+        this.cameraConfig.audio !== false &&
+        this.controller?.recordingManagement?.recordingManagementService.getCharacteristic(CHAR.RecordingAudioActive)
+          .value;
       log.debug(this.camera.getName(), `HKSV audio recording: ${audioEnabled ? 'enabled' : 'disabled'}.`);
 
       const videoConfig: VideoConfig = this.cameraConfig.videoConfig ?? {};
@@ -176,9 +171,16 @@ export class RecordingDelegate implements CameraRecordingDelegate {
 
       yield* this.generateFragments(this.session!.generator);
     } catch (error) {
-      if (!this.handlingStreamingRequest && this.closeReason && this.closeReason === HDSProtocolSpecificErrorReason.CANCELLED) {
-        log.debug(this.camera.getName(),
-          'Recording encountered an error but that is expected, as the recording was canceled beforehand. Error: ' + error);
+      if (
+        !this.handlingStreamingRequest &&
+        this.closeReason &&
+        this.closeReason === HDSProtocolSpecificErrorReason.CANCELLED
+      ) {
+        log.debug(
+          this.camera.getName(),
+          'Recording encountered an error but that is expected, as the recording was canceled beforehand. Error: ' +
+            error,
+        );
       } else {
         log.error(this.camera.getName(), 'Error while recording: ' + error);
       }
@@ -209,7 +211,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
    * Assembles fragmented MP4 boxes into HKSV-compatible recording packets.
    * Yields an initialization segment (ftyp+moov), then paired moof+mdat fragments.
    */
-  private async * generateFragments(
+  private async *generateFragments(
     generator: AsyncGenerator<{ header: Buffer; length: number; type: string; data: Buffer }>,
   ): AsyncGenerator<RecordingPacket> {
     const cameraName = this.camera.getName();
@@ -223,8 +225,10 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     const resetHeartbeat = () => {
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
       heartbeatTimer = setTimeout(() => {
-        log.error(cameraName,
-          `No HKSV data received for ${SEGMENT_HEARTBEAT_TIMEOUT_MS / 1000}s — stream appears stalled. Ending recording.`);
+        log.error(
+          cameraName,
+          `No HKSV data received for ${SEGMENT_HEARTBEAT_TIMEOUT_MS / 1000}s — stream appears stalled. Ending recording.`,
+        );
         this.handlingStreamingRequest = false;
         this.session?.socket?.destroy();
       }, SEGMENT_HEARTBEAT_TIMEOUT_MS);
@@ -261,20 +265,29 @@ export class RecordingDelegate implements CameraRecordingDelegate {
           const motionStopped = !this.isMotionDetected() && fragmentCount >= MIN_FRAGMENTS_BEFORE_STOP;
           const isLast = motionStopped || !this.handlingStreamingRequest;
 
-          log.debug(cameraName, `HKSV: Fragment #${fragmentCount}, size: ${fragment.length}${isLast ? ' (final)' : ''}`);
+          log.debug(
+            cameraName,
+            `HKSV: Fragment #${fragmentCount}, size: ${fragment.length}${isLast ? ' (final)' : ''}`,
+          );
           yield { data: fragment, isLast };
 
           if (isLast) {
             sentLast = true;
-            log.debug(cameraName, motionStopped
-              ? 'Ending recording session due to motion stopped.'
-              : 'Ending recording session due to stream close.');
+            log.debug(
+              cameraName,
+              motionStopped
+                ? 'Ending recording session due to motion stopped.'
+                : 'Ending recording session due to stream close.',
+            );
             break;
           }
         }
       }
       if (!sentLast && !isInit) {
-        log.warn(cameraName, `HKSV: Recording ended after ${fragmentCount} fragment(s) without signalling end-of-stream to HomeKit.`);
+        log.warn(
+          cameraName,
+          `HKSV: Recording ended after ${fragmentCount} fragment(s) without signalling end-of-stream to HomeKit.`,
+        );
       }
     } finally {
       if (heartbeatTimer) clearTimeout(heartbeatTimer);

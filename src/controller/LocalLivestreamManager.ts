@@ -138,7 +138,9 @@ export class LocalLivestreamManager {
     this.bufferListener = (chunk: Buffer) => this.videoBuffer?.push(chunk);
     this.bufferedVideoStream = videostream;
     videostream.on('data', this.bufferListener);
-    this.log.debug(`Prebuffer started (max ${PREBUFFER_DURATION_MS}ms / ${((PREBUFFER_DURATION_MS * PREBUFFER_ESTIMATED_BYTE_RATE) / 1024).toFixed(0)} KB).`);
+    this.log.debug(
+      `Prebuffer started (max ${PREBUFFER_DURATION_MS}ms / ${((PREBUFFER_DURATION_MS * PREBUFFER_ESTIMATED_BYTE_RATE) / 1024).toFixed(0)} KB).`,
+    );
   }
 
   /** Stop buffering and detach the listener from the video stream. */
@@ -176,10 +178,7 @@ export class LocalLivestreamManager {
 
     const runtime = ((Date.now() - this.stationStream.createdAt) / 1000).toFixed(1);
     this.activeConsumers++;
-    this.log.debug(
-      `Providing forked stream (consumers: ${this.activeConsumers}, ` +
-      `stream age: ${runtime}s).`,
-    );
+    this.log.debug(`Providing forked stream (consumers: ${this.activeConsumers}, ` + `stream age: ${runtime}s).`);
 
     return this.forkStream(this.stationStream);
   }
@@ -204,7 +203,9 @@ export class LocalLivestreamManager {
     if (this.videoBuffer && !this.videoBuffer.isEmpty) {
       const buffered = this.videoBuffer.drain();
       const totalBytes = buffered.reduce((sum, c) => sum + c.length, 0);
-      this.log.debug(`Draining ${buffered.length} prebuffered chunks (${(totalBytes / 1024).toFixed(1)} KB) into video fork.`);
+      this.log.debug(
+        `Draining ${buffered.length} prebuffered chunks (${(totalBytes / 1024).toFixed(1)} KB) into video fork.`,
+      );
       for (const chunk of buffered) {
         videoFork.write(chunk);
       }
@@ -290,7 +291,7 @@ export class LocalLivestreamManager {
     const timer = setTimeout(() => {
       this.log.error(
         `Livestream timeout: no P2P stream event within ${P2P_TIMEOUT_MS / 1000}s` +
-        ` for serial ${this.serialNumber}.`,
+          ` for serial ${this.serialNumber}.`,
       );
       this.settlePending('reject', new Error('Livestream timeout — check eufy-lib.log for P2P errors.'));
     }, P2P_TIMEOUT_MS);
@@ -331,13 +332,13 @@ export class LocalLivestreamManager {
       this.retryCount++;
       this.log.warn(
         `P2P connection failed. Retrying in ${(delay / 1000).toFixed(1)}s` +
-        ` (attempt ${this.retryCount + 1}/${MAX_RETRIES + 1})...`,
+          ` (attempt ${this.retryCount + 1}/${MAX_RETRIES + 1})...`,
       );
       // Keep pending alive during backoff so new callers piggyback
       p.timer = setTimeout(() => {
         this.log.debug(
           `Retrying station livestream for serial: ${this.serialNumber}` +
-          ` (attempt ${this.retryCount + 1}/${MAX_RETRIES + 1})...`,
+            ` (attempt ${this.retryCount + 1}/${MAX_RETRIES + 1})...`,
         );
         this.issueP2PRequest(p.deferred);
       }, delay);
@@ -448,14 +449,15 @@ export class LocalLivestreamManager {
     if (this.debugEnabled && this.debugRecordingManager) {
       const rawVideoFork = new PassThrough();
       const rawAudioFork = new PassThrough();
-      this.debugRecordingManager.startRawRecording(
-        this.serialNumber, rawVideoFork, rawAudioFork, metadata, sessionId, trigger,
-      ).then(() => {
-        videostream.pipe(rawVideoFork);
-        audiostream.pipe(rawAudioFork);
-        rawVideoFork.on('close', () => videostream.unpipe(rawVideoFork));
-        rawAudioFork.on('close', () => audiostream.unpipe(rawAudioFork));
-      }).catch((err) => this.log.warn(`Raw debug recording failed to start: ${err}`));
+      this.debugRecordingManager
+        .startRawRecording(this.serialNumber, rawVideoFork, rawAudioFork, metadata, sessionId, trigger)
+        .then(() => {
+          videostream.pipe(rawVideoFork);
+          audiostream.pipe(rawAudioFork);
+          rawVideoFork.on('close', () => videostream.unpipe(rawVideoFork));
+          rawAudioFork.on('close', () => audiostream.unpipe(rawAudioFork));
+        })
+        .catch((err) => this.log.warn(`Raw debug recording failed to start: ${err}`));
     }
 
     this.settlePending('resolve', this.stationStream);
