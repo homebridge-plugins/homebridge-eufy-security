@@ -68,7 +68,7 @@ jobs:
               "",
               "Please watch the repository and the upstream [deprecation notice](https://github.com/bropat/eufy-security-client) for updates.",
               "",
-              "💬 For questions and discussion, join us on [Discord](https://discord.gg/dH32NKWst3).",
+              "💬 For questions and discussion, join us on [Discord](https://discord.gg/jc8FSjqQAN).",
               "",
               "Thank you for your patience. 🙏",
             ].join("\n");
