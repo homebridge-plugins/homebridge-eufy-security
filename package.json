@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge Eufy Security",
   "name": "@homebridge-plugins/homebridge-eufy-security",
-  "version": "4.7.0",
+  "version": "4.7.1",
   "description": "Control Eufy Security from homebridge.",
   "type": "module",
   "license": "Apache-2.0",
@@ -48,7 +48,7 @@
     "pick-port": "^2.2.1",
     "rotating-file-stream": "^3.2.9",
     "tar": "^7.5.20",
-    "tslog": "^5.0.0"
+    "tslog": "^4.10.2"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
