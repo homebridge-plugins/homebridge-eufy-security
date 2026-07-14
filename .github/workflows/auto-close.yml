@@ -1,0 +1,84 @@
+name: Auto-close (project frozen)
+
+# The upstream eufy-security-client library has been deprecated by its maintainer.
+# Eufy has migrated its apps to a new "Mega" protocol, and a brand-new library is
+# being built against it. Until that lands, this plugin is frozen: no new features
+# or device support can be added, and most breakages originate upstream.
+#
+# This workflow posts an explanation on every newly opened issue and pull request
+# and closes it immediately.
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: auto-close-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isPR = !!context.payload.pull_request;
+            const number = isPR
+              ? context.payload.pull_request.number
+              : context.payload.issue.number;
+
+            const intro = isPR
+              ? "Thank you for the pull request."
+              : "Thank you for taking the time to open this issue.";
+
+            const body = [
+              intro,
+              "",
+              "**This project is currently frozen.**",
+              "",
+              "The plugin relies on [`eufy-security-client`](https://github.com/bropat/eufy-security-client), which its maintainer has **deprecated**. Eufy has moved its apps to a new **\"Mega\"** protocol, and a brand-new library is being built against it. All development effort is going there.",
+              "",
+              "What this means for now:",
+              "- ✅ The current version keeps working as-is for devices still on the old protocol.",
+              "- 🧊 No new features or new device support can be added.",
+              "- 🩹 Only strictly necessary fixes for critical breakages will be considered.",
+              "- 🚀 Effort is focused on the new Mega-protocol library first. Work to adopt it in this plugin **has not started yet**.",
+              "",
+              "**ETA:** work on this plugin is not expected to begin before **mid-August 2026**, and only once the underlying library is ready.",
+              "",
+              "Because of this, we are automatically closing new issues and pull requests until the migration is complete. This is not a reflection on your report — we simply cannot action it right now.",
+              "",
+              "Please watch the repository and the upstream [deprecation notice](https://github.com/bropat/eufy-security-client) for updates. Thank you for your patience. 🙏",
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              body,
+            });
+
+            if (isPR) {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: number,
+                state: "closed",
+              });
+            } else {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
+            }
