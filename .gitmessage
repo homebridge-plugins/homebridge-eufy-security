@@ -1,0 +1,7 @@
+# Conventional Commits: feat|fix|docs|refactor|test|chore|ci(scope): summary
+#
+# Body: what changed and why. Call out anything unverified or deferred.
+# Do not add Co-authored-by trailers automatically.
+#
+# Enable once per clone: git config commit.template .gitmessage
+# Sign your commits:     git config commit.gpgsign true
