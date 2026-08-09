@@ -1,26 +1,22 @@
 {
   "compilerOptions": {
-    /* Base Options */
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "target": "es2022",
-    "allowJs": true,
-    "resolveJsonModule": true,
-    "moduleDetection": "force",
-
-    /* Strictness */
-    "strict": true,
-    "noImplicitAny": false,
-    "noImplicitOverride": true,
-
-    /* Transpiling with TypeScript */
-    "module": "NodeNext",
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "outDir": "dist",
     "rootDir": "src",
+    "declaration": true,
     "sourceMap": true,
-
-    /* Not running in the DOM */
-    "lib": ["es2022"]
+    "strict": true,
+    "noImplicitOverride": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleDetection": "force",
+    "types": ["node"]
   },
-  "include": ["src/"]
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules"]
 }

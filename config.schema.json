@@ -1,6 +1,5 @@
 {
   "pluginAlias": "EufySecurity",
   "pluginType": "platform",
-  "singular": true,
-  "customUi": true
+  "singular": true
 }

@@ -17,10 +17,8 @@ npm run verify
 ```
 
 Node 24.5.0 or newer is required. `npm run verify` runs the same local quality gate expected before a
-pull request: formatting, the guard against restoring `eufy-security-client`, and the build.
-
-There is no automated test suite yet. Changes must state what was verified and must not describe a
-build-only check as behavioral coverage.
+pull request: formatting, the guard against restoring `eufy-security-client`, the build, and the
+hermetic Vitest contracts.
 
 ## Architecture
 

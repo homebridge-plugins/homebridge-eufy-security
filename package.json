@@ -24,14 +24,16 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "lint": "prettier --check 'src/**/*.ts'",
-    "lint-fix": "prettier --write 'src/**/*.ts'",
+    "lint": "prettier --check 'src/**/*.ts' 'test/**/*.ts'",
+    "lint-fix": "prettier --write 'src/**/*.ts' 'test/**/*.ts'",
     "build": "npm run build-plugin && npm run postbuild",
     "build-plugin": "rimraf ./dist && tsc",
     "postbuild": "cp -r ./media ./dist/media",
     "prebuild": "node --input-type=module -e \"import{readFileSync}from'fs';const p=JSON.parse(readFileSync('./package.json','utf8'));process.stdout.write('export const LIB_VERSION = '+JSON.stringify(p.version)+';\\n');\" > src/version.ts",
     "guard:no-ecs": "bash scripts/guard-no-ecs.sh",
-    "verify": "npm run lint && npm run guard:no-ecs && npm run build",
+    "test": "vitest run",
+    "test:contracts": "vitest run test/contracts",
+    "verify": "npm run lint && npm run guard:no-ecs && npm run build && npm run test:contracts",
     "prepublishOnly": "npm run verify"
   },
   "keywords": [
@@ -53,7 +55,8 @@
     "homebridge": "^2.1.1",
     "prettier": "^3.9.5",
     "rimraf": "^6.1.3",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "homepage": "https://github.com/homebridge-plugins/homebridge-eufy-security/wiki",
   "author": "homebridge-eufy-security"

@@ -1,6 +1,9 @@
 # Ignore source code
 src
 
+# The checked-in V5 dashboard is a planning prototype, not shipped runtime UI.
+homebridge-ui
+
 # ------------- Defaults ------------- #
 
 # gitHub actions
