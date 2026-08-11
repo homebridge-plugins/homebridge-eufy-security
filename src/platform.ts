@@ -2,8 +2,9 @@ import type { DynamicPlatformPlugin, PlatformAccessory, PlatformConfig } from 'h
 import { join } from 'node:path';
 
 import { AccountLease, AccountOwnership } from './account-ownership.js';
-import { parseConfig } from './configuration.js';
+import { parseConfig, type EufyConfig } from './configuration.js';
 import { createSyntheticSdkClient, type SdkClient, type SdkClientFactory } from './sdk-client.js';
+import { AccountSessionPersistence } from './session-persistence.js';
 import { RuntimeTracker } from './runtime-tracker.js';
 
 export type PlatformLifecycleEvent = 'didFinishLaunching' | 'shutdown';
@@ -28,29 +29,28 @@ export function createEufyPlatform(
   shutdownTimeoutMs = 10_000,
 ): EufyPlatformConstructor {
   return class EufyPlatform implements DynamicPlatformPlugin {
-    private readonly client: SdkClient;
+    private client?: SdkClient;
     private startPromise?: Promise<void>;
     private stopPromise?: Promise<void>;
-    private readonly runtimeTracker?: RuntimeTracker;
-    private readonly ownership?: AccountOwnership;
-    private readonly accountScope?: string;
+    private runtimeTracker?: RuntimeTracker;
+    private ownership?: AccountOwnership;
+    private accountScope?: string;
     private runtimeLease?: AccountLease;
+    private readonly configuredConfig: EufyConfig;
+    private readonly storageRoot?: string;
+    private readonly persistence?: AccountSessionPersistence;
 
     constructor(
       private readonly log: PlatformLogger,
       config: PlatformConfig,
       api: PlatformApi,
     ) {
-      const parsedConfig = parseConfig(config);
-      this.client = clientFactory(parsedConfig);
-      if (api.user && parsedConfig.username?.trim()) {
-        const root = join(api.user.storagePath(), 'eufy-security');
-        this.accountScope = parsedConfig.username.trim().toLowerCase();
-        this.ownership = new AccountOwnership(join(root, 'ownership'));
-        this.runtimeTracker = new RuntimeTracker(join(root, 'tracker.json'), 90_000, Date.now, (error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          this.log.warn(`Runtime status publication failed: ${message}`);
-        });
+      this.configuredConfig = parseConfig(config);
+      if (api.user) {
+        this.storageRoot = join(api.user.storagePath(), 'eufy-security');
+        this.persistence = new AccountSessionPersistence(join(this.storageRoot, 'accounts'));
+      } else {
+        this.client = clientFactory(this.configuredConfig);
       }
       api.on('didFinishLaunching', () => {
         void this.start();
@@ -71,6 +71,21 @@ export function createEufyPlatform(
 
     private async startClient(): Promise<void> {
       try {
+        const config = await this.activeConfiguration();
+        this.client ??= clientFactory(config);
+        if (this.storageRoot && config.username?.trim()) {
+          this.accountScope = config.username.trim().toLowerCase();
+          this.ownership = new AccountOwnership(join(this.storageRoot, 'ownership'));
+          this.runtimeTracker = new RuntimeTracker(
+            join(this.storageRoot, 'tracker.json'),
+            90_000,
+            Date.now,
+            (error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              this.log.warn(`Runtime status publication failed: ${message}`);
+            },
+          );
+        }
         if (this.ownership && this.accountScope) {
           const ownership = await this.ownership.acquire(this.accountScope, 'runtime');
           if (ownership.state === 'owner-conflict') {
@@ -99,7 +114,7 @@ export function createEufyPlatform(
 
     private async stopClient(): Promise<'failed' | 'stopped'> {
       try {
-        await this.client.stop();
+        await this.client?.stop();
         if (this.runtimeLease) {
           const release = await this.runtimeLease.release();
           if (release.state !== 'stopped') {
@@ -114,6 +129,24 @@ export function createEufyPlatform(
       }
 
       return 'stopped';
+    }
+
+    private async activeConfiguration(): Promise<EufyConfig> {
+      const active = await this.persistence?.active();
+      const configuration = active?.configuration.load();
+      if (!active) {
+        return this.configuredConfig;
+      }
+      if (!configuration) {
+        if (this.configuredConfig.username?.trim().toLowerCase() !== active.account) {
+          throw new Error('legacy active account generation does not match Homebridge configuration');
+        }
+        return this.configuredConfig;
+      }
+      if (configuration.username?.trim().toLowerCase() !== active.account) {
+        throw new Error('active account generation has mismatched configuration');
+      }
+      return configuration;
     }
 
     private async stopWithinDeadline(waitForStart = true): Promise<void> {

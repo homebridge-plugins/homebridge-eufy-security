@@ -106,7 +106,7 @@ async function renderUi(
         requests.push({ path, body });
         return path === '/auth/start'
           ? { status: 'captcha', image: 'data:image/png;base64,c3ludGhldGlj', retry: false }
-          : { status: 'authenticated' };
+          : { status: 'restart-required' };
       },
       savePluginConfig: async () => {
         saves++;
@@ -340,10 +340,13 @@ describe('packed plugin', () => {
         {
           path: '/auth/start',
           body: {
-            account: 'guest@example.invalid',
-            password: 'synthetic-password',
-            country: 'US',
-            trustedDeviceName: 'Synthetic Homebridge',
+            configuration: {
+              platform: 'EufySecurity',
+              username: 'guest@example.invalid',
+              password: 'synthetic-password',
+              country: 'US',
+              trustedDeviceName: 'Synthetic Homebridge',
+            },
           },
         },
       ]);

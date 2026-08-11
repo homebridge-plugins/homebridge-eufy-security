@@ -76,20 +76,15 @@ function setBusy(busy) {
 }
 
 async function saveAuthenticatedConfig() {
-  const existing = pluginConfig[0] ?? {};
-  const next = {
-    ...existing,
-    platform: 'EufySecurity',
-    username: pendingConfig.account,
-    password: pendingConfig.password,
-    country: pendingConfig.country,
-    trustedDeviceName: pendingConfig.trustedDeviceName,
-  };
-  await homebridge.updatePluginConfig([next]);
-  await homebridge.savePluginConfig();
-  pluginConfig = [next];
-  passwordInput.value = '';
-  pendingConfig = undefined;
+  try {
+    await homebridge.updatePluginConfig([pendingConfig]);
+    await homebridge.savePluginConfig();
+    pluginConfig = [pendingConfig];
+  } catch {
+  } finally {
+    passwordInput.value = '';
+    pendingConfig = undefined;
+  }
 }
 
 async function handleResult(result) {
@@ -112,7 +107,7 @@ async function handleResult(result) {
   }
 
   challengeForm.hidden = true;
-  if (result.status === 'authenticated') {
+  if (result.status === 'restart-required') {
     await saveAuthenticatedConfig();
     authStatus.textContent = messages.authSuccess ?? '';
   } else if (result.status === 'blocked' || result.status === 'plugin-running') {
@@ -126,15 +121,18 @@ async function handleResult(result) {
 
 authForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const existing = pluginConfig.find((block) => block.platform === 'EufySecurity') ?? pluginConfig[0] ?? {};
   pendingConfig = {
-    account: accountInput.value.trim(),
+    ...existing,
+    platform: 'EufySecurity',
+    username: accountInput.value.trim(),
     password: passwordInput.value,
     country: countryInput.value.trim().toUpperCase(),
     trustedDeviceName: trustedDeviceInput.value.trim(),
   };
   setBusy(true);
   try {
-    await handleResult(await requestWithinDeadline('/auth/start', pendingConfig));
+    await handleResult(await requestWithinDeadline('/auth/start', { configuration: pendingConfig }));
   } catch {
     authStatus.textContent = messages.authFailed ?? '';
   } finally {

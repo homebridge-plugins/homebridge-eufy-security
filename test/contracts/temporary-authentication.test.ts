@@ -4,6 +4,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { parseConfig } from '../../src/configuration.js';
+import type { CompleteDeviceSnapshot } from '../../src/device-snapshot.js';
 import {
   TemporaryAuthentication,
   type TemporaryAuthenticationClient,
@@ -11,6 +13,22 @@ import {
 } from '../../src/temporary-authentication.js';
 import { bindTemporaryAuthenticationProcessCleanup } from '../../src/ui-server.js';
 import { RuntimeTracker } from '../../src/runtime-tracker.js';
+
+function authenticationInput(account = 'guest@example.invalid') {
+  return {
+    configuration: parseConfig({
+      platform: 'EufySecurity',
+      username: account,
+      password: 'synthetic-password',
+      country: 'US',
+      trustedDeviceName: 'Synthetic Homebridge',
+    }),
+  };
+}
+
+function discoveredSnapshot(): CompleteDeviceSnapshot {
+  return { version: 1, complete: true, devices: [] };
+}
 
 describe('temporary authentication', () => {
   it('continues captcha on one owner and commits only after successful bounded cleanup', async () => {
@@ -25,6 +43,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(async () => {
         calls.push('commit');
       }),
@@ -39,6 +59,7 @@ describe('temporary authentication', () => {
         session: { userId: 'synthetic-user', authToken: 'synthetic-token', raw: {} },
       })),
       submitVerifyCode: vi.fn(),
+      discover: vi.fn(async () => discoveredSnapshot()),
       disconnect: vi.fn(async () => {
         calls.push('disconnect');
       }),
@@ -55,15 +76,12 @@ describe('temporary authentication', () => {
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
 
-    await expect(
-      authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'captcha', image: 'data:image/png;base64,c3ludGhldGlj', retry: false });
-    await expect(authentication.submitCaptcha('1234')).resolves.toEqual({ status: 'authenticated' });
+    await expect(authentication.start(authenticationInput())).resolves.toEqual({
+      status: 'captcha',
+      image: 'data:image/png;base64,c3ludGhldGlj',
+      retry: false,
+    });
+    await expect(authentication.submitCaptcha('1234')).resolves.toEqual({ status: 'restart-required' });
 
     expect(clientFactory).toHaveBeenCalledWith({
       account: 'guest@example.invalid',
@@ -89,14 +107,10 @@ describe('temporary authentication', () => {
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
 
-    await expect(
-      authentication.start({
-        account: 'blocked@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'blocked', owner });
+    await expect(authentication.start(authenticationInput('blocked@example.invalid'))).resolves.toEqual({
+      status: 'blocked',
+      owner,
+    });
     expect(persistence.stage).not.toHaveBeenCalled();
     expect(clientFactory).not.toHaveBeenCalled();
   });
@@ -114,14 +128,10 @@ describe('temporary authentication', () => {
       cleanupTimeoutMs: 100,
     });
 
-    await expect(
-      authentication.start({
-        account: 'replacement@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'blocked', owner });
+    await expect(authentication.start(authenticationInput('replacement@example.invalid'))).resolves.toEqual({
+      status: 'blocked',
+      owner,
+    });
     expect(acquire).toHaveBeenCalledOnce();
     expect(acquire).toHaveBeenCalledWith('active@example.invalid', 'temporary-authentication');
     expect(persistence.stage).not.toHaveBeenCalled();
@@ -139,14 +149,7 @@ describe('temporary authentication', () => {
       { fresh: vi.fn(async () => ({ state: 'ready' as const, updatedAt: '2026-08-11T12:00:00.000Z' })) },
     );
 
-    await expect(
-      authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({
+    await expect(authentication.start(authenticationInput())).resolves.toEqual({
       status: 'plugin-running',
       state: 'ready',
       updatedAt: '2026-08-11T12:00:00.000Z',
@@ -161,6 +164,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(),
       discard: vi.fn(async () => undefined),
     };
@@ -178,14 +183,7 @@ describe('temporary authentication', () => {
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
 
-    await expect(
-      authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'failed' });
+    await expect(authentication.start(authenticationInput())).resolves.toEqual({ status: 'failed' });
     expect(stores.commit).not.toHaveBeenCalled();
     expect(stores.discard).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -199,6 +197,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(),
       discard: vi.fn(async () => undefined),
     };
@@ -215,12 +215,7 @@ describe('temporary authentication', () => {
     );
 
     try {
-      const result = authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      });
+      const result = authentication.start(authenticationInput());
       await vi.advanceTimersByTimeAsync(50);
 
       await expect(result).resolves.toEqual({ status: 'timed-out' });
@@ -238,6 +233,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(async () => undefined),
       discard: vi.fn(),
     };
@@ -248,6 +245,7 @@ describe('temporary authentication', () => {
         status: 'ok',
         session: { userId: 'synthetic-user', authToken: 'synthetic-token', raw: {} },
       })),
+      discover: vi.fn(async () => discoveredSnapshot()),
       disconnect: vi.fn(async () => undefined),
     };
     const clientFactory = vi.fn(() => client);
@@ -264,15 +262,11 @@ describe('temporary authentication', () => {
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
 
-    await expect(
-      authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'two-factor', method: 'synthetic verification' });
-    await expect(authentication.submitTwoFactor('654321')).resolves.toEqual({ status: 'authenticated' });
+    await expect(authentication.start(authenticationInput())).resolves.toEqual({
+      status: 'two-factor',
+      method: 'synthetic verification',
+    });
+    await expect(authentication.submitTwoFactor('654321')).resolves.toEqual({ status: 'restart-required' });
     expect(clientFactory).toHaveBeenCalledOnce();
     expect(client.submitVerifyCode).toHaveBeenCalledWith('654321');
   });
@@ -286,6 +280,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(),
       discard: vi.fn(async () => undefined),
     };
@@ -306,12 +302,7 @@ describe('temporary authentication', () => {
       }),
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
-    const start = authentication.start({
-      account: 'guest@example.invalid',
-      password: 'synthetic-password',
-      country: 'US',
-      trustedDeviceName: 'Synthetic Homebridge',
-    });
+    const start = authentication.start(authenticationInput());
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     await expect(authentication.close()).resolves.toEqual({ status: 'closed' });
@@ -343,12 +334,7 @@ describe('temporary authentication', () => {
       flowTimeoutMs: 1_000,
       cleanupTimeoutMs: 100,
     });
-    const start = authentication.start({
-      account: 'guest@example.invalid',
-      password: 'synthetic-password',
-      country: 'US',
-      trustedDeviceName: 'Synthetic Homebridge',
-    });
+    const start = authentication.start(authenticationInput());
     await new Promise((resolve) => setTimeout(resolve, 0));
     const close = authentication.close();
     resolveAcquire({ state: 'owner', lease: { release }, recovered: false });
@@ -378,12 +364,7 @@ describe('temporary authentication', () => {
       flowTimeoutMs: 1_000,
       cleanupTimeoutMs: 25,
     });
-    const start = authentication.start({
-      account: 'guest@example.invalid',
-      password: 'synthetic-password',
-      country: 'US',
-      trustedDeviceName: 'Synthetic Homebridge',
-    });
+    const start = authentication.start(authenticationInput());
     await vi.advanceTimersByTimeAsync(0);
     const close = authentication.close();
 
@@ -409,6 +390,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(),
       discard: vi.fn(async () => undefined),
     };
@@ -430,12 +413,7 @@ describe('temporary authentication', () => {
       }),
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
-    await authentication.start({
-      account: 'guest@example.invalid',
-      password: 'synthetic-password',
-      country: 'US',
-      trustedDeviceName: 'Synthetic Homebridge',
-    });
+    await authentication.start(authenticationInput());
 
     const first = authentication.submitCaptcha('1234');
     await expect(authentication.submitCaptcha('5678')).resolves.toEqual({ status: 'failed' });
@@ -451,6 +429,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(async () => {
         throw new Error('synthetic publication failure');
       }),
@@ -466,19 +446,13 @@ describe('temporary authentication', () => {
         })),
         solveCaptcha: vi.fn(),
         submitVerifyCode: vi.fn(),
+        discover: vi.fn(async () => discoveredSnapshot()),
         disconnect: vi.fn(async () => undefined),
       }),
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
 
-    await expect(
-      authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'failed' });
+    await expect(authentication.start(authenticationInput())).resolves.toEqual({ status: 'failed' });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -488,6 +462,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(async () => undefined),
       discard: vi.fn(),
     };
@@ -507,19 +483,13 @@ describe('temporary authentication', () => {
         })),
         solveCaptcha: vi.fn(),
         submitVerifyCode: vi.fn(),
+        discover: vi.fn(async () => discoveredSnapshot()),
         disconnect: vi.fn(async () => undefined),
       }),
       { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
     );
 
-    await expect(
-      authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      }),
-    ).resolves.toEqual({ status: 'failed' });
+    await expect(authentication.start(authenticationInput())).resolves.toEqual({ status: 'failed' });
   });
 
   it.each(['disconnect', 'SIGHUP', 'SIGINT', 'SIGTERM'] as const)('cleans up on process %s', async (signal) => {
@@ -548,6 +518,8 @@ describe('temporary authentication', () => {
       account: 'guest@example.invalid',
       session: { load: () => null, save: vi.fn(), clear: vi.fn() },
       push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
       commit: vi.fn(),
       discard: vi.fn(async () => undefined),
     };
@@ -564,12 +536,7 @@ describe('temporary authentication', () => {
     );
 
     try {
-      await authentication.start({
-        account: 'guest@example.invalid',
-        password: 'synthetic-password',
-        country: 'US',
-        trustedDeviceName: 'Synthetic Homebridge',
-      });
+      await authentication.start(authenticationInput());
       const close = authentication.close();
       await vi.advanceTimersByTimeAsync(25);
 

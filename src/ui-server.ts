@@ -4,6 +4,8 @@ import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-ut
 import { EufyMega } from '@mega-yfue/eufy-sdk';
 
 import { AccountOwnership } from './account-ownership.js';
+import { parseConfig } from './configuration.js';
+import { discoverCompleteDeviceSnapshot } from './device-snapshot.js';
 import { AccountSessionPersistence } from './session-persistence.js';
 import { RuntimeTracker } from './runtime-tracker.js';
 import {
@@ -45,14 +47,34 @@ function parseStartPayload(value: unknown): TemporaryAuthenticationInput {
     throw new RequestError('Invalid authentication request', { status: 400 });
   }
   const payload = value as Record<string, unknown>;
-  const account = requiredString(payload.account, 320)?.trim().toLowerCase();
-  const password = requiredString(payload.password, 1_024);
-  const country = requiredString(payload.country, 2)?.toUpperCase();
-  const trustedDeviceName = requiredString(payload.trustedDeviceName, 128)?.trim();
+  if (
+    typeof payload.configuration !== 'object' ||
+    payload.configuration === null ||
+    Array.isArray(payload.configuration)
+  ) {
+    throw new RequestError('Invalid authentication request', { status: 400 });
+  }
+  const candidate = payload.configuration as Record<string, unknown>;
+  const account = requiredString(candidate.username, 320)?.trim().toLowerCase();
+  const password = requiredString(candidate.password, 1_024);
+  const country = requiredString(candidate.country, 2)?.toUpperCase();
+  const trustedDeviceName = requiredString(candidate.trustedDeviceName, 128)?.trim();
   if (!account || !password || !country?.match(/^[A-Z]{2}$/) || !trustedDeviceName) {
     throw new RequestError('Invalid authentication request', { status: 400 });
   }
-  return { account, password, country, trustedDeviceName };
+  try {
+    return {
+      configuration: parseConfig({
+        ...candidate,
+        username: account,
+        password,
+        country,
+        trustedDeviceName,
+      }),
+    };
+  } catch {
+    throw new RequestError('Invalid authentication request', { status: 400 });
+  }
 }
 
 function parseAnswer(value: unknown, key: 'answer' | 'code'): string {
@@ -68,16 +90,28 @@ function parseAnswer(value: unknown, key: 'answer' | 'code'): string {
 
 /** Creates the production SDK client without enabling realtime ownership. */
 export const createTemporaryAuthenticationClient: TemporaryAuthenticationClientFactory = (options) =>
-  new EufyMega({
-    email: options.account,
-    password: options.password,
-    countryCode: options.country,
-    phoneModel: options.trustedDeviceName,
-    store: options.sessionStore,
-    pushStore: options.pushStore,
-    autoRealtime: false,
-    storedSnapshotCache: false,
-  });
+  temporaryClient(
+    new EufyMega({
+      email: options.account,
+      password: options.password,
+      countryCode: options.country,
+      phoneModel: options.trustedDeviceName,
+      store: options.sessionStore,
+      pushStore: options.pushStore,
+      autoRealtime: false,
+      storedSnapshotCache: false,
+    }),
+  );
+
+function temporaryClient(client: EufyMega): ReturnType<TemporaryAuthenticationClientFactory> {
+  return {
+    login: () => client.login(),
+    solveCaptcha: (answer) => client.solveCaptcha(answer),
+    submitVerifyCode: (code) => client.submitVerifyCode(code),
+    discover: () => discoverCompleteDeviceSnapshot(client),
+    disconnect: () => client.disconnect(),
+  };
+}
 
 /** Homebridge custom-UI child process that exclusively owns interactive authentication. */
 export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {

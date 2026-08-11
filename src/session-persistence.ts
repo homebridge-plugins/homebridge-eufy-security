@@ -5,6 +5,9 @@ import { dirname, join } from 'node:path';
 
 import type { FcmStore, PersistedPush, PersistedSession, SessionStore } from '@mega-yfue/eufy-sdk';
 
+import { parseConfig, serializeConfig, type EufyConfig } from './configuration.js';
+import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from './device-snapshot.js';
+
 const DEFAULT_MAX_RECORD_BYTES = 1024 * 1024;
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 
@@ -16,11 +19,32 @@ interface ActiveGenerationRecord {
 
 export interface ActiveAccountStores {
   account: string;
+  configuration: AtomicJsonStore<EufyConfig>;
   push: FcmStore;
   session: SessionStore;
+  snapshot: AtomicJsonStore<CompleteDeviceSnapshot>;
 }
 
-function writeJsonAtomically(path: string, value: unknown, label: string, maxBytes: number): void {
+export type AccountPersistenceBoundary =
+  | 'session-record'
+  | 'push-record'
+  | 'configuration-record'
+  | 'device-snapshot-record'
+  | 'generation-publication'
+  | 'active-generation-record'
+  | 'active-generation-publication';
+
+export interface AccountPersistenceHooks {
+  before(boundary: AccountPersistenceBoundary): void;
+}
+
+function writeJsonAtomically(
+  path: string,
+  value: unknown,
+  label: string,
+  maxBytes: number,
+  beforePublish?: () => void,
+): void {
   const serialized = JSON.stringify(value);
   const bytes = Buffer.byteLength(serialized);
   if (bytes > maxBytes) {
@@ -33,6 +57,7 @@ function writeJsonAtomically(path: string, value: unknown, label: string, maxByt
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporaryPath, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    beforePublish?.();
     renameSync(temporaryPath, path);
   } catch (error) {
     try {
@@ -61,19 +86,32 @@ function readJsonBounded(path: string, maxBytes: number): unknown | null {
   }
 }
 
-class AtomicJsonStore<T> {
+export class AtomicJsonStore<T> {
   constructor(
     private readonly path: string,
     private readonly label: string,
     private readonly maxBytes: number,
+    private readonly boundary: AccountPersistenceBoundary,
+    private readonly hooks?: AccountPersistenceHooks,
+    private readonly parse: (value: unknown) => T = (value) => value as T,
+    private readonly serialize: (value: T) => unknown = (value) => value,
   ) {}
 
   load(): T | null {
-    return readJsonBounded(this.path, this.maxBytes) as T | null;
+    const value = readJsonBounded(this.path, this.maxBytes);
+    if (value === null) {
+      return null;
+    }
+    try {
+      return this.parse(value);
+    } catch {
+      return null;
+    }
   }
 
   save(value: T): void {
-    writeJsonAtomically(this.path, value, this.label, this.maxBytes);
+    this.hooks?.before(this.boundary);
+    writeJsonAtomically(this.path, this.serialize(value), this.label, this.maxBytes);
   }
 
   clear(): void {
@@ -83,8 +121,10 @@ class AtomicJsonStore<T> {
 
 /** Isolated session and push stores for one pending authentication result. */
 export class StagedAccountStores implements ActiveAccountStores {
+  readonly configuration: AtomicJsonStore<EufyConfig>;
   readonly push: FcmStore;
   readonly session: SessionStore;
+  readonly snapshot: AtomicJsonStore<CompleteDeviceSnapshot>;
   private settled = false;
 
   constructor(
@@ -93,9 +133,39 @@ export class StagedAccountStores implements ActiveAccountStores {
     private readonly generation: string,
     readonly directory: string,
     maxRecordBytes: number,
+    hooks?: AccountPersistenceHooks,
   ) {
-    this.session = new AtomicJsonStore<PersistedSession>(join(directory, 'session.json'), 'session', maxRecordBytes);
-    this.push = new AtomicJsonStore<PersistedPush>(join(directory, 'push.json'), 'push', maxRecordBytes);
+    this.session = new AtomicJsonStore<PersistedSession>(
+      join(directory, 'session.json'),
+      'session',
+      maxRecordBytes,
+      'session-record',
+      hooks,
+    );
+    this.push = new AtomicJsonStore<PersistedPush>(
+      join(directory, 'push.json'),
+      'push',
+      maxRecordBytes,
+      'push-record',
+      hooks,
+    );
+    this.configuration = new AtomicJsonStore<EufyConfig>(
+      join(directory, 'configuration.json'),
+      'configuration',
+      maxRecordBytes,
+      'configuration-record',
+      hooks,
+      parseConfig,
+      serializeConfig,
+    );
+    this.snapshot = new AtomicJsonStore<CompleteDeviceSnapshot>(
+      join(directory, 'device-snapshot.json'),
+      'device snapshot',
+      maxRecordBytes,
+      'device-snapshot-record',
+      hooks,
+      parseCompleteDeviceSnapshot,
+    );
   }
 
   async commit(signal?: AbortSignal): Promise<void> {
@@ -123,6 +193,7 @@ export class AccountSessionPersistence {
   constructor(
     private readonly root: string,
     private readonly maxRecordBytes = DEFAULT_MAX_RECORD_BYTES,
+    private readonly hooks?: AccountPersistenceHooks,
   ) {
     if (!Number.isSafeInteger(maxRecordBytes) || maxRecordBytes <= 0 || maxRecordBytes > MAX_RECORD_BYTES) {
       throw new Error(`maxRecordBytes must be between 1 and ${MAX_RECORD_BYTES}`);
@@ -151,7 +222,7 @@ export class AccountSessionPersistence {
     const generation = randomUUID();
     const directory = join(stagingRoot, generation);
     await mkdir(directory, { mode: 0o700 });
-    return new StagedAccountStores(account, this, generation, directory, this.maxRecordBytes);
+    return new StagedAccountStores(account, this, generation, directory, this.maxRecordBytes, this.hooks);
   }
 
   async commit(staging: StagedAccountStores, signal?: AbortSignal): Promise<void> {
@@ -162,6 +233,7 @@ export class AccountSessionPersistence {
     const obsoleteGenerations = await readdir(generationsRoot);
     const generation = staging.getGeneration();
     const destination = join(generationsRoot, generation);
+    this.hooks?.before('generation-publication');
     await rename(staging.directory, destination);
 
     if (signal?.aborted) {
@@ -170,6 +242,7 @@ export class AccountSessionPersistence {
     }
 
     try {
+      this.hooks?.before('active-generation-record');
       await this.writeActiveGeneration({ version: 1, account: staging.account, generation });
     } catch (error) {
       await rm(destination, { force: true, recursive: true });
@@ -190,8 +263,35 @@ export class AccountSessionPersistence {
   private stores(account: string, directory: string): ActiveAccountStores {
     return {
       account,
-      session: new AtomicJsonStore<PersistedSession>(join(directory, 'session.json'), 'session', this.maxRecordBytes),
-      push: new AtomicJsonStore<PersistedPush>(join(directory, 'push.json'), 'push', this.maxRecordBytes),
+      session: new AtomicJsonStore<PersistedSession>(
+        join(directory, 'session.json'),
+        'session',
+        this.maxRecordBytes,
+        'session-record',
+      ),
+      push: new AtomicJsonStore<PersistedPush>(
+        join(directory, 'push.json'),
+        'push',
+        this.maxRecordBytes,
+        'push-record',
+      ),
+      configuration: new AtomicJsonStore<EufyConfig>(
+        join(directory, 'configuration.json'),
+        'configuration',
+        this.maxRecordBytes,
+        'configuration-record',
+        undefined,
+        parseConfig,
+        serializeConfig,
+      ),
+      snapshot: new AtomicJsonStore<CompleteDeviceSnapshot>(
+        join(directory, 'device-snapshot.json'),
+        'device snapshot',
+        this.maxRecordBytes,
+        'device-snapshot-record',
+        undefined,
+        parseCompleteDeviceSnapshot,
+      ),
     };
   }
 
@@ -218,6 +318,8 @@ export class AccountSessionPersistence {
   }
 
   private async writeActiveGeneration(record: ActiveGenerationRecord): Promise<void> {
-    writeJsonAtomically(join(this.root, 'active.json'), record, 'active account', this.maxRecordBytes);
+    writeJsonAtomically(join(this.root, 'active.json'), record, 'active account', this.maxRecordBytes, () =>
+      this.hooks?.before('active-generation-publication'),
+    );
   }
 }

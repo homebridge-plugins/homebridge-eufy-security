@@ -1,6 +1,8 @@
 import type { FcmStore, LoginResult, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import type { AccountOwnerEvidence, AccountReleaseResult } from './account-ownership.js';
+import type { EufyConfig } from './configuration.js';
+import type { CompleteDeviceSnapshot } from './device-snapshot.js';
 import type { FreshRuntimeEvidence } from './runtime-tracker.js';
 
 const FLOW_TIMEOUT = Symbol('flow-timeout');
@@ -15,16 +17,14 @@ export interface TemporaryAuthenticationClientOptions {
 }
 
 export interface TemporaryAuthenticationInput {
-  account: string;
-  password: string;
-  country: string;
-  trustedDeviceName: string;
+  configuration: EufyConfig;
 }
 
 export interface TemporaryAuthenticationClient {
   login(): Promise<LoginResult>;
   solveCaptcha(answer: string): Promise<LoginResult>;
   submitVerifyCode(code: string): Promise<LoginResult>;
+  discover(): Promise<CompleteDeviceSnapshot>;
   disconnect(): Promise<void>;
 }
 
@@ -48,14 +48,16 @@ interface TemporaryOwnership {
 
 interface TemporaryStores {
   account: string;
+  configuration: { save(value: EufyConfig): void };
   session: SessionStore;
   push: FcmStore;
+  snapshot: { save(value: CompleteDeviceSnapshot): void };
   commit(signal?: AbortSignal): Promise<void>;
   discard(): Promise<void>;
 }
 
 interface TemporaryPersistence {
-  active?(): Promise<{ account: string } | null>;
+  active?(): Promise<{ account: string; configuration?: { load(): EufyConfig | null } } | null>;
   stage(account: string): Promise<TemporaryStores>;
 }
 
@@ -71,7 +73,7 @@ export interface TemporaryAuthenticationOptions {
 export type TemporaryAuthenticationResult =
   | { status: 'captcha'; image: string; retry: boolean }
   | { status: 'two-factor'; method: string }
-  | { status: 'authenticated' }
+  | { status: 'restart-required' }
   | { status: 'blocked'; owner: AccountOwnerEvidence }
   | ({ status: 'plugin-running' } & FreshRuntimeEvidence)
   | { status: 'failed' }
@@ -91,6 +93,7 @@ export class TemporaryAuthentication {
   private state: 'new' | 'starting' | 'active' | 'settled' = 'new';
   private terminalResult?: TemporaryAuthenticationResult;
   private continuationPending = false;
+  private inputConfiguration?: EufyConfig;
 
   constructor(
     private readonly ownership: TemporaryOwnership,
@@ -106,6 +109,7 @@ export class TemporaryAuthentication {
     }
 
     this.state = 'starting';
+    this.inputConfiguration = input.configuration;
     this.armFlowDeadline();
     try {
       const runtime = this.runtimeActivity ? await this.waitForFlow(this.runtimeActivity.fresh()) : null;
@@ -139,7 +143,7 @@ export class TemporaryAuthentication {
       if (this.state !== 'active') {
         return this.terminalResult ?? { status: 'closed' };
       }
-      return result === FLOW_TIMEOUT ? this.expire() : this.apply(result);
+      return result === FLOW_TIMEOUT ? this.expire() : await this.apply(result);
     } catch {
       if (this.isSettled()) {
         return this.terminalResult ?? { status: 'closed' };
@@ -149,14 +153,34 @@ export class TemporaryAuthentication {
   }
 
   private async prepare(input: TemporaryAuthenticationInput): Promise<TemporaryAuthenticationResult | undefined> {
+    const account = input.configuration.username?.trim().toLowerCase();
+    const password = input.configuration.password;
+    if (!account || !password) {
+      throw new TypeError('temporary authentication requires account credentials');
+    }
     const activeAccount = await this.persistence.active?.();
+    const activeConfiguration = activeAccount?.configuration?.load();
+    if (activeConfiguration) {
+      if (activeConfiguration.username?.trim().toLowerCase() !== activeAccount!.account) {
+        throw new Error('active account generation has mismatched configuration');
+      }
+      this.inputConfiguration = {
+        ...activeConfiguration,
+        username: input.configuration.username,
+        password: input.configuration.password,
+        country: input.configuration.country,
+        trustedDeviceName: input.configuration.trustedDeviceName,
+        entityPreferences: {
+          ...input.configuration.entityPreferences,
+          ...activeConfiguration.entityPreferences,
+        },
+      };
+    }
     if (this.state === 'settled') {
       return this.terminalResult ?? { status: 'closed' };
     }
     const accountScopes =
-      activeAccount && activeAccount.account !== input.account
-        ? [activeAccount.account, input.account]
-        : [input.account];
+      activeAccount && activeAccount.account !== account ? [activeAccount.account, account] : [account];
     for (const accountScope of accountScopes) {
       const ownership = await this.ownership.acquire(accountScope, 'temporary-authentication');
       if (this.isSettled()) {
@@ -174,16 +198,16 @@ export class TemporaryAuthentication {
       this.leases.push(ownership.lease);
     }
 
-    this.stores = await this.persistence.stage(input.account);
+    this.stores = await this.persistence.stage(account);
     if (this.isSettled()) {
       await this.boundedStore(this.stores.discard());
       return this.terminalResult ?? { status: 'closed' };
     }
     this.client = this.clientFactory({
-      account: input.account,
-      password: input.password,
-      country: input.country,
-      trustedDeviceName: input.trustedDeviceName,
+      account,
+      password,
+      country: this.inputConfiguration!.country,
+      trustedDeviceName: this.inputConfiguration!.trustedDeviceName,
       sessionStore: this.stores.session,
       pushStore: this.stores.push,
     });
@@ -216,7 +240,7 @@ export class TemporaryAuthentication {
       if (this.state !== 'active') {
         return this.terminalResult ?? { status: 'closed' };
       }
-      return result === FLOW_TIMEOUT ? this.expire() : this.apply(result);
+      return result === FLOW_TIMEOUT ? this.expire() : await this.apply(result);
     } catch {
       if (this.isSettled()) {
         return this.terminalResult ?? { status: 'closed' };
@@ -250,9 +274,18 @@ export class TemporaryAuthentication {
     }
 
     this.challenge = undefined;
+    const snapshot = await this.waitForFlow(this.client!.discover());
+    if (this.state !== 'active') {
+      return this.terminalResult ?? { status: 'closed' };
+    }
+    if (snapshot === FLOW_TIMEOUT) {
+      return this.expire();
+    }
+    this.stores!.configuration.save(this.inputConfiguration!);
+    this.stores!.snapshot.save(snapshot);
     this.state = 'settled';
     const cleaned = await this.cleanup(true);
-    const terminalResult: TemporaryAuthenticationResult = { status: cleaned ? 'authenticated' : 'failed' };
+    const terminalResult: TemporaryAuthenticationResult = { status: cleaned ? 'restart-required' : 'failed' };
     this.terminalResult = terminalResult;
     return terminalResult;
   }

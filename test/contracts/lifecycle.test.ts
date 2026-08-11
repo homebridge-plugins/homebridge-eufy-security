@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AccountOwnership } from '../../src/account-ownership.js';
+import { parseConfig } from '../../src/configuration.js';
+import { AccountSessionPersistence } from '../../src/session-persistence.js';
 import type { SdkClient } from '../../src/sdk-client.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
 import { RuntimeTracker } from '../../src/runtime-tracker.js';
@@ -97,6 +99,66 @@ describe('platform lifecycle', () => {
       if (acquired.state === 'owner') {
         await acquired.lease.release();
       }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it('acquires the atomically published replacement account only after a normal restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'eufy-platform-replacement-'));
+    const root = join(directory, 'eufy-security');
+    const persistence = new AccountSessionPersistence(join(root, 'accounts'));
+    const replacementConfig = parseConfig({
+      platform: 'EufySecurity',
+      username: 'replacement@example.invalid',
+      password: 'synthetic-password',
+      country: 'CA',
+      trustedDeviceName: 'Replacement Homebridge',
+      entityPreferences: { 'absent-device': { represented: false } },
+    });
+    const staging = await persistence.stage('replacement@example.invalid');
+    staging.configuration.save(replacementConfig);
+    staging.snapshot.save({ version: 1, complete: true, devices: [] });
+    await staging.commit();
+    const client: SdkClient = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const clientFactory = vi.fn(() => client);
+    const listeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
+    const Platform = createEufyPlatform(clientFactory);
+
+    try {
+      new Platform(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        { platform: 'EufySecurity', username: 'old@example.invalid', password: 'old-password' },
+        {
+          on(event, listener): void {
+            listeners[event] = listener;
+          },
+          user: { storagePath: () => directory },
+        },
+      );
+      expect(clientFactory).not.toHaveBeenCalled();
+
+      listeners.didFinishLaunching?.();
+
+      await vi.waitFor(() => expect(clientFactory).toHaveBeenCalledExactlyOnceWith(replacementConfig));
+      await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
+      const ownership = new AccountOwnership(join(root, 'ownership'));
+      await expect(ownership.acquire('replacement@example.invalid', 'temporary-authentication')).resolves.toMatchObject(
+        {
+          state: 'owner-conflict',
+          owner: { kind: 'runtime' },
+        },
+      );
+      const oldAccount = await ownership.acquire('old@example.invalid', 'temporary-authentication');
+      expect(oldAccount.state).toBe('owner');
+      if (oldAccount.state === 'owner') {
+        await oldAccount.lease.release();
+      }
+      listeners.shutdown?.();
+      await vi.waitFor(() => expect(client.stop).toHaveBeenCalledOnce());
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
