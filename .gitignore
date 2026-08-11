@@ -1,6 +1,10 @@
 # Ignore compiled code
 dist
 
+# VitePress documentation output
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+
 # ------------- Defaults ------------- #
 
 # Logs

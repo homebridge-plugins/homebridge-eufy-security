@@ -26,8 +26,7 @@ The SDK owns verified Eufy device truth and transport behavior. This plugin owns
 and HomeKit representation. Use explicit capability and bundle adapters; do not infer services from
 primitive SDK shapes and do not bypass evidence-gated SDK operations.
 
-The current vocabulary is in [CONTEXT.md](./CONTEXT.md). Architecture decisions are in
-[`docs/adr/`](./docs/adr/).
+The current vocabulary is in [CONTEXT.md](./CONTEXT.md).
 
 ## Development workflow
 

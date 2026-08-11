@@ -59,7 +59,7 @@ benefits every SDK consumer (HA bridge, go2rtc, any NVR-shaped host), not just H
 ### SDK work (`eufy-sdk`, branch `beta-0.1.0`)
 
 Implementation status: **complete in merged PR #9 and published as `0.1.0-beta.6`**. The SDK boundary
-is recorded in ADR 0001, `Keep Shared Media Primitives in the SDK`.
+keeps shared media primitives in the SDK.
 
 1. **[complete] Typed inbound audio codec** — `contracts.ts` audio listener gains codec metadata. Closes an
    ECS regression; nothing can transcode without it.

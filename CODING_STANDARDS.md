@@ -36,8 +36,7 @@ HomeKit representation, configuration, UI, diagnostics, media adaptation, and pr
 
 ## Capability adapters
 
-The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md), and the architecture decision is
-recorded in [ADR 0001](./docs/adr/0001-explicit-capability-adapters.md).
+The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
 
 - Map SDK capabilities through explicit capability adapters. Do not build a generic shape-driven
   mapper.
@@ -108,15 +107,13 @@ recorded in [ADR 0001](./docs/adr/0001-explicit-capability-adapters.md).
 
 ### Issue tracker
 
-Issues and specs live in GitHub Issues for this repository; use the `gh` CLI. See
-`docs/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues for this repository; use the `gh` CLI.
 
 ### Triage labels
 
 Use the canonical labels `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and
-`wontfix`. See `docs/agents/triage-labels.md`.
+`wontfix`.
 
 ### Domain docs
 
-This is a single-context repository using root `CONTEXT.md` and `docs/adr/`. See
-`docs/agents/domain.md`.
+This is a single-context repository using root `CONTEXT.md`.

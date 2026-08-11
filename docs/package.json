@@ -1,0 +1,18 @@
+{
+  "name": "homebridge-eufy-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "User-facing VitePress documentation for Homebridge Eufy.",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "engines": {
+    "node": ">=24.5.0"
+  },
+  "devDependencies": {
+    "vitepress": "^2.0.0-alpha.19"
+  }
+}

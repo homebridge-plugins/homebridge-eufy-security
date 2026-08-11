@@ -14,7 +14,7 @@
 [![node](https://img.shields.io/node/v/@homebridge-plugins/homebridge-eufy-security?logo=nodedotjs)](./.nvmrc)
 [![license](https://img.shields.io/npm/l/@homebridge-plugins/homebridge-eufy-security)](./LICENSE)
 
-[Documentation](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki) · [Contributing](./CONTRIBUTING.md) · [Security](./SECURITY.md) · [Releases](https://github.com/homebridge-plugins/homebridge-eufy-security/releases)
+[Documentation](https://homebridge-plugins.github.io/homebridge-eufy-security/) · [Contributing](./CONTRIBUTING.md) · [Security](./SECURITY.md) · [Releases](https://github.com/homebridge-plugins/homebridge-eufy-security/releases)
 
 </div>
 
@@ -23,7 +23,8 @@
 > [!IMPORTANT]
 > **V5 is a closed maintainer beta, not yet a replacement for the stable plugin. Registration is not
 > open; please do not request access.** Account authentication, single-owner session restore, complete
-> device discovery, and the first explicit HomeKit adapter are available. Camera media, HKSV, motion
+> device discovery, and the first explicit HomeKit adapter are implemented. Accessory publication,
+> camera media, HKSV, motion
 > and doorbell events, arming, locks, lights, and battery enrichment are still being rebuilt. A device
 > discovered by the SDK is not automatically represented in HomeKit.
 
@@ -69,8 +70,8 @@ beta.
 4. Wait for authentication and complete discovery to finish.
 5. Restart Homebridge so the long-lived runtime can acquire the persisted session.
 
-Credentials and challenge answers stay inside the temporary authentication flow. The runtime never
-falls back to interactive login.
+Credentials are persisted in Homebridge/plugin configuration. Challenge answers stay inside the
+temporary authentication flow, and the runtime never falls back to interactive login.
 
 ## Current V5 scope
 
@@ -79,7 +80,7 @@ falls back to interactive login.
 | Interactive login, captcha, and two-factor continuation | Available |
 | Persisted session restore and single runtime ownership | Available |
 | Complete device discovery and runtime snapshot | Available |
-| Contact sensor representation | Available |
+| Contact sensor adapter | Implemented; production accessory publication not yet connected |
 | Camera streaming, snapshots, talkback, and HKSV | In progress |
 | Motion and doorbell events | In progress |
 | Security modes, locks, lights, sirens, and battery services | In progress |
@@ -89,13 +90,14 @@ explicit HomeKit adapter exists for their primary purpose.
 
 ## Documentation
 
-The [project wiki](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki) contains stable
-installation, configuration, and troubleshooting guidance. Some pages describe the V4 plugin and are
-not yet the V5 contract. Current V5 behavior is tracked in the
-[beta issues](https://github.com/homebridge-plugins/homebridge-eufy-security/issues) and release notes.
+The [documentation site](https://homebridge-plugins.github.io/homebridge-eufy-security/) contains the
+current V5 contract and a clearly separated migration of useful legacy V4 wiki material. Current V5
+work is tracked in the [beta issues](https://github.com/homebridge-plugins/homebridge-eufy-security/issues)
+and release notes.
 
-- [Installation and configuration](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Installation-and-Configuration)
-- [Troubleshooting](https://github.com/homebridge-plugins/homebridge-eufy-security/wiki/Basic-Troubleshooting)
+- [Installation](https://homebridge-plugins.github.io/homebridge-eufy-security/guide/installation)
+- [Configuration](https://homebridge-plugins.github.io/homebridge-eufy-security/reference/configuration)
+- [Troubleshooting](https://homebridge-plugins.github.io/homebridge-eufy-security/troubleshooting/)
 - [Current releases](https://github.com/homebridge-plugins/homebridge-eufy-security/releases)
 - [SDK documentation](https://mega-yfue.github.io/)
 
@@ -113,8 +115,7 @@ Homebridge lifecycle
 ```
 
 Capability adapters are closed-world and semantic. Unsupported SDK capabilities remain visible as
-diagnostics but do not receive a generic HomeKit fallback. The architecture decision is recorded in
-[ADR 0001](./docs/adr/0001-explicit-capability-adapters.md), and the domain vocabulary lives in
+diagnostics but do not receive a generic HomeKit fallback. The domain vocabulary lives in
 [`CONTEXT.md`](./CONTEXT.md).
 
 ## Develop

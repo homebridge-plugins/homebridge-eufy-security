@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📖 Wiki / Documentation
-    url: https://github.com/homebridge-plugins/homebridge-eufy-security/wiki
+    url: https://homebridge-plugins.github.io/homebridge-eufy-security/troubleshooting/
     about: Check the wiki before opening an issue — your question may already be answered.
   - name: 💬 Discord
     url: https://discord.gg/sMkCj5Rfhv
