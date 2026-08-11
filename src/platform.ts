@@ -3,9 +3,9 @@ import { join } from 'node:path';
 
 import { AccountLease, AccountOwnership } from './account-ownership.js';
 import { parseConfig, type EufyConfig } from './configuration.js';
-import { createSyntheticSdkClient, type SdkClient, type SdkClientFactory } from './sdk-client.js';
-import { AccountSessionPersistence } from './session-persistence.js';
-import { RuntimeTracker } from './runtime-tracker.js';
+import { createPersistedSdkClient, type SdkClient, type SdkClientFactory, type SdkStartResult } from './sdk-client.js';
+import { AccountSessionPersistence, type ActiveAccountStores } from './session-persistence.js';
+import { RuntimeTracker, type RuntimeState } from './runtime-tracker.js';
 
 export type PlatformLifecycleEvent = 'didFinishLaunching' | 'shutdown';
 
@@ -36,6 +36,8 @@ export function createEufyPlatform(
     private ownership?: AccountOwnership;
     private accountScope?: string;
     private runtimeLease?: AccountLease;
+    private runtimeState: RuntimeState = 'stopped';
+    private stopping = false;
     private readonly configuredConfig: EufyConfig;
     private readonly storageRoot?: string;
     private readonly persistence?: AccountSessionPersistence;
@@ -71,8 +73,10 @@ export function createEufyPlatform(
 
     private async startClient(): Promise<void> {
       try {
-        const config = await this.activeConfiguration();
-        this.client ??= clientFactory(config);
+        const { active, config } = await this.activeAccount();
+        if (this.storageRoot && !active) {
+          return;
+        }
         if (this.storageRoot && config.username?.trim()) {
           this.accountScope = config.username.trim().toLowerCase();
           this.ownership = new AccountOwnership(join(this.storageRoot, 'ownership'));
@@ -86,28 +90,64 @@ export function createEufyPlatform(
             },
           );
         }
-        if (this.ownership && this.accountScope) {
+        if (this.ownership && this.accountScope && active) {
+          this.runtimeState = 'acquiring-ownership';
           const ownership = await this.ownership.acquire(this.accountScope, 'runtime');
           if (ownership.state === 'owner-conflict') {
+            this.runtimeState = 'owner-conflict';
             this.log.error('Eufy SDK startup blocked by another live account owner');
             return;
           }
           this.runtimeLease = ownership.lease;
-          if (!this.runtimeTracker?.start()) {
+          const previousSnapshot = active.snapshot.load() ?? undefined;
+          if (
+            !this.runtimeTracker?.start('starting', {
+              generation: active.generation,
+              complete: false,
+              snapshot: previousSnapshot,
+            })
+          ) {
             await this.runtimeLease.release();
             this.runtimeLease = undefined;
             return;
           }
+          this.runtimeState = 'starting';
+          if (!active.session.load()) {
+            await this.releaseRuntimeLease();
+            this.runtimeTracker.update('authentication-required', {
+              generation: active.generation,
+              snapshot: previousSnapshot,
+            });
+            this.runtimeState = 'authentication-required';
+            return;
+          }
+          this.client = clientFactory(config, active);
+          this.client.onInventory?.((result) => {
+            void this.applyRuntimeResult(active, result).catch((error: unknown) => this.failRuntime(error));
+          });
+          const result = await this.client.start();
+          if (!result) {
+            return;
+          }
+          await this.applyRuntimeResult(active, result);
+          return;
         }
+        this.client ??= clientFactory(config, active ?? undefined);
         await this.client.start();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error(`Eufy SDK startup failed: ${message}`);
-        await this.stopWithinDeadline(false);
+        this.stopping = true;
+        await this.stopWithinDeadline(false, 'failed');
       }
     }
 
     private stop(): Promise<void> {
+      this.stopping = true;
+      if (this.runtimeState !== 'owner-conflict') {
+        this.runtimeState = 'stopping';
+        this.runtimeTracker?.update('stopping');
+      }
       this.stopPromise ??= this.stopWithinDeadline();
       return this.stopPromise;
     }
@@ -115,12 +155,8 @@ export function createEufyPlatform(
     private async stopClient(): Promise<'failed' | 'stopped'> {
       try {
         await this.client?.stop();
-        if (this.runtimeLease) {
-          const release = await this.runtimeLease.release();
-          if (release.state !== 'stopped') {
-            return 'failed';
-          }
-          this.runtimeLease = undefined;
+        if (!(await this.releaseRuntimeLease())) {
+          return 'failed';
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -131,25 +167,101 @@ export function createEufyPlatform(
       return 'stopped';
     }
 
-    private async activeConfiguration(): Promise<EufyConfig> {
+    private async activeAccount(): Promise<{ active: ActiveAccountStores | null; config: EufyConfig }> {
       const active = await this.persistence?.active();
       const configuration = active?.configuration.load();
       if (!active) {
-        return this.configuredConfig;
+        if (this.storageRoot) {
+          this.runtimeTracker ??= new RuntimeTracker(join(this.storageRoot, 'tracker.json'));
+          this.runtimeTracker.update('authentication-required');
+          this.runtimeState = 'authentication-required';
+        }
+        return { active: null, config: this.configuredConfig };
       }
       if (!configuration) {
         if (this.configuredConfig.username?.trim().toLowerCase() !== active.account) {
           throw new Error('legacy active account generation does not match Homebridge configuration');
         }
-        return this.configuredConfig;
+        return { active, config: this.configuredConfig };
       }
       if (configuration.username?.trim().toLowerCase() !== active.account) {
         throw new Error('active account generation has mismatched configuration');
       }
-      return configuration;
+      return { active, config: configuration };
     }
 
-    private async stopWithinDeadline(waitForStart = true): Promise<void> {
+    private async releaseRuntimeLease(): Promise<boolean> {
+      if (!this.runtimeLease) {
+        return true;
+      }
+      const release = await this.runtimeLease.release();
+      if (release.state !== 'stopped') {
+        return false;
+      }
+      this.runtimeLease = undefined;
+      return true;
+    }
+
+    private async applyRuntimeResult(active: ActiveAccountStores, result: SdkStartResult): Promise<void> {
+      if (
+        this.stopping ||
+        (this.runtimeState === 'authentication-required' && result.state !== 'authentication-required')
+      ) {
+        return;
+      }
+      const previousSnapshot = active.snapshot.load() ?? undefined;
+      if (result.state === 'authentication-required') {
+        if (this.runtimeState === 'authentication-required') {
+          return;
+        }
+        this.runtimeState = 'authentication-required';
+        await this.client?.stop();
+        await this.releaseRuntimeLease();
+        this.runtimeTracker?.update('authentication-required', {
+          generation: active.generation,
+          complete: false,
+          snapshot: previousSnapshot,
+        });
+        return;
+      }
+      if (result.state === 'degraded') {
+        this.runtimeTracker?.update('degraded', {
+          generation: active.generation,
+          complete: false,
+          snapshot: previousSnapshot,
+        });
+        this.runtimeState = 'degraded';
+        return;
+      }
+      const registrySerials = [...result.registry.keys()].sort();
+      const snapshotSerials = result.snapshot.devices.map((device) => device.sn).sort();
+      if (JSON.stringify(registrySerials) !== JSON.stringify(snapshotSerials)) {
+        throw new Error('canonical registry does not match its complete device snapshot');
+      }
+      active.snapshot.save(result.snapshot);
+      if (
+        !this.runtimeTracker?.update('ready', {
+          generation: active.generation,
+          complete: true,
+          snapshot: result.snapshot,
+        })
+      ) {
+        throw new Error('complete runtime snapshot could not be published');
+      }
+      this.runtimeState = 'ready';
+    }
+
+    private async failRuntime(error: unknown): Promise<void> {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.error(`Eufy SDK runtime failed: ${message}`);
+      this.stopping = true;
+      await this.stopWithinDeadline(false, 'failed');
+    }
+
+    private async stopWithinDeadline(
+      waitForStart = true,
+      completedState: 'failed' | 'stopped' = 'stopped',
+    ): Promise<void> {
       const stop =
         waitForStart && this.startPromise ? this.startPromise.then(() => this.stopClient()) : this.stopClient();
 
@@ -162,7 +274,16 @@ export function createEufyPlatform(
       clearTimeout(timer!);
 
       if (result === 'stopped') {
-        this.runtimeTracker?.stop();
+        if (this.runtimeState === 'owner-conflict') {
+          return;
+        }
+        if (completedState === 'stopped') {
+          this.runtimeTracker?.stop();
+          this.runtimeState = 'stopped';
+        } else {
+          this.runtimeTracker?.update('failed');
+          this.runtimeState = 'failed';
+        }
       } else if (result === 'timeout') {
         this.log.warn(`Eufy SDK shutdown exceeded ${shutdownTimeoutMs}ms; Homebridge shutdown will continue`);
       }
@@ -172,4 +293,4 @@ export function createEufyPlatform(
   };
 }
 
-export const EufyPlatform = createEufyPlatform(createSyntheticSdkClient);
+export const EufyPlatform = createEufyPlatform(createPersistedSdkClient);

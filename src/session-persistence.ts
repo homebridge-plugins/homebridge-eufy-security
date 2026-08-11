@@ -19,6 +19,7 @@ interface ActiveGenerationRecord {
 
 export interface ActiveAccountStores {
   account: string;
+  generation: string;
   configuration: AtomicJsonStore<EufyConfig>;
   push: FcmStore;
   session: SessionStore;
@@ -130,7 +131,7 @@ export class StagedAccountStores implements ActiveAccountStores {
   constructor(
     readonly account: string,
     private readonly persistence: AccountSessionPersistence,
-    private readonly generation: string,
+    readonly generation: string,
     readonly directory: string,
     maxRecordBytes: number,
     hooks?: AccountPersistenceHooks,
@@ -207,7 +208,7 @@ export class AccountSessionPersistence {
       return null;
     }
     const directory = join(this.root, 'generations', active.generation);
-    return this.stores(active.account, directory);
+    return this.stores(active.account, active.generation, directory);
   }
 
   async stage(account: string): Promise<StagedAccountStores> {
@@ -260,9 +261,10 @@ export class AccountSessionPersistence {
     })();
   }
 
-  private stores(account: string, directory: string): ActiveAccountStores {
+  private stores(account: string, generation: string, directory: string): ActiveAccountStores {
     return {
       account,
+      generation,
       session: new AtomicJsonStore<PersistedSession>(
         join(directory, 'session.json'),
         'session',

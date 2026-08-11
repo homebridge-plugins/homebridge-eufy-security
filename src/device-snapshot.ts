@@ -6,11 +6,20 @@ export interface CompleteDeviceSnapshot {
   devices: DeviceManifest[];
 }
 
+export interface DiscoveryDevice {
+  describe(): DeviceManifest;
+}
+
 interface DiscoveryClient {
   on(event: 'error', listener: (error: Error) => void): unknown;
   off(event: 'error', listener: (error: Error) => void): unknown;
   getDevices(): Promise<readonly { sn: string }[]>;
-  getDevice(serial: string): Promise<{ describe(): DeviceManifest }>;
+  getDevice(serial: string): Promise<DiscoveryDevice>;
+}
+
+export interface CompleteDeviceDiscovery {
+  registry: ReadonlyMap<string, DiscoveryDevice>;
+  snapshot: CompleteDeviceSnapshot;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -187,19 +196,27 @@ export function parseCompleteDeviceSnapshot(value: unknown): CompleteDeviceSnaps
 
 /** Resolves every listed device and rejects SDK evidence that the inventory was partial. */
 export async function discoverCompleteDeviceSnapshot(client: DiscoveryClient): Promise<CompleteDeviceSnapshot> {
+  return (await discoverCompleteDeviceRegistry(client)).snapshot;
+}
+
+/** Builds the canonical registry and its snapshot from the same complete inventory pass. */
+export async function discoverCompleteDeviceRegistry(client: DiscoveryClient): Promise<CompleteDeviceDiscovery> {
   const errors: Error[] = [];
   const onError = (error: Error) => errors.push(error);
   client.on('error', onError);
   try {
     const devices = await client.getDevices();
+    const registry = new Map<string, DiscoveryDevice>();
     const manifests: DeviceManifest[] = [];
     for (const device of devices) {
-      manifests.push((await client.getDevice(device.sn)).describe());
+      const resolved = await client.getDevice(device.sn);
+      registry.set(device.sn, resolved);
+      manifests.push(resolved.describe());
     }
     if (errors.length > 0) {
       throw new Error('SDK reported an incomplete device discovery');
     }
-    return createCompleteDeviceSnapshot(manifests);
+    return { registry, snapshot: createCompleteDeviceSnapshot(manifests) };
   } finally {
     client.off('error', onError);
   }

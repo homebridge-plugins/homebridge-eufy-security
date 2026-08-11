@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import type { PersistedSession } from '@mega-yfue/eufy-sdk';
 
 import { AccountOwnership } from '../../src/account-ownership.js';
 import { parseConfig } from '../../src/configuration.js';
@@ -12,6 +13,19 @@ import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platf
 import { RuntimeTracker } from '../../src/runtime-tracker.js';
 
 describe('platform lifecycle', () => {
+  function session(): PersistedSession {
+    return {
+      userId: 'synthetic-user',
+      authToken: 'synthetic-token',
+      region: 'US',
+      openudid: 'synthetic-openudid',
+      shareKey: '00112233445566778899aabbccddeeff',
+      keyIdent: 'synthetic-key',
+      tokenExpiresAt: 0,
+      savedAt: 1,
+    } as PersistedSession;
+  }
+
   it('passes validated V5 configuration to its SDK client factory', () => {
     const client: SdkClient = {
       start: vi.fn().mockResolvedValue(undefined),
@@ -63,6 +77,13 @@ describe('platform lifecycle', () => {
 
   it('publishes fresh runtime evidence until the SDK client stops', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'eufy-platform-runtime-'));
+    const persistence = new AccountSessionPersistence(join(directory, 'eufy-security', 'accounts'));
+    const staging = await persistence.stage('guest@example.invalid');
+    staging.configuration.save(
+      parseConfig({ platform: 'EufySecurity', username: 'guest@example.invalid', password: 'synthetic-password' }),
+    );
+    staging.session.save(session());
+    await staging.commit();
     const client: SdkClient = {
       start: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -118,6 +139,7 @@ describe('platform lifecycle', () => {
     });
     const staging = await persistence.stage('replacement@example.invalid');
     staging.configuration.save(replacementConfig);
+    staging.session.save(session());
     staging.snapshot.save({ version: 1, complete: true, devices: [] });
     await staging.commit();
     const client: SdkClient = {
@@ -143,7 +165,12 @@ describe('platform lifecycle', () => {
 
       listeners.didFinishLaunching?.();
 
-      await vi.waitFor(() => expect(clientFactory).toHaveBeenCalledExactlyOnceWith(replacementConfig));
+      await vi.waitFor(() =>
+        expect(clientFactory).toHaveBeenCalledExactlyOnceWith(
+          replacementConfig,
+          expect.objectContaining({ account: 'replacement@example.invalid' }),
+        ),
+      );
       await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
       const ownership = new AccountOwnership(join(root, 'ownership'));
       await expect(ownership.acquire('replacement@example.invalid', 'temporary-authentication')).resolves.toMatchObject(
