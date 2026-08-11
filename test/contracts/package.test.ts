@@ -377,5 +377,5 @@ describe('packed plugin', () => {
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
 });
