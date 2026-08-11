@@ -90,6 +90,7 @@ async function saveAuthenticatedConfig() {
 async function handleResult(result) {
   if (result.status === 'captcha') {
     challenge = 'captcha';
+    authForm.hidden = true;
     challengeImage.src = result.image;
     challengeImage.hidden = false;
     challengeLabel.textContent = messages.captchaLabel ?? '';
@@ -99,6 +100,7 @@ async function handleResult(result) {
   }
   if (result.status === 'two-factor') {
     challenge = 'two-factor';
+    authForm.hidden = true;
     challengeImage.hidden = true;
     challengeLabel.textContent = messages.twoFactorLabel ?? '';
     challengeForm.hidden = false;
@@ -108,13 +110,17 @@ async function handleResult(result) {
 
   challengeForm.hidden = true;
   if (result.status === 'restart-required') {
-    await saveAuthenticatedConfig();
+    authForm.hidden = true;
     authStatus.textContent = messages.authSuccess ?? '';
+    await saveAuthenticatedConfig();
   } else if (result.status === 'blocked' || result.status === 'plugin-running') {
+    authForm.hidden = false;
     authStatus.textContent = messages.authBlocked ?? '';
   } else if (result.status === 'timed-out') {
+    authForm.hidden = false;
     authStatus.textContent = messages.authTimedOut ?? '';
   } else {
+    authForm.hidden = false;
     authStatus.textContent = messages.authFailed ?? '';
   }
 }

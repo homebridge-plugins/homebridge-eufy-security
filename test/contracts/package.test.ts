@@ -18,6 +18,11 @@ async function renderUi(
   catalogs: Record<string, Record<string, string>>,
   language = 'en',
   translationKeys: string[] = [],
+  authenticationStart: Record<string, unknown> = {
+    status: 'captcha',
+    image: 'data:image/png;base64,c3ludGhldGlj',
+    retry: false,
+  },
 ) {
   function interactiveElement<T extends object>(state: T) {
     const listeners: Record<string, Array<(event?: { preventDefault(): void }) => void | Promise<void>>> = {};
@@ -104,9 +109,7 @@ async function renderUi(
       i18nCurrentLang: async () => language,
       request: async (path: string, body: unknown) => {
         requests.push({ path, body });
-        return path === '/auth/start'
-          ? { status: 'captcha', image: 'data:image/png;base64,c3ludGhldGlj', retry: false }
-          : { status: 'restart-required' };
+        return path === '/auth/start' ? authenticationStart : { status: 'restart-required' };
       },
       savePluginConfig: async () => {
         saves++;
@@ -351,6 +354,7 @@ describe('packed plugin', () => {
         },
       ]);
       expect(englishUi.challengeForm.hidden).toBe(false);
+      expect(englishUi.authForm.hidden).toBe(true);
       expect(englishUi.challengeImage).toMatchObject({
         hidden: false,
         src: 'data:image/png;base64,c3ludGhldGlj',
@@ -367,7 +371,24 @@ describe('packed plugin', () => {
           trustedDeviceName: 'Synthetic Homebridge',
         },
       ]);
+      expect(englishUi).toMatchObject({
+        authForm: { hidden: true },
+        authStatus: { textContent: catalogs['i18n/en.json'].authSuccess },
+        challengeForm: { hidden: true },
+      });
       expect(englishUi.saves).toBe(1);
+
+      const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
+        status: 'two-factor',
+        method: 'Synthetic verification',
+      });
+      await twoFactorUi.authForm.dispatch('submit');
+      expect(twoFactorUi).toMatchObject({
+        authForm: { hidden: true },
+        authStatus: { textContent: 'Synthetic verification' },
+        challengeForm: { hidden: false },
+        challengeImage: { hidden: true },
+      });
       await englishUi.browserWindow.dispatch('pagehide');
       expect(englishUi.requests[2]).toEqual({ path: '/auth/close', body: undefined });
       await expect(renderUi(script, [], {}, 'fr', translationKeys)).resolves.toMatchObject({
