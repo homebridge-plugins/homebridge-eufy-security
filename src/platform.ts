@@ -1,5 +1,6 @@
 import type { DynamicPlatformPlugin, PlatformAccessory, PlatformConfig } from 'homebridge';
 
+import { parseConfig } from './configuration.js';
 import { createSyntheticSdkClient, type SdkClient, type SdkClientFactory } from './sdk-client.js';
 
 export type PlatformLifecycleEvent = 'didFinishLaunching' | 'shutdown';
@@ -29,10 +30,10 @@ export function createEufyPlatform(
 
     constructor(
       private readonly log: PlatformLogger,
-      _config: PlatformConfig,
+      config: PlatformConfig,
       api: PlatformApi,
     ) {
-      this.client = clientFactory();
+      this.client = clientFactory(parseConfig(config));
       api.on('didFinishLaunching', () => {
         void this.start();
       });

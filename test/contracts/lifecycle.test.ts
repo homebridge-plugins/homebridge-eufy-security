@@ -4,6 +4,32 @@ import type { SdkClient } from '../../src/sdk-client.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
 
 describe('platform lifecycle', () => {
+  it('passes validated V5 configuration to its SDK client factory', () => {
+    const client: SdkClient = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const clientFactory = vi.fn(() => client);
+    const Platform = createEufyPlatform(clientFactory);
+
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      {
+        platform: 'EufySecurity',
+        country: 'ca',
+        entityPreferences: { 'synthetic-absent-entity': { represented: false } },
+      },
+      { on: vi.fn() },
+    );
+
+    expect(clientFactory).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        country: 'CA',
+        entityPreferences: { 'synthetic-absent-entity': { represented: false } },
+      }),
+    );
+  });
+
   it('starts its SDK client after Homebridge finishes launching', async () => {
     const client: SdkClient = {
       start: vi.fn().mockResolvedValue(undefined),

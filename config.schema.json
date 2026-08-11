@@ -2,5 +2,71 @@
   "pluginAlias": "EufySecurity",
   "pluginType": "platform",
   "singular": true,
-  "customUi": true
+  "customUi": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "username": {
+        "title": "Eufy account email",
+        "type": "string"
+      },
+      "password": {
+        "title": "Eufy account password",
+        "format": "password",
+        "type": "string"
+      },
+      "country": {
+        "title": "Account country",
+        "description": "Two-letter country code used to select the Eufy account region.",
+        "default": "US",
+        "pattern": "^[A-Za-z]{2}$",
+        "type": "string"
+      },
+      "trustedDeviceName": {
+        "title": "Trusted-device name",
+        "default": "Homebridge Eufy",
+        "minLength": 1,
+        "type": "string"
+      },
+      "pollingIntervalMinutes": {
+        "title": "Polling interval in minutes",
+        "default": 10,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "ffmpegPath": {
+        "title": "FFmpeg path",
+        "description": "Leave unset to use the FFmpeg executable bundled with the plugin.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "entityPreferences": {
+        "title": "Entity preferences",
+        "additionalProperties": false,
+        "default": {},
+        "type": "object",
+        "patternProperties": {
+          "^.+$": {
+            "additionalProperties": false,
+            "properties": {
+              "represented": {
+                "default": true,
+                "type": "boolean"
+              },
+              "audio": {
+                "default": true,
+                "type": "boolean"
+              },
+              "snapshotMode": {
+                "default": "Refresh",
+                "enum": ["Cloud", "Live", "Refresh"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
 }
