@@ -1,7 +1,10 @@
 import type { DynamicPlatformPlugin, PlatformAccessory, PlatformConfig } from 'homebridge';
+import { join } from 'node:path';
 
+import { AccountLease, AccountOwnership } from './account-ownership.js';
 import { parseConfig } from './configuration.js';
 import { createSyntheticSdkClient, type SdkClient, type SdkClientFactory } from './sdk-client.js';
+import { RuntimeTracker } from './runtime-tracker.js';
 
 export type PlatformLifecycleEvent = 'didFinishLaunching' | 'shutdown';
 
@@ -13,6 +16,7 @@ export interface PlatformLogger {
 
 export interface PlatformApi {
   on(event: PlatformLifecycleEvent, listener: () => void): void;
+  user?: { storagePath(): string };
 }
 
 export interface EufyPlatformConstructor {
@@ -27,13 +31,27 @@ export function createEufyPlatform(
     private readonly client: SdkClient;
     private startPromise?: Promise<void>;
     private stopPromise?: Promise<void>;
+    private readonly runtimeTracker?: RuntimeTracker;
+    private readonly ownership?: AccountOwnership;
+    private readonly accountScope?: string;
+    private runtimeLease?: AccountLease;
 
     constructor(
       private readonly log: PlatformLogger,
       config: PlatformConfig,
       api: PlatformApi,
     ) {
-      this.client = clientFactory(parseConfig(config));
+      const parsedConfig = parseConfig(config);
+      this.client = clientFactory(parsedConfig);
+      if (api.user && parsedConfig.username?.trim()) {
+        const root = join(api.user.storagePath(), 'eufy-security');
+        this.accountScope = parsedConfig.username.trim().toLowerCase();
+        this.ownership = new AccountOwnership(join(root, 'ownership'));
+        this.runtimeTracker = new RuntimeTracker(join(root, 'tracker.json'), 90_000, Date.now, (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.log.warn(`Runtime status publication failed: ${message}`);
+        });
+      }
       api.on('didFinishLaunching', () => {
         void this.start();
       });
@@ -53,10 +71,24 @@ export function createEufyPlatform(
 
     private async startClient(): Promise<void> {
       try {
+        if (this.ownership && this.accountScope) {
+          const ownership = await this.ownership.acquire(this.accountScope, 'runtime');
+          if (ownership.state === 'owner-conflict') {
+            this.log.error('Eufy SDK startup blocked by another live account owner');
+            return;
+          }
+          this.runtimeLease = ownership.lease;
+          if (!this.runtimeTracker?.start()) {
+            await this.runtimeLease.release();
+            this.runtimeLease = undefined;
+            return;
+          }
+        }
         await this.client.start();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error(`Eufy SDK startup failed: ${message}`);
+        await this.stopWithinDeadline(false);
       }
     }
 
@@ -65,19 +97,28 @@ export function createEufyPlatform(
       return this.stopPromise;
     }
 
-    private async stopClient(): Promise<'stopped'> {
+    private async stopClient(): Promise<'failed' | 'stopped'> {
       try {
         await this.client.stop();
+        if (this.runtimeLease) {
+          const release = await this.runtimeLease.release();
+          if (release.state !== 'stopped') {
+            return 'failed';
+          }
+          this.runtimeLease = undefined;
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error(`Eufy SDK shutdown failed: ${message}`);
+        return 'failed';
       }
 
       return 'stopped';
     }
 
-    private async stopWithinDeadline(): Promise<void> {
-      const stop = this.startPromise ? this.startPromise.then(() => this.stopClient()) : this.stopClient();
+    private async stopWithinDeadline(waitForStart = true): Promise<void> {
+      const stop =
+        waitForStart && this.startPromise ? this.startPromise.then(() => this.stopClient()) : this.stopClient();
 
       let timer: NodeJS.Timeout;
       const timeout = new Promise<'timeout'>((resolve) => {
@@ -87,7 +128,9 @@ export function createEufyPlatform(
       const result = await Promise.race([stop, timeout]);
       clearTimeout(timer!);
 
-      if (result === 'timeout') {
+      if (result === 'stopped') {
+        this.runtimeTracker?.stop();
+      } else if (result === 'timeout') {
         this.log.warn(`Eufy SDK shutdown exceeded ${shutdownTimeoutMs}ms; Homebridge shutdown will continue`);
       }
     }

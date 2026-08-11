@@ -20,13 +20,13 @@ async function renderUi(
   translationKeys: string[] = [],
 ) {
   function interactiveElement<T extends object>(state: T) {
-    const listeners: Record<string, Array<() => void>> = {};
+    const listeners: Record<string, Array<(event?: { preventDefault(): void }) => void | Promise<void>>> = {};
     return Object.assign(state, {
-      addEventListener(event: string, listener: () => void) {
+      addEventListener(event: string, listener: (event?: { preventDefault(): void }) => void | Promise<void>) {
         (listeners[event] ??= []).push(listener);
       },
-      dispatch(event: string) {
-        listeners[event]?.forEach((listener) => listener());
+      async dispatch(event: string) {
+        await Promise.all(listeners[event]?.map((listener) => listener({ preventDefault() {} })) ?? []);
       },
     });
   }
@@ -36,6 +36,22 @@ async function renderUi(
   const setupContent = { hidden: true };
   const acknowledgement = interactiveElement({ checked: false });
   const continueButton = interactiveElement({ disabled: true });
+  const authForm = interactiveElement({ hidden: false });
+  const challengeForm = interactiveElement({ hidden: true });
+  const account = { value: '' };
+  const password = { value: '' };
+  const country = { value: '' };
+  const trustedDeviceName = { value: '' };
+  const challengeAnswer = { value: '' };
+  const challengeImage = { hidden: true, src: '' };
+  const challengeLabel = { textContent: '' };
+  const authStatus = { textContent: '' };
+  const authSubmit = { disabled: false };
+  const challengeSubmit = { disabled: false };
+  const browserWindow = interactiveElement({});
+  const requests: Array<{ path: string; body: unknown }> = [];
+  let updatedConfig: Array<Record<string, unknown>> | undefined;
+  let saves = 0;
   const translatedNodes = translationKeys.map((key) => ({ dataset: { i18n: key }, textContent: '__untranslated__' }));
   const translatedLabels = ['accountConnectionLabel', 'setupSequenceLabel'].map((key) => ({
     attributes: { 'aria-label': '__untranslated__' },
@@ -55,6 +71,18 @@ async function renderUi(
           '[data-first-setup-continue]': continueButton,
           '[data-setup-content]': setupContent,
           '[data-ui-shell]': shell,
+          '[data-auth-form]': authForm,
+          '[data-challenge-form]': challengeForm,
+          '[data-account]': account,
+          '[data-password]': password,
+          '[data-country]': country,
+          '[data-trusted-device-name]': trustedDeviceName,
+          '[data-challenge-answer]': challengeAnswer,
+          '[data-challenge-image]': challengeImage,
+          '[data-challenge-label]': challengeLabel,
+          '[data-auth-status]': authStatus,
+          '[data-auth-submit]': authSubmit,
+          '[data-challenge-submit]': challengeSubmit,
         }[selector];
       },
       querySelectorAll(selector: string) {
@@ -65,6 +93,7 @@ async function renderUi(
       json: async () => catalogs[path],
       ok: path in catalogs,
     }),
+    clearTimeout,
     homebridge: {
       addEventListener(event: string, listener: () => Promise<void>) {
         if (event === 'ready') {
@@ -73,17 +102,49 @@ async function renderUi(
       },
       getPluginConfig: async () => pluginConfig,
       i18nCurrentLang: async () => language,
+      request: async (path: string, body: unknown) => {
+        requests.push({ path, body });
+        return path === '/auth/start'
+          ? { status: 'captcha', image: 'data:image/png;base64,c3ludGhldGlj', retry: false }
+          : { status: 'authenticated' };
+      },
+      savePluginConfig: async () => {
+        saves++;
+      },
+      updatePluginConfig: async (config: Array<Record<string, unknown>>) => {
+        updatedConfig = config;
+        return config;
+      },
       userCurrentLightingMode: async () => 'dark',
     },
+    setTimeout,
+    window: browserWindow,
   });
 
   await ready?.();
   return {
     firstSetup,
+    authForm,
+    authStatus,
+    account,
     acknowledgement,
+    challengeAnswer,
+    challengeForm,
+    challengeImage,
     continueButton,
+    country,
+    password,
+    requests,
     setupContent,
     shell,
+    get saves() {
+      return saves;
+    },
+    get updatedConfig() {
+      return updatedConfig;
+    },
+    trustedDeviceName,
+    browserWindow,
     translatedLabels: Object.fromEntries(
       translatedLabels.map((node) => [node.dataset.i18nAriaLabel, node.attributes['aria-label']]),
     ),
@@ -112,6 +173,7 @@ describe('packed plugin', () => {
       };
       const document = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'index.html'), 'utf8');
       const script = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'app.js'), 'utf8');
+      const server = readFileSync(join(packageDirectory, 'homebridge-ui', 'server.js'), 'utf8');
       const stylesheet = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'app.css'), 'utf8');
       const catalogs = Object.fromEntries(
         ['en', 'fr'].map((language) => [
@@ -137,6 +199,7 @@ describe('packed plugin', () => {
 
       expect(plugin.default).toBeTypeOf('function');
       expect(schema.customUi).toBe(true);
+      expect(result.files.map((file) => file.path)).toContain('dist/ui-server.js');
       expect(uiFiles).toEqual([
         'homebridge-ui/public/app.css',
         'homebridge-ui/public/app.js',
@@ -145,8 +208,9 @@ describe('packed plugin', () => {
         'homebridge-ui/public/i18n/en.json',
         'homebridge-ui/public/i18n/fr.json',
         'homebridge-ui/public/index.html',
+        'homebridge-ui/server.js',
       ]);
-      expect(document).toContain('data-authentication="unavailable"');
+      expect(document).toContain('data-authentication="ready"');
       expect(document).toContain('aria-current="step"');
       expect(document).toContain('href="app.css"');
       expect(document).toContain('src="app.js"');
@@ -155,17 +219,20 @@ describe('packed plugin', () => {
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
       expect(document).toContain('data-first-setup-continue');
+      expect(document).toContain('data-auth-form');
+      expect(document).toContain('data-challenge-form');
       expect(document).toMatch(/data-setup-content\s+hidden/);
       expect(document).toContain('support.eufylife.com/s/article/Share-Your-eufySecurity-Devices-With-Your-Family');
       expect(document).not.toContain('Connect your Eufy account');
       expect(document).not.toContain('First-time setup');
       expect(translationKeys).toEqual(
         [
-          'authNotReady',
+          'accountLabel',
+          'authenticate',
+          'authReady',
           'authSummary',
-          'authUnavailable',
+          'available',
           'brand',
-          'comingNext',
           'firstSetupEyebrow',
           'firstSetupIntro',
           'firstSetupAcknowledgement',
@@ -174,24 +241,38 @@ describe('packed plugin', () => {
           'firstSetupReasonLabel',
           'firstSetupTitle',
           'footnote',
+          'continueAuthentication',
+          'countryLabel',
           'oneAccountSession',
           'pageTitle',
+          'passwordLabel',
           'sessionDetails',
           'setupStatusEyebrow',
           'shareLink',
           'stepAuthenticate',
           'stepDevices',
           'stepDiscover',
+          'trustedDeviceLabel',
         ].sort(),
       );
       expect(translatedLabelKeys).toEqual(['accountConnectionLabel', 'setupSequenceLabel']);
-      const expectedCatalogKeys = [...translationKeys, ...translatedLabelKeys].sort();
+      const expectedCatalogKeys = [
+        ...translationKeys,
+        ...translatedLabelKeys,
+        'authBlocked',
+        'authFailed',
+        'authSuccess',
+        'authTimedOut',
+        'captchaLabel',
+        'twoFactorLabel',
+      ].sort();
       expect(Object.keys(catalogs['i18n/en.json']).sort()).toEqual(expectedCatalogKeys);
       expect(Object.keys(catalogs['i18n/fr.json']).sort()).toEqual(expectedCatalogKeys);
       expect([document, script, JSON.stringify(catalogs)].join('\n')).not.toMatch(/\b(?:SDK|runtime|IPC)\b/i);
       expect(logos.join('\n')).not.toMatch(/\bSDK\b/i);
       expect(document).not.toMatch(/<!doctype|<(?:html|head|body)(?:\s|>)/i);
       expect(script).toContain('homebridge.userCurrentLightingMode()');
+      expect(server).toContain("from '../dist/ui-server.js'");
       expect(stylesheet).toContain('--accent: #00bfc4');
       expect(darkTheme).toContain('--ink: #edf1f7');
       expect(darkTheme).not.toContain('var(--bs-');
@@ -202,12 +283,12 @@ describe('packed plugin', () => {
         firstSetup: { hidden: false },
         setupContent: { hidden: true },
       });
-      firstSetupUi.continueButton.dispatch('click');
+      await firstSetupUi.continueButton.dispatch('click');
       expect(firstSetupUi).toMatchObject({ firstSetup: { hidden: false }, setupContent: { hidden: true } });
       firstSetupUi.acknowledgement.checked = true;
-      firstSetupUi.acknowledgement.dispatch('change');
+      await firstSetupUi.acknowledgement.dispatch('change');
       expect(firstSetupUi.continueButton.disabled).toBe(false);
-      firstSetupUi.continueButton.dispatch('click');
+      await firstSetupUi.continueButton.dispatch('click');
       expect(firstSetupUi).toMatchObject({ firstSetup: { hidden: true }, setupContent: { hidden: false } });
 
       await expect(renderUi(script, [{ platform: 'EufySecurity' }], catalogs)).resolves.toMatchObject({
@@ -249,6 +330,43 @@ describe('packed plugin', () => {
       });
       expect(Object.values(englishUi.translations)).not.toContain('__untranslated__');
       expect(Object.values(englishUi.translations)).not.toContain(undefined);
+
+      englishUi.account.value = 'guest@example.invalid';
+      englishUi.password.value = 'synthetic-password';
+      englishUi.country.value = 'US';
+      englishUi.trustedDeviceName.value = 'Synthetic Homebridge';
+      await englishUi.authForm.dispatch('submit');
+      expect(englishUi.requests).toEqual([
+        {
+          path: '/auth/start',
+          body: {
+            account: 'guest@example.invalid',
+            password: 'synthetic-password',
+            country: 'US',
+            trustedDeviceName: 'Synthetic Homebridge',
+          },
+        },
+      ]);
+      expect(englishUi.challengeForm.hidden).toBe(false);
+      expect(englishUi.challengeImage).toMatchObject({
+        hidden: false,
+        src: 'data:image/png;base64,c3ludGhldGlj',
+      });
+      englishUi.challengeAnswer.value = '1234';
+      await englishUi.challengeForm.dispatch('submit');
+      expect(englishUi.requests[1]).toEqual({ path: '/auth/captcha', body: { answer: '1234' } });
+      expect(englishUi.updatedConfig).toEqual([
+        {
+          platform: 'EufySecurity',
+          username: 'guest@example.invalid',
+          password: 'synthetic-password',
+          country: 'US',
+          trustedDeviceName: 'Synthetic Homebridge',
+        },
+      ]);
+      expect(englishUi.saves).toBe(1);
+      await englishUi.browserWindow.dispatch('pagehide');
+      expect(englishUi.requests[2]).toEqual({ path: '/auth/close', body: undefined });
       await expect(renderUi(script, [], {}, 'fr', translationKeys)).resolves.toMatchObject({
         firstSetup: { hidden: false },
         shell: { lang: 'en' },

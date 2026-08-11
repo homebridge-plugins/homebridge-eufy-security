@@ -1,7 +1,13 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
+import { AccountOwnership } from '../../src/account-ownership.js';
 import type { SdkClient } from '../../src/sdk-client.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
+import { RuntimeTracker } from '../../src/runtime-tracker.js';
 
 describe('platform lifecycle', () => {
   it('passes validated V5 configuration to its SDK client factory', () => {
@@ -51,6 +57,49 @@ describe('platform lifecycle', () => {
     listeners.didFinishLaunching?.();
 
     await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
+  });
+
+  it('publishes fresh runtime evidence until the SDK client stops', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'eufy-platform-runtime-'));
+    const client: SdkClient = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const listeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
+    const Platform = createEufyPlatform(() => client);
+
+    try {
+      new Platform(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        { platform: 'EufySecurity', username: 'guest@example.invalid' },
+        {
+          on(event, listener): void {
+            listeners[event] = listener;
+          },
+          user: { storagePath: () => directory },
+        },
+      );
+      const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+
+      listeners.didFinishLaunching?.();
+      await vi.waitFor(async () => await expect(tracker.fresh()).resolves.toMatchObject({ state: 'starting' }));
+      await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
+      const ownership = new AccountOwnership(join(directory, 'eufy-security', 'ownership'));
+      await expect(ownership.acquire('guest@example.invalid', 'temporary-authentication')).resolves.toMatchObject({
+        state: 'owner-conflict',
+        owner: { kind: 'runtime' },
+      });
+      listeners.shutdown?.();
+      await vi.waitFor(() => expect(client.stop).toHaveBeenCalledOnce());
+      await vi.waitFor(async () => await expect(tracker.fresh()).resolves.toBeNull());
+      const acquired = await ownership.acquire('guest@example.invalid', 'temporary-authentication');
+      expect(acquired.state).toBe('owner');
+      if (acquired.state === 'owner') {
+        await acquired.lease.release();
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it('contains and reports SDK client startup failures', async () => {

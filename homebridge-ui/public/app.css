@@ -250,6 +250,67 @@ h2 {
   font-size: 10px;
 }
 
+.authentication-form,
+.challenge-form {
+  display: grid;
+  gap: 14px;
+}
+
+.authentication-form label,
+.challenge-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.35fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 9px 11px;
+  font: inherit;
+}
+
+input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.challenge-form {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.captcha {
+  width: min(100%, 260px);
+  min-height: 72px;
+  justify-self: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #ffffff;
+  object-fit: contain;
+}
+
+.authentication-status {
+  min-height: 21px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-weight: 650;
+}
+
 button {
   width: 100%;
   min-height: 44px;
@@ -281,6 +342,10 @@ button:disabled {
 
   .status {
     justify-self: start;
+  }
+
+  .field-row {
+    grid-template-columns: 1fr;
   }
 }
 

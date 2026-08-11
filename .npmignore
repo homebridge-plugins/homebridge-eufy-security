@@ -4,6 +4,7 @@ src
 # Ship only the production custom UI shell. The remaining checked-in UI is planning material.
 homebridge-ui/*
 !homebridge-ui/public/
+!homebridge-ui/server.js
 homebridge-ui/public/*
 !homebridge-ui/public/index.html
 !homebridge-ui/public/app.css

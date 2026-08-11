@@ -98,11 +98,11 @@ export class StagedAccountStores implements ActiveAccountStores {
     this.push = new AtomicJsonStore<PersistedPush>(join(directory, 'push.json'), 'push', maxRecordBytes);
   }
 
-  async commit(): Promise<void> {
+  async commit(signal?: AbortSignal): Promise<void> {
     if (this.settled) {
       throw new Error('staged account stores are already settled');
     }
-    await this.persistence.commit(this);
+    await this.persistence.commit(this, signal);
     this.settled = true;
   }
 
@@ -154,13 +154,20 @@ export class AccountSessionPersistence {
     return new StagedAccountStores(account, this, generation, directory, this.maxRecordBytes);
   }
 
-  async commit(staging: StagedAccountStores): Promise<void> {
+  async commit(staging: StagedAccountStores, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const generationsRoot = join(this.root, 'generations');
     await mkdir(generationsRoot, { mode: 0o700, recursive: true });
     await chmod(generationsRoot, 0o700);
+    const obsoleteGenerations = await readdir(generationsRoot);
     const generation = staging.getGeneration();
     const destination = join(generationsRoot, generation);
     await rename(staging.directory, destination);
+
+    if (signal?.aborted) {
+      await rm(destination, { force: true, recursive: true });
+      signal.throwIfAborted();
+    }
 
     try {
       await this.writeActiveGeneration({ version: 1, account: staging.account, generation });
@@ -169,14 +176,15 @@ export class AccountSessionPersistence {
       throw error;
     }
 
-    try {
-      const generations = await readdir(generationsRoot);
-      await Promise.allSettled(
-        generations
-          .filter((candidate) => candidate !== generation)
-          .map((candidate) => rm(join(generationsRoot, candidate), { force: true, recursive: true })),
-      );
-    } catch {}
+    void (async () => {
+      try {
+        await Promise.allSettled(
+          obsoleteGenerations.map((candidate) =>
+            rm(join(generationsRoot, candidate), { force: true, recursive: true }),
+          ),
+        );
+      } catch {}
+    })();
   }
 
   private stores(account: string, directory: string): ActiveAccountStores {

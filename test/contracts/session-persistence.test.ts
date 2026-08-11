@@ -88,6 +88,22 @@ describe('account session persistence', () => {
     expect(active?.push.load()).toEqual(push('replacement'));
   });
 
+  it('does not publish a staged account when commit is cancelled', async () => {
+    const persistence = new AccountSessionPersistence(await temporaryRoot());
+    const first = await persistence.stage('first@example.invalid');
+    first.session.save(session('first'));
+    await first.commit();
+    const replacement = await persistence.stage('replacement@example.invalid');
+    replacement.session.save(session('replacement'));
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(replacement.commit(controller.signal)).rejects.toThrow();
+    const active = await persistence.active();
+    expect(active?.account).toBe('first@example.invalid');
+    expect(active?.session.load()).toEqual(session('first'));
+  });
+
   it('bounds records and atomically preserves the previous record after a failed save', async () => {
     const persistence = new AccountSessionPersistence(await temporaryRoot(), 512);
     const staging = await persistence.stage('first@example.invalid');

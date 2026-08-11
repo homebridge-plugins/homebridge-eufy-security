@@ -38,16 +38,16 @@
   <section
     class="panel"
     aria-labelledby="authentication-status"
-    data-authentication="unavailable"
+    data-authentication="ready"
     data-setup-content
     hidden
   >
     <div class="status-row">
       <div>
         <p class="eyebrow" data-i18n="setupStatusEyebrow"></p>
-        <h2 id="authentication-status" data-i18n="authNotReady"></h2>
+        <h2 id="authentication-status" data-i18n="authReady"></h2>
       </div>
-      <span class="status" data-i18n="comingNext"></span>
+      <span class="status" data-i18n="available"></span>
     </div>
 
     <p class="summary" data-i18n="authSummary"></p>
@@ -70,7 +70,37 @@
       <li><span>3</span><strong data-i18n="stepDevices"></strong></li>
     </ol>
 
-    <button type="button" disabled data-i18n="authUnavailable"></button>
+    <form class="authentication-form" data-auth-form>
+      <label>
+        <span data-i18n="accountLabel"></span>
+        <input type="email" autocomplete="username" required data-account />
+      </label>
+      <label>
+        <span data-i18n="passwordLabel"></span>
+        <input type="password" autocomplete="current-password" required data-password />
+      </label>
+      <div class="field-row">
+        <label>
+          <span data-i18n="countryLabel"></span>
+          <input type="text" inputmode="text" maxlength="2" required data-country />
+        </label>
+        <label>
+          <span data-i18n="trustedDeviceLabel"></span>
+          <input type="text" maxlength="128" required data-trusted-device-name />
+        </label>
+      </div>
+      <button type="submit" data-auth-submit data-i18n="authenticate"></button>
+    </form>
+
+    <form class="challenge-form" data-challenge-form hidden>
+      <img class="captcha" alt="" data-challenge-image hidden />
+      <label>
+        <span data-challenge-label></span>
+        <input type="text" inputmode="numeric" autocomplete="one-time-code" required data-challenge-answer />
+      </label>
+      <button type="submit" data-challenge-submit data-i18n="continueAuthentication"></button>
+    </form>
+    <p class="authentication-status" role="status" aria-live="polite" data-auth-status></p>
   </section>
 
   <p class="footnote" data-i18n="footnote"></p>
