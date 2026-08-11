@@ -21,11 +21,11 @@
 ---
 
 > [!IMPORTANT]
-> **V5 is an implementation preview, not yet a replacement for the stable plugin.** Account
-> authentication, single-owner session restore, complete device discovery, and the first explicit
-> HomeKit adapter are available. Camera media, HKSV, motion and doorbell events, arming, locks, lights,
-> and battery enrichment are still being rebuilt. A device discovered by the SDK is not automatically
-> represented in HomeKit.
+> **V5 is a closed maintainer beta, not yet a replacement for the stable plugin. Registration is not
+> open; please do not request access.** Account authentication, single-owner session restore, complete
+> device discovery, and the first explicit HomeKit adapter are available. Camera media, HKSV, motion
+> and doorbell events, arming, locks, lights, and battery enrichment are still being rebuilt. A device
+> discovered by the SDK is not automatically represented in HomeKit.
 
 ## What it is
 
@@ -57,8 +57,9 @@ from npm:
 npm install -g @homebridge-plugins/homebridge-eufy-security
 ```
 
-The V5 branch is currently for development and controlled live qualification. It depends on a private
-GitHub Packages SDK prerelease and is not yet an anonymously installable public beta.
+The V5 branch is currently for development and a closed maintainer beta. Enrollment is not open. It
+depends on a private GitHub Packages SDK prerelease and is not yet an anonymously installable public
+beta.
 
 ## First-time setup
 
