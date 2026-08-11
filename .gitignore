@@ -120,7 +120,6 @@ dist
 .yarn/build-state.yml
 .pnp.*
 
-.npmrc
 .history
 .nx/
 
