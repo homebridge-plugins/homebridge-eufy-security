@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseConfig } from '../../src/configuration.js';
-import type { CompleteDeviceSnapshot } from '../../src/device-snapshot.js';
+import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import {
   TemporaryAuthentication,
   type TemporaryAuthenticationClient,
   type TemporaryAuthenticationClientOptions,
-} from '../../src/temporary-authentication.js';
-import { bindTemporaryAuthenticationProcessCleanup } from '../../src/ui-server.js';
-import { RuntimeTracker } from '../../src/runtime-tracker.js';
+} from '../../src/account/temporary-authentication.js';
+import { RuntimeTracker } from '../../src/runtime/tracker.js';
+import { bindTemporaryAuthenticationProcessCleanup } from '../../src/ui/server.js';
 
 function authenticationInput(account = 'guest@example.invalid') {
   return {

@@ -12,7 +12,7 @@ import {
   type ContactSdkDevice,
   type HapCharacteristicDefinition,
   type HapServiceDefinition,
-} from '../../src/adapters/contact.js';
+} from '../../src/homekit/adapters/contact.js';
 
 const HAP: ContactHapDefinitions = {
   ContactSensor: Service.ContactSensor,

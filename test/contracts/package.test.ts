@@ -202,7 +202,7 @@ describe('packed plugin', () => {
 
       expect(plugin.default).toBeTypeOf('function');
       expect(schema.customUi).toBe(true);
-      expect(result.files.map((file) => file.path)).toContain('dist/ui-server.js');
+      expect(result.files.map((file) => file.path)).toContain('dist/ui/server.js');
       expect(uiFiles).toEqual([
         'homebridge-ui/public/app.css',
         'homebridge-ui/public/app.js',
@@ -275,7 +275,7 @@ describe('packed plugin', () => {
       expect(logos.join('\n')).not.toMatch(/\bSDK\b/i);
       expect(document).not.toMatch(/<!doctype|<(?:html|head|body)(?:\s|>)/i);
       expect(script).toContain('homebridge.userCurrentLightingMode()');
-      expect(server).toContain("from '../dist/ui-server.js'");
+      expect(server).toContain("from '../dist/ui/server.js'");
       expect(stylesheet).toContain('--accent: #00bfc4');
       expect(darkTheme).toContain('--ink: #edf1f7');
       expect(darkTheme).not.toContain('var(--bs-');

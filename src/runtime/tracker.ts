@@ -2,7 +2,7 @@ import { chmodSync, closeSync, mkdirSync, openSync, readSync, renameSync, rmSync
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
-import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from './device-snapshot.js';
+import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 
 const MAX_TRACKER_BYTES = 1024 * 1024;
 const ACTIVE_RUNTIME_STATES = new Set<RuntimeState>([

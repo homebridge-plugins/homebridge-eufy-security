@@ -1,9 +1,9 @@
 import type { FcmStore, LoginResult, SessionStore } from '@mega-yfue/eufy-sdk';
 
-import type { AccountOwnerEvidence, AccountReleaseResult } from './account-ownership.js';
-import type { EufyConfig } from './configuration.js';
-import type { CompleteDeviceSnapshot } from './device-snapshot.js';
-import type { FreshRuntimeEvidence } from './runtime-tracker.js';
+import type { EufyConfig } from '../configuration.js';
+import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
+import type { FreshRuntimeEvidence } from '../runtime/tracker.js';
+import type { AccountOwnerEvidence, AccountReleaseResult } from './ownership.js';
 
 const FLOW_TIMEOUT = Symbol('flow-timeout');
 

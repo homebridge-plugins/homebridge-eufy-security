@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { PersistedPush, PersistedSession } from '@mega-yfue/eufy-sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { AccountSessionPersistence } from '../../src/session-persistence.js';
+import { AccountSessionPersistence } from '../../src/account/persistence.js';
 
 const roots: string[] = [];
 

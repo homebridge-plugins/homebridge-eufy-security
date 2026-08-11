@@ -1,3 +1,3 @@
-import { EufyAuthenticationUiServer } from '../dist/ui-server.js';
+import { EufyAuthenticationUiServer } from '../dist/ui/server.js';
 
 new EufyAuthenticationUiServer();

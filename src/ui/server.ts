@@ -3,17 +3,17 @@ import { join } from 'node:path';
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
 import { EufyMega } from '@mega-yfue/eufy-sdk';
 
-import { AccountOwnership } from './account-ownership.js';
-import { parseConfig } from './configuration.js';
-import { discoverCompleteDeviceSnapshot } from './device-snapshot.js';
-import { AccountSessionPersistence } from './session-persistence.js';
-import { RuntimeTracker } from './runtime-tracker.js';
+import { AccountOwnership } from '../account/ownership.js';
+import { AccountSessionPersistence } from '../account/persistence.js';
 import {
   TemporaryAuthentication,
   type TemporaryAuthenticationClientFactory,
   type TemporaryAuthenticationResult,
   type TemporaryAuthenticationInput,
-} from './temporary-authentication.js';
+} from '../account/temporary-authentication.js';
+import { parseConfig } from '../configuration.js';
+import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
+import { RuntimeTracker } from '../runtime/tracker.js';
 
 const AUTHENTICATION_FLOW_TIMEOUT_MS = 5 * 60_000;
 const AUTHENTICATION_CLEANUP_TIMEOUT_MS = 10_000;

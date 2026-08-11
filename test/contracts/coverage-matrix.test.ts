@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 import { CAPABILITY_MODULES } from '@mega-yfue/eufy-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ADAPTER_REGISTRY } from '../../src/adapters/registry.js';
-import { SDK_HAP_COVERAGE_MATRIX } from '../../src/coverage-matrix.js';
+import { ADAPTER_REGISTRY } from '../../src/homekit/adapters/registry.js';
+import { SDK_HAP_COVERAGE_MATRIX } from '../../src/homekit/coverage-matrix.js';
 
 const INFO_FIELDS = [
   'manufacturer',

@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { PersistedSession } from '@mega-yfue/eufy-sdk';
 
-import { AccountOwnership } from '../../src/account-ownership.js';
+import { AccountOwnership } from '../../src/account/ownership.js';
 import { parseConfig } from '../../src/configuration.js';
-import { AccountSessionPersistence } from '../../src/session-persistence.js';
-import type { SdkClient } from '../../src/sdk-client.js';
+import { AccountSessionPersistence } from '../../src/account/persistence.js';
+import type { SdkClient } from '../../src/runtime/sdk-client.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
-import { RuntimeTracker } from '../../src/runtime-tracker.js';
+import { RuntimeTracker } from '../../src/runtime/tracker.js';
 
 describe('platform lifecycle', () => {
   function session(): PersistedSession {

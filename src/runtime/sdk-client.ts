@@ -1,12 +1,11 @@
-import type { EufyMega } from '@mega-yfue/eufy-sdk';
+import type { EufyMega, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
 
-import type { EufyConfig } from './configuration.js';
+import type { EufyConfig } from '../configuration.js';
 import {
   discoverCompleteDeviceRegistry,
   type CompleteDeviceSnapshot,
   type DiscoveryDevice,
-} from './device-snapshot.js';
-import type { ActiveAccountStores } from './session-persistence.js';
+} from '../device/snapshot.js';
 
 export type SdkStartResult =
   | {
@@ -23,7 +22,13 @@ export interface SdkClient {
   onInventory?(listener: (result: SdkStartResult) => void): void;
 }
 
-export type SdkClientFactory = (config: EufyConfig, stores?: ActiveAccountStores) => SdkClient;
+export interface RuntimeClientStores {
+  account: string;
+  session: SessionStore;
+  push: FcmStore;
+}
+
+export type SdkClientFactory = (config: EufyConfig, stores?: RuntimeClientStores) => SdkClient;
 
 export class SyntheticSdkClient implements SdkClient {
   async start(): Promise<void> {}
@@ -46,7 +51,7 @@ export class PersistedSdkClient implements SdkClient {
 
   constructor(
     private readonly config: EufyConfig,
-    private readonly stores: ActiveAccountStores,
+    private readonly stores: RuntimeClientStores,
     private readonly restoredClient?: EufyMega,
   ) {}
 
@@ -140,7 +145,7 @@ export class PersistedSdkClient implements SdkClient {
   }
 }
 
-export function createPersistedSdkClient(config: EufyConfig, stores?: ActiveAccountStores): SdkClient {
+export function createPersistedSdkClient(config: EufyConfig, stores?: RuntimeClientStores): SdkClient {
   if (!stores) {
     return createSyntheticSdkClient(config);
   }

@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import type { DeviceManifest, EufyMega, PersistedSession } from '@mega-yfue/eufy-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AccountOwnership } from '../../src/account-ownership.js';
+import { AccountOwnership } from '../../src/account/ownership.js';
+import { AccountSessionPersistence } from '../../src/account/persistence.js';
 import { parseConfig } from '../../src/configuration.js';
-import type { CompleteDeviceSnapshot } from '../../src/device-snapshot.js';
+import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
-import { RuntimeTracker } from '../../src/runtime-tracker.js';
-import { AccountSessionPersistence } from '../../src/session-persistence.js';
-import type { SdkClient } from '../../src/sdk-client.js';
-import { PersistedSdkClient } from '../../src/sdk-client.js';
+import { RuntimeOwner } from '../../src/runtime/owner.js';
+import { PersistedSdkClient, type SdkClient } from '../../src/runtime/sdk-client.js';
+import { RuntimeTracker } from '../../src/runtime/tracker.js';
 
 const roots: string[] = [];
 
@@ -89,6 +89,84 @@ afterEach(async () => {
 });
 
 describe('persisted runtime owner', () => {
+  it('owns startup, complete publication, and shutdown through one direct interface', async () => {
+    const calls: string[] = [];
+    const config = parseConfig({
+      platform: 'EufySecurity',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    const current = snapshot('synthetic-current');
+    const release = vi.fn(async () => {
+      calls.push('release');
+      return { state: 'stopped' as const };
+    });
+    const client: SdkClient = {
+      start: vi.fn(async () => {
+        calls.push('client:start');
+        return {
+          state: 'ready' as const,
+          registry: new Map([['synthetic-current', { describe: () => manifest('synthetic-current') }]]),
+          snapshot: current,
+        };
+      }),
+      stop: vi.fn(async () => {
+        calls.push('client:stop');
+      }),
+    };
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn: vi.fn() }, config, () => client, {
+      storageRoot: '/synthetic-runtime',
+      ownership: {
+        acquire: vi.fn(async () => {
+          calls.push('acquire');
+          return { state: 'owner' as const, lease: { release }, recovered: false };
+        }),
+      },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: {
+            load: () => null,
+            save: vi.fn(() => calls.push('snapshot:save')),
+          },
+        })),
+      },
+      statusPublisher: {
+        start: vi.fn(() => {
+          calls.push('status:starting');
+          return true;
+        }),
+        update: vi.fn((state) => {
+          calls.push(`status:${state}`);
+          return true;
+        }),
+        stop: vi.fn(() => calls.push('status:stopped')),
+      },
+    });
+
+    await Promise.all([runtime.start(), runtime.start()]);
+    await Promise.all([runtime.stop(), runtime.stop()]);
+
+    expect(client.start).toHaveBeenCalledOnce();
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(calls).toEqual([
+      'acquire',
+      'status:starting',
+      'client:start',
+      'snapshot:save',
+      'status:ready',
+      'status:stopping',
+      'client:stop',
+      'release',
+      'status:stopped',
+    ]);
+  });
+
   it('acquires once and publishes a complete snapshot before becoming ready', async () => {
     const { directory, persistence } = await activeRuntime();
     const active = await persistence.active();

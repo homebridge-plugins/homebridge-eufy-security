@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { AccountOwnership } from '../../src/account-ownership.js';
+import { AccountOwnership } from '../../src/account/ownership.js';
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -33,7 +33,7 @@ async function spawnOwnershipAttempt(root: string): Promise<{
   result: { state: string; pid?: number; owner?: { pid: number } };
 }> {
   const repository = fileURLToPath(new URL('../..', import.meta.url));
-  const moduleUrl = pathToFileURL(join(repository, 'src/account-ownership.ts')).href;
+  const moduleUrl = pathToFileURL(join(repository, 'src/account/ownership.ts')).href;
   const script = `
     import { AccountOwnership } from ${JSON.stringify(moduleUrl)};
     const result = await new AccountOwnership(process.argv[1]).acquire(process.argv[2], 'runtime');

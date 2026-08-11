@@ -6,9 +6,9 @@ import type { PersistedPush, PersistedSession } from '@mega-yfue/eufy-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseConfig } from '../../src/configuration.js';
-import { discoverCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../../src/device-snapshot.js';
-import { AccountSessionPersistence, type AccountPersistenceBoundary } from '../../src/session-persistence.js';
-import { TemporaryAuthentication } from '../../src/temporary-authentication.js';
+import { AccountSessionPersistence, type AccountPersistenceBoundary } from '../../src/account/persistence.js';
+import { TemporaryAuthentication } from '../../src/account/temporary-authentication.js';
+import { discoverCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 
 const roots: string[] = [];
 

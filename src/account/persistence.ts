@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 
 import type { FcmStore, PersistedPush, PersistedSession, SessionStore } from '@mega-yfue/eufy-sdk';
 
-import { parseConfig, serializeConfig, type EufyConfig } from './configuration.js';
-import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from './device-snapshot.js';
+import { parseConfig, serializeConfig, type EufyConfig } from '../configuration.js';
+import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 
 const DEFAULT_MAX_RECORD_BYTES = 1024 * 1024;
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
