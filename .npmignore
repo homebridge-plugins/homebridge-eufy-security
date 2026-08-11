@@ -1,8 +1,21 @@
 # Ignore source code
 src
 
-# The checked-in V5 dashboard is a planning prototype, not shipped runtime UI.
-homebridge-ui
+# Ship only the production custom UI shell. The remaining checked-in UI is planning material.
+homebridge-ui/*
+!homebridge-ui/public/
+homebridge-ui/public/*
+!homebridge-ui/public/index.html
+!homebridge-ui/public/app.css
+!homebridge-ui/public/app.js
+!homebridge-ui/public/assets/
+homebridge-ui/public/assets/*
+!homebridge-ui/public/assets/logo.svg
+!homebridge-ui/public/assets/logo-dark.svg
+!homebridge-ui/public/i18n/
+homebridge-ui/public/i18n/*
+!homebridge-ui/public/i18n/en.json
+!homebridge-ui/public/i18n/fr.json
 
 # ------------- Defaults ------------- #
 

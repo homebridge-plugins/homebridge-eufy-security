@@ -1,0 +1,308 @@
+:root {
+  color-scheme: light dark;
+  --accent: #00bfc4;
+  --accent-ink: #006f73;
+  --accent-soft: #fefefe;
+  --ink: var(--bs-body-color, #182033);
+  --muted: var(--bs-secondary-color, #667085);
+  --line: var(--bs-border-color, #d9dfeb);
+  --panel: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.shell {
+  width: min(100%, 720px);
+  margin: 0 auto;
+  padding: 4px 0 18px;
+  color: var(--ink);
+}
+
+.masthead {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 18px;
+}
+
+.eufy-logo {
+  width: 100px;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  padding: 5px;
+}
+
+.eufy-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.eufy-logo .logo-dark {
+  display: none;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(22px, 5vw, 30px);
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.eyebrow {
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: clamp(18px, 5vw, 30px);
+  box-shadow: 0 14px 40px rgb(32 48 78 / 9%);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.first-setup {
+  position: relative;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  padding: 16px 18px;
+}
+
+.first-setup::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -3px;
+  width: 10px;
+  height: 10px;
+  border-top: 4px solid var(--accent);
+  border-right: 4px solid var(--accent);
+  background: var(--accent-soft);
+  transform: translate(-50%, -50%) rotate(225deg);
+}
+
+.first-setup h2 {
+  margin-bottom: 8px;
+}
+
+.first-setup p {
+  margin-bottom: 10px;
+}
+
+.first-setup-reason {
+  color: var(--muted);
+}
+
+.first-setup a {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.first-setup a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.first-setup-confirmation {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.first-setup-confirmation label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.first-setup-confirmation input {
+  appearance: none;
+  display: grid;
+  place-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  border: 2px solid var(--accent-ink);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.first-setup-confirmation input::before {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-bottom: 2px solid #07383a;
+  border-left: 2px solid #07383a;
+  transform: rotate(-45deg) scale(0);
+}
+
+.first-setup-confirmation input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.first-setup-confirmation input:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+.first-setup-confirmation input:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+.status-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.summary {
+  margin: 17px 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.handoff {
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  padding: 13px 15px;
+}
+
+.handoff p {
+  margin: 4px 0 0;
+  color: #3f4f75;
+  font-size: 12px;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: grid;
+  gap: 6px;
+  border-top: 3px solid var(--line);
+  padding-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.steps li.current {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.steps span {
+  font-size: 10px;
+}
+
+button {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #07383a;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.footnote {
+  margin: 12px 4px 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+@media (max-width: 420px) {
+  .status-row {
+    display: grid;
+  }
+
+  .status {
+    justify-self: start;
+  }
+}
+
+.shell[data-theme="dark"] {
+  color-scheme: dark;
+  --accent: #00bfc4;
+  --accent-ink: #67e1e4;
+  --accent-soft: #232323;
+  --ink: #edf1f7;
+  --muted: #aab3c2;
+  --line: #465064;
+  --panel: #262d39;
+}
+
+.shell[data-theme="dark"] .handoff p {
+  color: #c6d3f5;
+}
+
+.shell[data-theme="dark"] .eufy-logo .logo-light {
+  display: none;
+}
+
+.shell[data-theme="dark"] .eufy-logo .logo-dark {
+  display: block;
+}

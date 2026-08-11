@@ -1,0 +1,79 @@
+<link rel="stylesheet" href="app.css" />
+
+<main class="shell" data-ui-shell>
+  <header class="masthead">
+    <span class="eufy-logo" aria-hidden="true">
+      <img class="logo-light" src="assets/logo.svg" alt="" />
+      <img class="logo-dark" src="assets/logo-dark.svg" alt="" />
+    </span>
+    <div>
+      <p class="eyebrow" data-i18n="brand"></p>
+      <h1 data-i18n="pageTitle"></h1>
+    </div>
+  </header>
+
+  <aside class="first-setup" data-first-setup hidden aria-labelledby="first-setup-title">
+    <p class="eyebrow" data-i18n="firstSetupEyebrow"></p>
+    <h2 id="first-setup-title" data-i18n="firstSetupTitle"></h2>
+    <p data-i18n="firstSetupIntro"></p>
+    <p class="first-setup-reason">
+      <strong data-i18n="firstSetupReasonLabel"></strong>
+      <span data-i18n="firstSetupReasonBody"></span>
+    </p>
+    <a
+      href="https://support.eufylife.com/s/article/Share-Your-eufySecurity-Devices-With-Your-Family"
+      target="_blank"
+      rel="noopener noreferrer"
+      data-i18n="shareLink"
+    ></a>
+    <div class="first-setup-confirmation">
+      <label>
+        <input type="checkbox" data-first-setup-ack />
+        <span data-i18n="firstSetupAcknowledgement"></span>
+      </label>
+      <button type="button" data-first-setup-continue disabled data-i18n="firstSetupContinue"></button>
+    </div>
+  </aside>
+
+  <section
+    class="panel"
+    aria-labelledby="authentication-status"
+    data-authentication="unavailable"
+    data-setup-content
+    hidden
+  >
+    <div class="status-row">
+      <div>
+        <p class="eyebrow" data-i18n="setupStatusEyebrow"></p>
+        <h2 id="authentication-status" data-i18n="authNotReady"></h2>
+      </div>
+      <span class="status" data-i18n="comingNext"></span>
+    </div>
+
+    <p class="summary" data-i18n="authSummary"></p>
+
+    <div
+      class="handoff"
+      role="note"
+      aria-label=""
+      data-i18n-aria-label="accountConnectionLabel"
+    >
+      <strong data-i18n="oneAccountSession"></strong>
+      <p data-i18n="sessionDetails"></p>
+    </div>
+
+    <ol class="steps" aria-label="" data-i18n-aria-label="setupSequenceLabel">
+      <li class="current" aria-current="step">
+        <span>1</span><strong data-i18n="stepAuthenticate"></strong>
+      </li>
+      <li><span>2</span><strong data-i18n="stepDiscover"></strong></li>
+      <li><span>3</span><strong data-i18n="stepDevices"></strong></li>
+    </ol>
+
+    <button type="button" disabled data-i18n="authUnavailable"></button>
+  </section>
+
+  <p class="footnote" data-i18n="footnote"></p>
+</main>
+
+<script src="app.js"></script>
