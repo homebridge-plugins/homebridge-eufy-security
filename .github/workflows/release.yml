@@ -26,6 +26,7 @@ jobs:
     if: >-
       github.repository == 'homebridge-plugins/homebridge-eufy-security'
       && !(github.event_name == 'release' && github.event.release.prerelease)
+      && github.ref != 'refs/heads/beta-5.0.0'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -40,8 +41,15 @@ jobs:
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@latest
 
+      - name: Configure GitHub Packages
+        run: |
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          printf '\n@mega-yfue:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${GH_PACKAGES_TOKEN}\n' >> "$npmrc"
+
       - name: Install dependencies
-        run: npm ci
+        env:
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: npm ci --ignore-scripts
 
       - name: Lint
         run: npm run lint
