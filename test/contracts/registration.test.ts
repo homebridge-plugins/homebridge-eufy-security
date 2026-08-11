@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import registerPlugin from '../../src/index.js';
-import { EufySecurityPlatform } from '../../src/platform.js';
+import { EufyPlatform } from '../../src/platform.js';
 
 describe('plugin registration', () => {
   it('registers the historical EufySecurity platform alias', () => {
@@ -12,7 +12,7 @@ describe('plugin registration', () => {
     expect(registerPlatform).toHaveBeenCalledExactlyOnceWith(
       '@homebridge-plugins/homebridge-eufy-security',
       'EufySecurity',
-      EufySecurityPlatform,
+      EufyPlatform,
     );
   });
 });

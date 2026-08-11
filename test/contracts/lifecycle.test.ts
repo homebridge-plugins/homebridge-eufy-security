@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SdkClient } from '../../src/sdk-client.js';
-import { createEufySecurityPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
+import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
 
 describe('platform lifecycle', () => {
   it('starts its SDK client after Homebridge finishes launching', async () => {
@@ -10,7 +10,7 @@ describe('platform lifecycle', () => {
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const listeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
-    const Platform = createEufySecurityPlatform(() => client);
+    const Platform = createEufyPlatform(() => client);
 
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -34,7 +34,7 @@ describe('platform lifecycle', () => {
     };
     const listeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
     const error = vi.fn();
-    const Platform = createEufySecurityPlatform(() => client);
+    const Platform = createEufyPlatform(() => client);
 
     new Platform(
       { error, info: vi.fn(), warn: vi.fn() },
@@ -60,7 +60,7 @@ describe('platform lifecycle', () => {
     };
     const listeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
     const warn = vi.fn();
-    const Platform = createEufySecurityPlatform(() => client, 1_000);
+    const Platform = createEufyPlatform(() => client, 1_000);
 
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn },
@@ -96,7 +96,7 @@ describe('platform lifecycle', () => {
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const listeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
-    const Platform = createEufySecurityPlatform(() => client, 1_000);
+    const Platform = createEufyPlatform(() => client, 1_000);
 
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn: vi.fn() },

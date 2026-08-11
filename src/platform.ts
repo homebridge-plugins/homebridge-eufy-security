@@ -14,15 +14,15 @@ export interface PlatformApi {
   on(event: PlatformLifecycleEvent, listener: () => void): void;
 }
 
-export interface EufySecurityPlatformConstructor {
+export interface EufyPlatformConstructor {
   new (log: PlatformLogger, config: PlatformConfig, api: PlatformApi): DynamicPlatformPlugin;
 }
 
-export function createEufySecurityPlatform(
+export function createEufyPlatform(
   clientFactory: SdkClientFactory,
   shutdownTimeoutMs = 10_000,
-): EufySecurityPlatformConstructor {
-  return class EufySecurityPlatform implements DynamicPlatformPlugin {
+): EufyPlatformConstructor {
+  return class EufyPlatform implements DynamicPlatformPlugin {
     private readonly client: SdkClient;
     private startPromise?: Promise<void>;
     private stopPromise?: Promise<void>;
@@ -95,4 +95,4 @@ export function createEufySecurityPlatform(
   };
 }
 
-export const EufySecurityPlatform = createEufySecurityPlatform(createSyntheticSdkClient);
+export const EufyPlatform = createEufyPlatform(createSyntheticSdkClient);
