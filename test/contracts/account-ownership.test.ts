@@ -109,6 +109,33 @@ describe('account SDK ownership', () => {
     await expect(acquired.lease.release()).resolves.toEqual({ state: 'stopped' });
   });
 
+  it('runs release finalization before a successor can acquire ownership', async () => {
+    const root = await temporaryRoot();
+    const ownership = new AccountOwnership(root);
+    const acquired = await ownership.acquire('synthetic-account', 'runtime');
+    expect(acquired.state).toBe('owner');
+    if (acquired.state !== 'owner') {
+      return;
+    }
+    let successor: ReturnType<AccountOwnership['acquire']> | undefined;
+    let successorAcquired = false;
+
+    await acquired.lease.release(() => {
+      successor = ownership.acquire('synthetic-account', 'temporary-authentication');
+      void successor.then(() => {
+        successorAcquired = true;
+      });
+      expect(successorAcquired).toBe(false);
+    });
+
+    expect(successorAcquired).toBe(false);
+    const result = await successor;
+    expect(result?.state).toBe('owner');
+    if (result?.state === 'owner') {
+      await result.lease.release();
+    }
+  });
+
   it('does not expose the account identifier in its filesystem names', async () => {
     const root = await temporaryRoot();
     const ownership = new AccountOwnership(root);

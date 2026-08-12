@@ -3,9 +3,14 @@
 ## State meanings
 
 - `ready`: the persisted session, listeners, canonical registry, and complete snapshot are available.
-- `degraded`: current discovery was partial; the latest complete snapshot remains authoritative.
+- `degraded`: connectivity was lost or current discovery was partial; the latest complete snapshot
+  remains authoritative until complete discovery succeeds after recovery.
 - `authentication-required`: the persisted session is absent or rejected.
 - `owner-conflict`: another live process owns the account.
+- `stopping`: bounded SDK and ownership cleanup is in progress.
+- `failed`: startup, publication, or cleanup failed; the retained complete snapshot remains available
+  for topology but operations are unavailable.
+- `stopped`: cleanup completed and no runtime owner remains.
 
 ## Safe checks
 

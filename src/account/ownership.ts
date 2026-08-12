@@ -81,8 +81,8 @@ export class AccountLease {
     this.token = token;
   }
 
-  release(): Promise<AccountReleaseResult> {
-    return this.ownership.release(this.accountKey, this.token);
+  release(onReleased?: () => void): Promise<AccountReleaseResult> {
+    return this.ownership.release(this.accountKey, this.token, onReleased);
   }
 }
 
@@ -130,7 +130,7 @@ export class AccountOwnership {
     }
   }
 
-  async release(accountKey: string, token: string): Promise<AccountReleaseResult> {
+  async release(accountKey: string, token: string, onReleased?: () => void): Promise<AccountReleaseResult> {
     const accountDirectory = join(this.root, accountKey);
     await this.prepareDirectory(accountDirectory);
     const releaseGuard = await this.acquireGuard(accountDirectory);
@@ -146,6 +146,7 @@ export class AccountOwnership {
       }
 
       await rm(ownerPath, { force: true });
+      onReleased?.();
       return { state: 'stopped' };
     } finally {
       await releaseGuard();

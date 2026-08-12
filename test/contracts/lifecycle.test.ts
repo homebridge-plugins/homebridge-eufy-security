@@ -186,6 +186,17 @@ describe('platform lifecycle', () => {
       }
       listeners.shutdown?.();
       await vi.waitFor(() => expect(client.stop).toHaveBeenCalledOnce());
+      let acquiredAfterShutdown: Awaited<ReturnType<AccountOwnership['acquire']>> | undefined;
+      await vi.waitFor(async () => {
+        const result = await ownership.acquire('replacement@example.invalid', 'temporary-authentication');
+        if (result.state !== 'owner') {
+          throw new Error('runtime ownership has not been released');
+        }
+        acquiredAfterShutdown = result;
+      });
+      if (acquiredAfterShutdown?.state === 'owner') {
+        await acquiredAfterShutdown.lease.release();
+      }
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -248,7 +259,7 @@ describe('platform lifecycle', () => {
     vi.useRealTimers();
   });
 
-  it('stops a client that finishes starting after the shutdown deadline', async () => {
+  it('disconnects an in-progress startup without waiting for its deadline', async () => {
     vi.useFakeTimers();
     let finishStartup: (() => void) | undefined;
     const client: SdkClient = {
@@ -274,11 +285,50 @@ describe('platform lifecycle', () => {
     listeners.didFinishLaunching?.();
     listeners.shutdown?.();
 
+    expect(client.stop).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(client.stop).not.toHaveBeenCalled();
     finishStartup?.();
     await vi.advanceTimersByTimeAsync(0);
     expect(client.stop).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
+
+  it.each(['SIGHUP', 'SIGINT', 'SIGTERM'] as const)(
+    'routes %s and Homebridge shutdown through one runtime cleanup',
+    async (signal) => {
+      const client: SdkClient = {
+        start: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      const lifecycleListeners: Partial<Record<PlatformLifecycleEvent, () => void>> = {};
+      const signalListeners = new Map<string, () => void>();
+      const signalTarget = {
+        on: vi.fn((event: string, listener: () => void) => signalListeners.set(event, listener)),
+        off: vi.fn((event: string, listener: () => void) => {
+          if (signalListeners.get(event) === listener) {
+            signalListeners.delete(event);
+          }
+        }),
+      };
+      const Platform = createEufyPlatform(() => client, 10_000, signalTarget);
+
+      new Platform(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        { platform: 'HomebridgeEufy' },
+        {
+          on(event, listener): void {
+            lifecycleListeners[event] = listener;
+          },
+        },
+      );
+
+      lifecycleListeners.didFinishLaunching?.();
+      await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
+      signalListeners.get(signal)?.();
+      lifecycleListeners.shutdown?.();
+      await vi.waitFor(() => expect(client.stop).toHaveBeenCalledOnce());
+      expect(signalListeners.size).toBe(0);
+      expect(signalTarget.off).toHaveBeenCalledTimes(3);
+    },
+  );
 });

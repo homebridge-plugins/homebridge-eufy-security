@@ -2,7 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { Device, DeviceManifest, EufyMega, PersistedSession } from '@mega-yfue/eufy-sdk';
+import {
+  SessionExpiredError,
+  type Device,
+  type DeviceManifest,
+  type EufyMega,
+  type PersistedSession,
+} from '@mega-yfue/eufy-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AccountOwnership } from '../../src/account/ownership.js';
@@ -88,6 +94,11 @@ function lifecycle() {
   };
 }
 
+async function releaseLease(onReleased?: () => void): Promise<{ state: 'stopped' }> {
+  onReleased?.();
+  return { state: 'stopped' };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
@@ -101,8 +112,9 @@ describe('persisted runtime owner', () => {
       password: 'persisted-password',
     });
     const current = snapshot('synthetic-current');
-    const release = vi.fn(async () => {
+    const release = vi.fn(async (onReleased?: () => void) => {
       calls.push('release');
+      onReleased?.();
       return { state: 'stopped' as const };
     });
     const client: SdkClient = {
@@ -197,7 +209,7 @@ describe('persisted runtime owner', () => {
       ownership: {
         acquire: vi.fn(async () => ({
           state: 'owner' as const,
-          lease: { release: vi.fn(async () => ({ state: 'stopped' as const })) },
+          lease: { release: vi.fn(releaseLease) },
           recovered: false,
         })),
       },
@@ -533,9 +545,11 @@ describe('persisted runtime owner', () => {
       state: 'ready',
       snapshot: snapshot('synthetic-current'),
     });
-    expect(calls.slice(0, 5)).toEqual([
+    expect(calls.slice(0, 7)).toEqual([
       'on:error',
       'on:event',
+      'on:connect',
+      'on:disconnect',
       'on:deviceAdded',
       'on:deviceRemoved',
       'on:deviceCapabilities',
@@ -543,5 +557,405 @@ describe('persisted runtime owner', () => {
     expect(calls.indexOf('login')).toBeLessThan(calls.indexOf('getDevices'));
     expect(getDevices).toHaveBeenCalledOnce();
     expect(getDevice).toHaveBeenCalledExactlyOnceWith('synthetic-current');
+  });
+
+  it('degrades on connectivity loss, refreshes after recovery, and removes every SDK listener on stop', async () => {
+    const { persistence } = await activeRuntime();
+    const active = await persistence.active();
+    expect(active).not.toBeNull();
+    const listeners = new Map<string, Set<(...args: never[]) => void>>();
+    const on = vi.fn((event: string, listener: (...args: never[]) => void) => {
+      const eventListeners = listeners.get(event) ?? new Set();
+      eventListeners.add(listener);
+      listeners.set(event, eventListeners);
+    });
+    const off = vi.fn((event: string, listener: (...args: never[]) => void) => {
+      const eventListeners = listeners.get(event);
+      eventListeners?.delete(listener);
+      if (eventListeners?.size === 0) {
+        listeners.delete(event);
+      }
+    });
+    const disconnect = vi.fn(async () => undefined);
+    let finishRefresh: ((devices: Array<{ sn: string }>) => void) | undefined;
+    const getDevices = vi.fn(() => {
+      if (getDevices.mock.calls.length === 2) {
+        return new Promise<Array<{ sn: string }>>((resolve) => {
+          finishRefresh = resolve;
+        });
+      }
+      return Promise.resolve([{ sn: 'synthetic-current' }]);
+    });
+    const client = {
+      loggedIn: true,
+      login: vi.fn(async () => ({ status: 'ok' as const, raw: { restored: true } })),
+      on,
+      off,
+      disconnect,
+      getDevices,
+      getDevice: vi.fn(async () => ({ describe: () => manifest('synthetic-current') })),
+    } as unknown as EufyMega;
+    const runtime = new PersistedSdkClient(
+      parseConfig({
+        platform: 'HomebridgeEufy',
+        username: 'runtime@example.invalid',
+        password: 'persisted-password',
+      }),
+      active!,
+      client,
+    );
+    const inventory = vi.fn();
+    runtime.onInventory(inventory);
+
+    await expect(runtime.start()).resolves.toMatchObject({ state: 'ready' });
+    expect([...listeners.keys()]).toEqual([
+      'error',
+      'event',
+      'connect',
+      'disconnect',
+      'deviceAdded',
+      'deviceRemoved',
+      'deviceCapabilities',
+    ]);
+
+    listeners.get('deviceAdded')?.forEach((listener) => listener());
+    await vi.waitFor(() => expect(getDevices).toHaveBeenCalledTimes(2));
+    listeners.get('disconnect')?.forEach((listener) => listener());
+    expect(inventory).toHaveBeenCalledWith({ state: 'degraded' });
+    finishRefresh?.([{ sn: 'synthetic-current' }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(inventory).toHaveBeenLastCalledWith({ state: 'degraded' });
+
+    listeners.get('connect')?.forEach((listener) => listener());
+    await vi.waitFor(() => expect(getDevices).toHaveBeenCalledTimes(3));
+    expect(inventory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: 'ready', snapshot: snapshot('synthetic-current') }),
+    );
+    listeners
+      .get('error')
+      ?.forEach((listener) => listener(new SessionExpiredError('synthetic persisted session expired') as never));
+    expect(inventory).toHaveBeenLastCalledWith({ state: 'authentication-required' });
+
+    const installedListeners = [...listeners.entries()].flatMap(([event, eventListeners]) =>
+      [...eventListeners].map((listener) => [event, listener] as const),
+    );
+    const priorOffCalls = off.mock.calls.length;
+    await runtime.stop();
+
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(off).toHaveBeenCalledTimes(priorOffCalls + installedListeners.length);
+    for (const [event, listener] of installedListeners) {
+      expect(off).toHaveBeenCalledWith(event, listener);
+    }
+    expect(listeners.size).toBe(0);
+  });
+
+  it('converges authentication expiry and shutdown on one cleanup operation', async () => {
+    const config = parseConfig({
+      platform: 'HomebridgeEufy',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    let reportInventory: ((result: SdkStartResult) => void) | undefined;
+    let finishDisconnect: (() => void) | undefined;
+    const release = vi.fn(releaseLease);
+    const client: SdkClient = {
+      onInventory(listener): void {
+        reportInventory = listener;
+      },
+      start: vi.fn(async () => ({
+        state: 'ready' as const,
+        registry: new Map([['synthetic-current', sdkDevice('synthetic-current')]]),
+        snapshot: snapshot('synthetic-current'),
+      })),
+      stop: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishDisconnect = resolve;
+          }),
+      ),
+    };
+    const statusPublisher = { start: vi.fn(() => true), update: vi.fn(() => true), stop: vi.fn() };
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn: vi.fn() }, config, () => client, {
+      storageRoot: '/synthetic-runtime',
+      ownership: {
+        acquire: vi.fn(async () => ({
+          state: 'owner' as const,
+          lease: { release },
+          recovered: false,
+        })),
+      },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: { load: () => snapshot('synthetic-current'), save: vi.fn() },
+        })),
+      },
+      statusPublisher,
+    });
+    await runtime.start();
+
+    reportInventory?.({ state: 'authentication-required' });
+    const shutdown = runtime.stop();
+    expect(runtime.currentState()).toBe('stopping');
+    expect(client.stop).toHaveBeenCalledOnce();
+    finishDisconnect?.();
+    await shutdown;
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(runtime.currentState()).toBe('stopped');
+    expect(statusPublisher.stop).toHaveBeenCalledOnce();
+  });
+
+  it('bounds stalled disconnect, releases its lease once, and publishes failed cleanup', async () => {
+    vi.useFakeTimers();
+    const config = parseConfig({
+      platform: 'HomebridgeEufy',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    const release = vi.fn(releaseLease);
+    const client: SdkClient = {
+      start: vi.fn(async () => ({ state: 'degraded' as const })),
+      stop: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const statusPublisher = { start: vi.fn(() => true), update: vi.fn(() => true), stop: vi.fn() };
+    const warn = vi.fn();
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn }, config, () => client, {
+      storageRoot: '/synthetic-runtime',
+      shutdownTimeoutMs: 1_000,
+      ownership: {
+        acquire: vi.fn(async () => ({
+          state: 'owner' as const,
+          lease: { release },
+          recovered: false,
+        })),
+      },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: { load: () => snapshot('synthetic-old'), save: vi.fn() },
+        })),
+      },
+      statusPublisher,
+    });
+    await runtime.start();
+
+    const stopping = runtime.stop();
+    expect(runtime.currentState()).toBe('stopping');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopping;
+
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(runtime.currentState()).toBe('failed');
+    expect(statusPublisher.update).toHaveBeenLastCalledWith('failed');
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'Eufy SDK shutdown exceeded 1000ms; Homebridge shutdown will continue',
+    );
+    await runtime.stop();
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('publishes failed and retains the latest snapshot when owned startup fails', async () => {
+    const config = parseConfig({
+      platform: 'HomebridgeEufy',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    const previousSnapshot = snapshot('synthetic-old');
+    const release = vi.fn(releaseLease);
+    const client: SdkClient = {
+      start: vi.fn(async () => {
+        throw new Error('synthetic owned startup failure');
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    const statusPublisher = { start: vi.fn(() => true), update: vi.fn(() => true), stop: vi.fn() };
+    const error = vi.fn();
+    const runtime = new RuntimeOwner({ error, warn: vi.fn() }, config, () => client, {
+      storageRoot: '/synthetic-runtime',
+      ownership: {
+        acquire: vi.fn(async () => ({
+          state: 'owner' as const,
+          lease: { release },
+          recovered: false,
+        })),
+      },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: { load: () => previousSnapshot, save: vi.fn() },
+        })),
+      },
+      statusPublisher,
+    });
+
+    await runtime.start();
+
+    expect(runtime.currentState()).toBe('failed');
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(statusPublisher.start).toHaveBeenCalledWith('starting', {
+      generation: 'synthetic-generation',
+      complete: false,
+      snapshot: previousSnapshot,
+    });
+    expect(statusPublisher.update).toHaveBeenLastCalledWith('failed');
+    expect(error).toHaveBeenCalledExactlyOnceWith('Eufy SDK startup failed: synthetic owned startup failure');
+    await runtime.stop();
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('bounds pending ownership and releases a lease granted after shutdown', async () => {
+    vi.useFakeTimers();
+    const config = parseConfig({
+      platform: 'HomebridgeEufy',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    let finishAcquire:
+      | ((value: { state: 'owner'; lease: { release: () => Promise<{ state: 'stopped' }> }; recovered: false }) => void)
+      | undefined;
+    const release = vi.fn(releaseLease);
+    const acquire = vi.fn(
+      () =>
+        new Promise<{
+          state: 'owner';
+          lease: { release: () => Promise<{ state: 'stopped' }> };
+          recovered: false;
+        }>((resolve) => {
+          finishAcquire = resolve;
+        }),
+    );
+    const factory = vi.fn();
+    const statusPublisher = { start: vi.fn(() => true), update: vi.fn(() => true), stop: vi.fn() };
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn: vi.fn() }, config, factory, {
+      storageRoot: '/synthetic-runtime',
+      shutdownTimeoutMs: 1_000,
+      ownership: { acquire },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: { load: () => snapshot('synthetic-old'), save: vi.fn() },
+        })),
+      },
+      statusPublisher,
+    });
+
+    const starting = runtime.start();
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce());
+    const stopping = runtime.stop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopping;
+
+    expect(runtime.currentState()).toBe('failed');
+    expect(statusPublisher.update).not.toHaveBeenCalled();
+    finishAcquire?.({ state: 'owner', lease: { release }, recovered: false });
+    await starting;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(factory).not.toHaveBeenCalled();
+    expect(runtime.currentState()).toBe('failed');
+    vi.useRealTimers();
+  });
+
+  it('does not publish shutdown state when pending ownership resolves to conflict', async () => {
+    const config = parseConfig({
+      platform: 'HomebridgeEufy',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    let finishAcquire:
+      | ((value: {
+          state: 'owner-conflict';
+          owner: { version: 1; kind: 'runtime'; pid: number; acquiredAt: string };
+        }) => void)
+      | undefined;
+    const acquire = vi.fn(
+      () =>
+        new Promise<{
+          state: 'owner-conflict';
+          owner: { version: 1; kind: 'runtime'; pid: number; acquiredAt: string };
+        }>((resolve) => {
+          finishAcquire = resolve;
+        }),
+    );
+    const statusPublisher = { start: vi.fn(() => true), update: vi.fn(() => true), stop: vi.fn() };
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn: vi.fn() }, config, vi.fn(), {
+      storageRoot: '/synthetic-runtime',
+      ownership: { acquire },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: { load: () => snapshot('synthetic-old'), save: vi.fn() },
+        })),
+      },
+      statusPublisher,
+    });
+
+    const starting = runtime.start();
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce());
+    const stopping = runtime.stop();
+    finishAcquire?.({
+      state: 'owner-conflict',
+      owner: { version: 1, kind: 'runtime', pid: 42, acquiredAt: '2026-01-01T00:00:00.000Z' },
+    });
+    await Promise.all([starting, stopping]);
+
+    expect(runtime.currentState()).toBe('stopped');
+    expect(statusPublisher.start).not.toHaveBeenCalled();
+    expect(statusPublisher.update).not.toHaveBeenCalled();
+    expect(statusPublisher.stop).not.toHaveBeenCalled();
+  });
+
+  it('does not replace stopped with authentication-required after a late account lookup', async () => {
+    const config = parseConfig({ platform: 'HomebridgeEufy' });
+    let finishLookup: ((active: null) => void) | undefined;
+    const statusPublisher = { start: vi.fn(() => true), update: vi.fn(() => true), stop: vi.fn() };
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn: vi.fn() }, config, vi.fn(), {
+      storageRoot: '/synthetic-runtime',
+      persistence: {
+        active: vi.fn(
+          () =>
+            new Promise<null>((resolve) => {
+              finishLookup = resolve;
+            }),
+        ),
+      },
+      statusPublisher,
+    });
+
+    const starting = runtime.start();
+    await runtime.stop();
+    finishLookup?.(null);
+    await starting;
+
+    expect(runtime.currentState()).toBe('stopped');
+    expect(statusPublisher.update).not.toHaveBeenCalledWith('authentication-required');
   });
 });

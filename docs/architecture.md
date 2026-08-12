@@ -24,10 +24,18 @@ contain the same entity serials, persists and publishes the snapshot, installs t
 only then enters `ready`.
 
 The registry and runtime state are separate interfaces. The latest complete registry is retained while
-the runtime is degraded, requires authentication, stops, or is stopped so that a temporary connection
-failure cannot mutate HomeKit topology. Runtime state determines whether operations are currently
-available. A later complete inventory is the only input that may replace the view and withdraw
-capability evidence.
+the runtime is degraded, requires authentication, fails, stops, or is stopped so that a temporary
+connection failure cannot mutate HomeKit topology. Runtime state determines whether operations are
+currently available. A later complete inventory is the only input that may replace the view and
+withdraw capability evidence.
+
+Connectivity loss moves availability to `degraded`; a later connection schedules complete discovery,
+and only successful complete publication restores `ready`. Session expiry, startup failure, process
+signals, and Homebridge shutdown converge on one idempotent cleanup. Cleanup detaches SDK listeners,
+bounds disconnect and lease release against one deadline, and never releases an acquired lease more
+than once. Successful release finalizes the tracker inside the ownership guard after removing the old
+owner and before a successor can acquire. A timeout still attempts the remaining cleanup and publishes
+`failed` rather than leaving active runtime evidence behind.
 
 Consumers can read the current registry view and subscribe to later complete versions. HomeKit defines
 the minimal source interface it consumes; the platform composition root injects the structurally

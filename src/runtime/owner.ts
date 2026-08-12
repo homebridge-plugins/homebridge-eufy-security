@@ -24,8 +24,10 @@ export interface RuntimeOwnership {
   >;
 }
 
+type RuntimeOwnershipResult = Awaited<ReturnType<RuntimeOwnership['acquire']>>;
+
 export interface RuntimeLease {
-  release(): Promise<AccountReleaseResult>;
+  release(onReleased?: () => void): Promise<AccountReleaseResult>;
 }
 
 export interface RuntimePersistence {
@@ -74,15 +76,18 @@ export class RuntimeOwner {
   private startPromise?: Promise<void>;
   private stopPromise?: Promise<void>;
   private statusPublisher?: RuntimeStatusPublisher;
+  private statusPublisherActive = false;
   private ownership?: RuntimeOwnership;
   private accountScope?: string;
   private runtimeLease?: RuntimeLease;
+  private pendingOwnership?: Promise<RuntimeOwnershipResult>;
   private runtimeState: RuntimeState = 'stopped';
   private registryView?: RuntimeRegistryView;
   private registryVersion = 0;
   private readonly registryListeners = new Set<RuntimeRegistryListener>();
   private readonly stateListeners = new Set<RuntimeStateListener>();
   private stopping = false;
+  private cleanupTerminalState?: 'authentication-required' | 'failed' | 'stopped';
   private readonly storageRoot?: string;
   private readonly persistence?: RuntimePersistence;
   private readonly shutdownTimeoutMs: number;
@@ -132,21 +137,46 @@ export class RuntimeOwner {
   }
 
   stop(): Promise<void> {
+    this.cleanupTerminalState = 'stopped';
     if (!this.stopPromise) {
       this.stopping = true;
       if (this.runtimeState !== 'owner-conflict') {
         this.transitionTo('stopping');
+        if (this.statusPublisherActive) {
+          this.statusPublisher?.update('stopping');
+        }
+      }
+      this.stopPromise = this.cleanupWithinDeadline('stopped');
+    } else if (
+      this.runtimeState !== 'owner-conflict' &&
+      this.runtimeState !== 'failed' &&
+      this.runtimeState !== 'stopping'
+    ) {
+      this.transitionTo('stopping');
+      if (this.statusPublisherActive) {
         this.statusPublisher?.update('stopping');
       }
-      this.stopPromise = this.stopWithinDeadline();
     }
-    return this.stopPromise;
+    return this.stopPromise.then(() => {
+      if (this.runtimeState !== 'owner-conflict' && this.runtimeState !== 'failed' && this.runtimeState !== 'stopped') {
+        if (this.statusPublisherActive) {
+          this.statusPublisher?.stop();
+        }
+        this.transitionTo('stopped');
+      }
+    });
   }
 
   private async startClient(): Promise<void> {
     try {
       const { active, config } = await this.activeAccount();
+      if (this.stopping) {
+        return;
+      }
       if (this.storageRoot && !active) {
+        this.statusPublisher ??= this.createStatusPublisher();
+        this.statusPublisherActive = this.statusPublisher.update('authentication-required');
+        this.transitionTo('authentication-required');
         return;
       }
       if (this.storageRoot && config.username?.trim()) {
@@ -156,7 +186,13 @@ export class RuntimeOwner {
       }
       if (this.ownership && this.accountScope && active) {
         this.transitionTo('acquiring-ownership');
-        const ownership = await this.ownership.acquire(this.accountScope, 'runtime');
+        const pendingOwnership = this.ownership.acquire(this.accountScope, 'runtime');
+        this.pendingOwnership = pendingOwnership;
+        const ownership = await pendingOwnership;
+        if (this.stopping) {
+          return;
+        }
+        this.pendingOwnership = undefined;
         if (ownership.state === 'owner-conflict') {
           this.transitionTo('owner-conflict');
           this.log.error('Eufy SDK startup blocked by another live account owner');
@@ -171,18 +207,17 @@ export class RuntimeOwner {
             snapshot: previousSnapshot,
           })
         ) {
-          await this.runtimeLease.release();
-          this.runtimeLease = undefined;
-          return;
+          throw new Error('runtime status tracker could not be started');
         }
+        this.statusPublisherActive = true;
         this.transitionTo('starting');
         if (!active.session.load()) {
-          await this.releaseRuntimeLease();
-          this.statusPublisher.update('authentication-required', {
+          this.transitionTo('authentication-required');
+          await this.beginCleanup('authentication-required', {
             generation: active.generation,
+            complete: false,
             snapshot: previousSnapshot,
           });
-          this.transitionTo('authentication-required');
           return;
         }
         this.client = this.clientFactory(config, active);
@@ -200,8 +235,7 @@ export class RuntimeOwner {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log.error(`Eufy SDK startup failed: ${message}`);
-      this.stopping = true;
-      await this.stopWithinDeadline(false, 'failed');
+      await this.beginCleanup('failed');
     }
   }
 
@@ -209,11 +243,6 @@ export class RuntimeOwner {
     const active = await this.persistence?.active();
     const configuration = active?.configuration.load();
     if (!active) {
-      if (this.storageRoot) {
-        this.statusPublisher ??= this.createStatusPublisher();
-        this.statusPublisher.update('authentication-required');
-        this.transitionTo('authentication-required');
-      }
       return { active: null, config: this.configuredConfig };
     }
     if (!configuration) {
@@ -248,9 +277,7 @@ export class RuntimeOwner {
         return;
       }
       this.transitionTo('authentication-required');
-      await this.client?.stop();
-      await this.releaseRuntimeLease();
-      this.statusPublisher?.update('authentication-required', {
+      await this.beginCleanup('authentication-required', {
         generation: active.generation,
         complete: false,
         snapshot: previousSnapshot,
@@ -285,67 +312,154 @@ export class RuntimeOwner {
     this.transitionTo('ready');
   }
 
-  private async releaseRuntimeLease(): Promise<boolean> {
-    if (!this.runtimeLease) {
+  private async releaseRuntimeLease(onReleased: () => void = () => undefined): Promise<boolean> {
+    const lease = this.runtimeLease;
+    this.runtimeLease = undefined;
+    if (!lease) {
+      onReleased();
       return true;
     }
-    const release = await this.runtimeLease.release();
-    if (release.state !== 'stopped') {
-      return false;
-    }
-    this.runtimeLease = undefined;
-    return true;
-  }
-
-  private async stopClient(): Promise<'failed' | 'stopped'> {
     try {
-      await this.client?.stop();
-      if (!(await this.releaseRuntimeLease())) {
-        return 'failed';
+      let finalized = false;
+      const release = await lease.release(() => {
+        finalized = true;
+        onReleased();
+      });
+      if (release.state !== 'stopped') {
+        return false;
+      }
+      if (!finalized) {
+        this.log.error('Eufy SDK ownership release did not finalize runtime status');
+        return false;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log.error(`Eufy SDK shutdown failed: ${message}`);
-      return 'failed';
+      this.log.error(`Eufy SDK ownership release failed: ${message}`);
+      return false;
     }
-    return 'stopped';
+    return true;
+  }
+
+  private async stopRuntimeClient(): Promise<boolean> {
+    const client = this.client;
+    this.client = undefined;
+    try {
+      await client?.stop();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.error(`Eufy SDK shutdown failed: ${message}`);
+      return false;
+    }
+    return true;
   }
 
   private async failRuntime(error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     this.log.error(`Eufy SDK runtime failed: ${message}`);
-    this.stopping = true;
-    await this.stopWithinDeadline(false, 'failed');
+    await this.beginCleanup('failed');
   }
 
-  private async stopWithinDeadline(
-    waitForStart = true,
-    completedState: 'failed' | 'stopped' = 'stopped',
+  private beginCleanup(
+    completedState: 'authentication-required' | 'failed' | 'stopped',
+    update?: RuntimeTrackerUpdate,
   ): Promise<void> {
-    const stop =
-      waitForStart && this.startPromise ? this.startPromise.then(() => this.stopClient()) : this.stopClient();
-    let timer: NodeJS.Timeout;
-    const timeout = new Promise<'timeout'>((resolve) => {
-      timer = setTimeout(() => resolve('timeout'), this.shutdownTimeoutMs);
-      timer.unref();
-    });
-    const result = await Promise.race([stop, timeout]);
-    clearTimeout(timer!);
+    this.stopping = true;
+    if (!this.stopPromise) {
+      this.cleanupTerminalState = completedState;
+      this.stopPromise = this.cleanupWithinDeadline(completedState, update);
+    }
+    return this.stopPromise;
+  }
 
-    if (result === 'stopped') {
-      if (this.runtimeState === 'owner-conflict') {
-        return;
-      }
-      if (completedState === 'stopped') {
-        this.statusPublisher?.stop();
-        this.transitionTo('stopped');
-      } else {
-        this.statusPublisher?.update('failed');
-        this.transitionTo('failed');
-      }
-    } else if (result === 'timeout') {
+  private async cleanupWithinDeadline(
+    completedState: 'authentication-required' | 'failed' | 'stopped',
+    update?: RuntimeTrackerUpdate,
+  ): Promise<void> {
+    if (this.runtimeState === 'owner-conflict') {
+      return;
+    }
+    const deadline = Date.now() + this.shutdownTimeoutMs;
+    const clientStopped = await this.boundedCleanup(this.stopRuntimeClient(), deadline);
+    const ownershipSettled = await this.settlePendingOwnership(deadline);
+    const cleanupFailedBeforeRelease = clientStopped !== true || ownershipSettled !== true;
+    let publishedTerminalState = cleanupFailedBeforeRelease ? 'failed' : (this.cleanupTerminalState ?? completedState);
+    const leaseReleased = await this.boundedCleanup(
+      this.releaseRuntimeLease(() => this.publishTerminalState(publishedTerminalState, update)),
+      deadline,
+    );
+    const timedOut = clientStopped === 'timeout' || ownershipSettled === 'timeout' || leaseReleased === 'timeout';
+    if (timedOut) {
       this.log.warn(`Eufy SDK shutdown exceeded ${this.shutdownTimeoutMs}ms; Homebridge shutdown will continue`);
     }
+    if (leaseReleased === 'timeout') {
+      publishedTerminalState = 'failed';
+      this.publishTerminalState('failed');
+    }
+    const terminalState = leaseReleased === true ? publishedTerminalState : 'failed';
+    this.transitionTo(terminalState);
+  }
+
+  private publishTerminalState(
+    terminalState: 'authentication-required' | 'failed' | 'stopped',
+    update?: RuntimeTrackerUpdate,
+  ): void {
+    if (terminalState === 'stopped') {
+      if (this.statusPublisherActive) {
+        this.statusPublisher?.stop();
+      }
+    } else if (this.statusPublisherActive) {
+      if (terminalState === 'authentication-required') {
+        this.statusPublisher?.update(terminalState, update);
+      } else {
+        this.statusPublisher?.update(terminalState);
+      }
+    }
+  }
+
+  private async boundedCleanup(operation: Promise<boolean>, deadline: number): Promise<boolean | 'timeout'> {
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), Math.max(0, deadline - Date.now()));
+      timer.unref();
+    });
+    const result = await Promise.race([operation, timeout]);
+    clearTimeout(timer!);
+    return result;
+  }
+
+  private async settlePendingOwnership(deadline: number): Promise<boolean | 'timeout'> {
+    const pendingOwnership = this.pendingOwnership;
+    if (!pendingOwnership) {
+      return true;
+    }
+    const acquisition = pendingOwnership
+      .then((ownership) => {
+        if (this.pendingOwnership === pendingOwnership) {
+          this.pendingOwnership = undefined;
+        }
+        if (ownership.state === 'owner') {
+          this.runtimeLease = ownership.lease;
+        }
+        return true;
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error(`Eufy SDK ownership acquisition failed: ${message}`);
+        return false;
+      });
+    const settled = await this.boundedCleanup(acquisition, deadline);
+    if (settled === 'timeout') {
+      void acquisition.then(async (acquired) => {
+        if (!acquired) {
+          return;
+        }
+        const released = await this.boundedCleanup(this.releaseRuntimeLease(), Date.now() + this.shutdownTimeoutMs);
+        if (released !== true) {
+          this.log.warn('Eufy SDK ownership release remained incomplete after shutdown');
+        }
+      });
+    }
+    return settled;
   }
 
   private publishRegistry(

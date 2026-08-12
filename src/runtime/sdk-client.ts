@@ -43,7 +43,25 @@ export class PersistedSdkClient implements SdkClient {
   private inventoryListener?: (result: SdkStartResult) => void;
   private refresh = Promise.resolve();
   private epoch = 0;
+  private connected = false;
   private isSessionExpired: (error: unknown) => boolean = () => false;
+  private readonly handleError = (error: Error): void => {
+    if (this.isSessionExpired(error)) {
+      this.inventoryListener?.({ state: 'authentication-required' });
+    }
+  };
+  private readonly handleEvent = (): void => undefined;
+  private readonly handleConnect = (): void => {
+    this.connected = true;
+    this.epoch += 1;
+    this.scheduleRefresh();
+  };
+  private readonly handleDisconnect = (): void => {
+    this.connected = false;
+    this.epoch += 1;
+    this.inventoryListener?.({ state: 'degraded' });
+  };
+  private readonly refreshInventory = (): void => this.scheduleRefresh();
 
   constructor(
     private readonly config: EufyConfig,
@@ -69,17 +87,15 @@ export class PersistedSdkClient implements SdkClient {
         pushStore: this.stores.push,
       });
     const epoch = ++this.epoch;
+    this.connected = true;
     this.client = client;
-    client.on('error', (error) => {
-      if (this.isSessionExpired(error)) {
-        this.inventoryListener?.({ state: 'authentication-required' });
-      }
-    });
-    client.on('event', () => undefined);
-    const refreshInventory = () => this.scheduleRefresh();
-    client.on('deviceAdded', refreshInventory);
-    client.on('deviceRemoved', refreshInventory);
-    client.on('deviceCapabilities', refreshInventory);
+    client.on('error', this.handleError);
+    client.on('event', this.handleEvent);
+    client.on('connect', this.handleConnect);
+    client.on('disconnect', this.handleDisconnect);
+    client.on('deviceAdded', this.refreshInventory);
+    client.on('deviceRemoved', this.refreshInventory);
+    client.on('deviceCapabilities', this.refreshInventory);
     if (!client.loggedIn) {
       return { state: 'authentication-required' };
     }
@@ -105,9 +121,17 @@ export class PersistedSdkClient implements SdkClient {
 
   async stop(): Promise<void> {
     this.epoch += 1;
+    this.connected = false;
     const client = this.client;
     this.client = undefined;
     this.inventoryListener = undefined;
+    client?.off('error', this.handleError);
+    client?.off('event', this.handleEvent);
+    client?.off('connect', this.handleConnect);
+    client?.off('disconnect', this.handleDisconnect);
+    client?.off('deviceAdded', this.refreshInventory);
+    client?.off('deviceRemoved', this.refreshInventory);
+    client?.off('deviceCapabilities', this.refreshInventory);
     await client?.disconnect();
     this.registry = new Map();
   }
@@ -119,18 +143,18 @@ export class PersistedSdkClient implements SdkClient {
   private scheduleRefresh(): void {
     const epoch = this.epoch;
     this.refresh = this.refresh.then(async () => {
-      if (!this.client) {
+      if (!this.client || !this.connected) {
         return;
       }
       try {
         const discovery = await discoverCompleteDeviceRegistry(this.client);
-        if (epoch !== this.epoch) {
+        if (epoch !== this.epoch || !this.connected) {
           return;
         }
         this.registry = discovery.registry;
         this.inventoryListener?.({ state: 'ready', registry: this.registry, snapshot: discovery.snapshot });
       } catch (error) {
-        if (epoch !== this.epoch) {
+        if (epoch !== this.epoch || !this.connected) {
           return;
         }
         this.inventoryListener?.(
