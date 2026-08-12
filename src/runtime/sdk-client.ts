@@ -3,13 +3,23 @@ import type { AnyDeviceEvent, Device, EufyMega, FcmStore, SessionStore } from '@
 import type { EufyConfig } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 
+interface RealtimeReadyClient {
+  waitForRealtime?(): Promise<{ state: string }>;
+}
+
 export type SdkStartResult =
   | {
       state: 'ready';
       registry: ReadonlyMap<string, Device>;
       snapshot: CompleteDeviceSnapshot;
     }
-  | { state: 'degraded' }
+  | { state: 'degraded'; complete?: false; registry?: never; snapshot?: never }
+  | {
+      state: 'degraded';
+      complete: true;
+      registry: ReadonlyMap<string, Device>;
+      snapshot: CompleteDeviceSnapshot;
+    }
   | { state: 'authentication-required' };
 
 export interface SdkClient {
@@ -46,6 +56,7 @@ export class PersistedSdkClient implements SdkClient {
   private refresh = Promise.resolve();
   private epoch = 0;
   private connected = false;
+  private inventoryReady = false;
   private isSessionExpired: (error: unknown) => boolean = () => false;
   private readonly handleError = (error: Error): void => {
     if (this.isSessionExpired(error)) {
@@ -55,15 +66,25 @@ export class PersistedSdkClient implements SdkClient {
   private readonly handleEvent = (event: AnyDeviceEvent): void => this.eventListener?.(event);
   private readonly handleConnect = (): void => {
     this.connected = true;
+    if (!this.inventoryReady) {
+      return;
+    }
     this.epoch += 1;
     this.scheduleRefresh();
   };
   private readonly handleDisconnect = (): void => {
     this.connected = false;
+    if (!this.inventoryReady) {
+      return;
+    }
     this.epoch += 1;
     this.inventoryListener?.({ state: 'degraded' });
   };
-  private readonly refreshInventory = (): void => this.scheduleRefresh();
+  private readonly refreshInventory = (): void => {
+    if (this.inventoryReady) {
+      this.scheduleRefresh();
+    }
+  };
 
   constructor(
     private readonly config: EufyConfig,
@@ -107,12 +128,17 @@ export class PersistedSdkClient implements SdkClient {
       if (login.status !== 'ok') {
         return { state: 'authentication-required' };
       }
+      const realtimeReady = await this.realtimeReady(client);
       const discovery = await discoverCompleteDeviceRegistry(client);
       if (epoch !== this.epoch) {
         return { state: 'degraded' };
       }
       this.registry = discovery.registry;
-      return { state: 'ready', registry: this.registry, snapshot: discovery.snapshot };
+      this.inventoryReady = true;
+      if (realtimeReady && this.connected) {
+        return { state: 'ready', registry: this.registry, snapshot: discovery.snapshot };
+      }
+      return { state: 'degraded', complete: true, registry: this.registry, snapshot: discovery.snapshot };
     } catch (error) {
       if (this.isSessionExpired(error)) {
         return { state: 'authentication-required' };
@@ -124,6 +150,7 @@ export class PersistedSdkClient implements SdkClient {
   async stop(): Promise<void> {
     this.epoch += 1;
     this.connected = false;
+    this.inventoryReady = false;
     const client = this.client;
     this.client = undefined;
     this.inventoryListener = undefined;
@@ -154,12 +181,17 @@ export class PersistedSdkClient implements SdkClient {
         return;
       }
       try {
+        const realtimeReady = await this.realtimeReady(this.client);
         const discovery = await discoverCompleteDeviceRegistry(this.client);
         if (epoch !== this.epoch || !this.connected) {
           return;
         }
         this.registry = discovery.registry;
-        this.inventoryListener?.({ state: 'ready', registry: this.registry, snapshot: discovery.snapshot });
+        this.inventoryListener?.(
+          realtimeReady
+            ? { state: 'ready', registry: this.registry, snapshot: discovery.snapshot }
+            : { state: 'degraded', complete: true, registry: this.registry, snapshot: discovery.snapshot },
+        );
       } catch (error) {
         if (epoch !== this.epoch || !this.connected) {
           return;
@@ -169,6 +201,14 @@ export class PersistedSdkClient implements SdkClient {
         );
       }
     });
+  }
+
+  private async realtimeReady(client: EufyMega): Promise<boolean> {
+    const waitForRealtime = (client as EufyMega & RealtimeReadyClient).waitForRealtime;
+    if (!waitForRealtime) {
+      return true;
+    }
+    return (await waitForRealtime.call(client)).state === 'ready';
   }
 }
 

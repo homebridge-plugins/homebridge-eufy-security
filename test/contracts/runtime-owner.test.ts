@@ -43,6 +43,15 @@ function sdkDevice(serial: string): Device {
   return { describe: () => manifest(serial) } as unknown as Device;
 }
 
+function realtimeReady() {
+  return {
+    state: 'ready',
+    push: { required: 1, ready: 1, failed: 0, pending: 0 },
+    mqtt: { required: 0, ready: 0, failed: 0, pending: 0 },
+    wiredP2p: { required: 1, ready: 1, failed: 0, pending: 0 },
+  };
+}
+
 function session(): PersistedSession {
   return {
     userId: 'synthetic-user',
@@ -208,6 +217,7 @@ describe('persisted runtime owner', () => {
       stop: vi.fn(async () => undefined),
     };
     const warn = vi.fn();
+    const updateStatus = vi.fn(() => true);
     const runtime = new RuntimeOwner({ error: vi.fn(), warn }, config, () => client, {
       storageRoot: '/synthetic-runtime',
       ownership: {
@@ -227,7 +237,7 @@ describe('persisted runtime owner', () => {
           snapshot: { load: () => null, save: vi.fn() },
         })),
       },
-      statusPublisher: { start: () => true, update: () => true, stop: vi.fn() },
+      statusPublisher: { start: () => true, update: updateStatus, stop: vi.fn() },
     });
     const states: string[] = [];
     const views: Array<{ version: number; serials: string[]; state: string }> = [];
@@ -259,17 +269,21 @@ describe('persisted runtime owner', () => {
     reportEvent?.({ eventName: 'contactState', deviceSn: 'synthetic-first', open: true });
     expect(events).toEqual(['contactState:synthetic-first']);
 
-    reportInventory?.({ state: 'degraded' });
-    await vi.waitFor(() => expect(runtime.currentState()).toBe('degraded'));
-    expect(runtime.currentRegistry()?.version).toBe(1);
-
     reportInventory?.({
-      state: 'ready',
+      state: 'degraded',
+      complete: true,
       registry: new Map([['synthetic-second', sdkDevice('synthetic-second')]]),
       snapshot: second,
     });
     await vi.waitFor(() => expect(runtime.currentRegistry()?.version).toBe(2));
-    expect(views.at(-1)).toEqual({ version: 2, serials: ['synthetic-second'], state: 'degraded' });
+    expect(views.at(-1)).toEqual({ version: 2, serials: ['synthetic-second'], state: 'ready' });
+    expect(runtime.currentState()).toBe('degraded');
+    expect(updateStatus).toHaveBeenLastCalledWith('degraded', {
+      generation: 'synthetic-generation',
+      complete: true,
+      snapshot: second,
+      status: 'transport-degraded',
+    });
 
     reportInventory?.({ state: 'authentication-required' });
     await vi.waitFor(() => expect(runtime.currentState()).toBe('authentication-required'));
@@ -527,6 +541,10 @@ describe('persisted runtime owner', () => {
       calls.push('getDevices');
       return [{ sn: 'synthetic-current' }];
     });
+    const waitForRealtime = vi.fn(async () => {
+      calls.push('waitForRealtime');
+      return realtimeReady();
+    });
     const getDevice = vi.fn(async () => {
       calls.push('getDevice');
       return { describe: () => manifest('synthetic-current') };
@@ -534,6 +552,7 @@ describe('persisted runtime owner', () => {
     const client = {
       loggedIn: true,
       login,
+      waitForRealtime,
       on: vi.fn((event: string) => {
         calls.push(`on:${event}`);
       }),
@@ -565,8 +584,118 @@ describe('persisted runtime owner', () => {
       'on:deviceCapabilities',
     ]);
     expect(calls.indexOf('login')).toBeLessThan(calls.indexOf('getDevices'));
+    expect(calls.indexOf('waitForRealtime')).toBeLessThan(calls.indexOf('getDevices'));
+    expect(waitForRealtime).toHaveBeenCalledWith();
     expect(getDevices).toHaveBeenCalledOnce();
     expect(getDevice).toHaveBeenCalledExactlyOnceWith('synthetic-current');
+  });
+
+  it('does not publish readiness before required realtime transports are ready', async () => {
+    const { persistence } = await activeRuntime();
+    const active = await persistence.active();
+    expect(active).not.toBeNull();
+    const current = snapshot('synthetic-current');
+    const getDevices = vi.fn(async () => [{ sn: 'synthetic-current' }]);
+    const client = {
+      loggedIn: true,
+      login: vi.fn(async () => ({ status: 'ok' as const, raw: { restored: true } })),
+      waitForRealtime: vi.fn(async () => ({
+        ...realtimeReady(),
+        state: 'partial' as const,
+        wiredP2p: { required: 2, ready: 1, failed: 1, pending: 0 },
+      })),
+      on: vi.fn(),
+      off: vi.fn(),
+      getDevices,
+      getDevice: vi.fn(async () => sdkDevice('synthetic-current')),
+      disconnect: vi.fn(async () => undefined),
+    } as unknown as EufyMega;
+    const runtime = new PersistedSdkClient(
+      parseConfig({
+        platform: 'HomebridgeEufy',
+        username: 'runtime@example.invalid',
+        password: 'persisted-password',
+      }),
+      active!,
+      client,
+    );
+
+    await expect(runtime.start()).resolves.toMatchObject({ state: 'degraded', snapshot: current });
+    expect(client.waitForRealtime).toHaveBeenCalledWith();
+    expect(getDevices).toHaveBeenCalledOnce();
+  });
+
+  it('lets final realtime readiness settle initial transport lifecycle events', async () => {
+    const { persistence } = await activeRuntime();
+    const active = await persistence.active();
+    expect(active).not.toBeNull();
+    const listeners = new Map<string, (...args: never[]) => void>();
+    let finishReadiness: ((readiness: ReturnType<typeof realtimeReady>) => void) | undefined;
+    const waitForRealtime = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof realtimeReady>>((resolve) => {
+          finishReadiness = resolve;
+        }),
+    );
+    const getDevices = vi.fn(async () => [{ sn: 'synthetic-current' }]);
+    const client = {
+      loggedIn: true,
+      login: vi.fn(async () => ({ status: 'ok' as const, raw: { restored: true } })),
+      waitForRealtime,
+      on: vi.fn((event: string, listener: (...args: never[]) => void) => listeners.set(event, listener)),
+      off: vi.fn(),
+      getDevices,
+      getDevice: vi.fn(async () => sdkDevice('synthetic-current')),
+      disconnect: vi.fn(async () => undefined),
+    } as unknown as EufyMega;
+    const runtime = new PersistedSdkClient(
+      parseConfig({
+        platform: 'HomebridgeEufy',
+        username: 'runtime@example.invalid',
+        password: 'persisted-password',
+      }),
+      active!,
+      client,
+    );
+
+    const starting = runtime.start();
+    await vi.waitFor(() => expect(waitForRealtime).toHaveBeenCalledOnce());
+    listeners.get('connect')?.();
+    listeners.get('disconnect')?.();
+    expect(getDevices).not.toHaveBeenCalled();
+    finishReadiness?.(realtimeReady());
+
+    await expect(starting).resolves.toMatchObject({ state: 'degraded', snapshot: snapshot('synthetic-current') });
+    expect(getDevices).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the pinned SDK startup path when realtime readiness is unavailable', async () => {
+    const { persistence } = await activeRuntime();
+    const active = await persistence.active();
+    expect(active).not.toBeNull();
+    const client = {
+      loggedIn: true,
+      login: vi.fn(async () => ({ status: 'ok' as const, raw: { restored: true } })),
+      on: vi.fn(),
+      off: vi.fn(),
+      getDevices: vi.fn(async () => [{ sn: 'synthetic-current' }]),
+      getDevice: vi.fn(async () => sdkDevice('synthetic-current')),
+      disconnect: vi.fn(async () => undefined),
+    } as unknown as EufyMega;
+    const runtime = new PersistedSdkClient(
+      parseConfig({
+        platform: 'HomebridgeEufy',
+        username: 'runtime@example.invalid',
+        password: 'persisted-password',
+      }),
+      active!,
+      client,
+    );
+
+    await expect(runtime.start()).resolves.toMatchObject({
+      state: 'ready',
+      snapshot: snapshot('synthetic-current'),
+    });
   });
 
   it('degrades on connectivity loss, refreshes after recovery, and removes every SDK listener on stop', async () => {
@@ -599,6 +728,7 @@ describe('persisted runtime owner', () => {
     const client = {
       loggedIn: true,
       login: vi.fn(async () => ({ status: 'ok' as const, raw: { restored: true } })),
+      waitForRealtime: vi.fn(async () => realtimeReady()),
       on,
       off,
       disconnect,

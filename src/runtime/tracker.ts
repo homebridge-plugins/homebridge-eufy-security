@@ -23,6 +23,7 @@ const RUNTIME_STATUSES = new Set<RuntimeStatus>([
   'starting',
   'connected',
   'incomplete-inventory',
+  'transport-degraded',
   'authentication-required',
   'owner-conflict',
   'failed',
@@ -49,6 +50,7 @@ export type RuntimeStatus =
   | 'starting'
   | 'connected'
   | 'incomplete-inventory'
+  | 'transport-degraded'
   | 'authentication-required'
   | 'owner-conflict'
   | 'failed'

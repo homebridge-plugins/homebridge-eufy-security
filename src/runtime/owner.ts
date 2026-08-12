@@ -293,21 +293,22 @@ export class RuntimeOwner {
       return;
     }
     if (result.state === 'degraded') {
+      let latestSnapshot = previousSnapshot;
+      const completeTopology = result.complete === true;
+      if (completeTopology) {
+        this.acceptCompleteRegistry(active, result.registry, result.snapshot);
+        latestSnapshot = result.snapshot;
+      }
       this.statusPublisher?.update('degraded', {
         generation: active.generation,
-        complete: false,
-        snapshot: previousSnapshot,
+        complete: completeTopology,
+        snapshot: latestSnapshot,
+        status: completeTopology ? 'transport-degraded' : 'incomplete-inventory',
       });
       this.transitionTo('degraded');
       return;
     }
-    const registrySerials = [...result.registry.keys()].sort();
-    const snapshotSerials = result.snapshot.devices.map((device) => device.sn).sort();
-    if (JSON.stringify(registrySerials) !== JSON.stringify(snapshotSerials)) {
-      throw new Error('canonical registry does not match its complete device snapshot');
-    }
-    active.snapshot.save(result.snapshot);
-    this.publishRegistry(active.generation, result.registry, result.snapshot);
+    this.acceptCompleteRegistry(active, result.registry, result.snapshot);
     if (
       !this.statusPublisher?.update('ready', {
         generation: active.generation,
@@ -318,6 +319,20 @@ export class RuntimeOwner {
       throw new Error('complete runtime snapshot could not be published');
     }
     this.transitionTo('ready');
+  }
+
+  private acceptCompleteRegistry(
+    active: RuntimeActiveAccount,
+    registry: ReadonlyMap<string, Device>,
+    snapshot: CompleteDeviceSnapshot,
+  ): void {
+    const registrySerials = [...registry.keys()].sort();
+    const snapshotSerials = snapshot.devices.map((device) => device.sn).sort();
+    if (JSON.stringify(registrySerials) !== JSON.stringify(snapshotSerials)) {
+      throw new Error('canonical registry does not match its complete device snapshot');
+    }
+    active.snapshot.save(snapshot);
+    this.publishRegistry(active.generation, registry, snapshot);
   }
 
   private async releaseRuntimeLease(onReleased: () => void = () => undefined): Promise<boolean> {
