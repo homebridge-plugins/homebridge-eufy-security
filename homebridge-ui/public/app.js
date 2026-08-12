@@ -127,10 +127,10 @@ async function handleResult(result) {
 
 authForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const existing = pluginConfig.find((block) => block.platform === 'EufySecurity') ?? pluginConfig[0] ?? {};
+  const existing = pluginConfig.find((block) => block.platform === 'HomebridgeEufy') ?? pluginConfig[0] ?? {};
   pendingConfig = {
     ...existing,
-    platform: 'EufySecurity',
+    platform: 'HomebridgeEufy',
     username: accountInput.value.trim(),
     password: passwordInput.value,
     country: countryInput.value.trim().toUpperCase(),

@@ -51,7 +51,7 @@ eufy's [sharing guide](https://support.eufylife.com/s/article/Share-Your-eufySec
 
 ## Install
 
-Install stable releases through the Homebridge UI by searching for **Homebridge Eufy Security**, or
+Install stable releases through the Homebridge UI by searching for **Homebridge Eufy**, or
 from npm:
 
 ```bash
@@ -69,6 +69,9 @@ beta.
 3. Enter the guest account details and complete captcha or two-factor verification if requested.
 4. Wait for authentication and complete discovery to finish.
 5. Restart Homebridge so the long-lived runtime can acquire the persisted session.
+
+V5 uses the new `HomebridgeEufy` platform alias. A V4 block using `EufySecurity` is not loaded and must
+be replaced with a fresh V5 configuration block.
 
 Credentials are persisted in Homebridge/plugin configuration. Challenge answers stay inside the
 temporary authentication flow, and the runtime never falls back to interactive login.

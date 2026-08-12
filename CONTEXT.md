@@ -115,8 +115,8 @@ _Avoid_: SDK cache, raw device dump
 ## Configuration
 
 **Configuration-block identity**:
-The stable Homebridge platform alias that lets Homebridge locate the existing plugin block across an upgrade. It does not grant legacy settings, defaults, or behavior compatibility.
-_Avoid_: Configuration backward compatibility, V4 schema compatibility
+The V5-only `HomebridgeEufy` platform alias that lets Homebridge locate the plugin block. V5 does not register or accept the V4 `EufySecurity` alias and does not grant legacy settings, defaults, or behavior compatibility.
+_Avoid_: V4 configuration identity, configuration backward compatibility
 
 **Entity preference**:
 A sparse plugin-owned representation or media preference keyed by the SDK entity serial and retained while that entity is absent from the current device snapshot.

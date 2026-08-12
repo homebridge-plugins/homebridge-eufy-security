@@ -79,8 +79,8 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   as durable state without an explicit reset and reconciliation policy.
 - Omit unsupported capabilities and emit a structured diagnostic. Never invent a generic HomeKit
   fallback.
-- Preserve the `EufySecurity` platform alias and historical accessory UUID inputs unless a migration
-  specification explicitly changes them.
+- Use the V5-only `HomebridgeEufy` platform alias. Do not register or accept the V4 `EufySecurity`
+  alias. Preserve historical accessory UUID inputs unless a migration specification changes them.
 
 ## Runtime and UI ownership
 
@@ -128,8 +128,9 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   iteration-history comments.
 - Do not cite planning Markdown from shipped source. Put durable behavior in code and JSDoc, and keep
   durable architectural reasoning in `docs/architecture.md`.
-- Preserve user state across upgrades: platform identity, accessory UUIDs, configuration semantics,
-  and cached accessory ownership change only through an explicit migration decision.
+- Once V5 state exists, preserve its `HomebridgeEufy` platform identity, accessory UUIDs,
+  configuration semantics, and cached accessory ownership unless an explicit migration decision
+  changes them. This does not preserve the V4 `EufySecurity` alias.
 - Persist V5 state under `homebridge-eufy`. A storage-root rename must preserve the complete directory
   atomically and must not move a directory held by a live SDK owner.
 - No `Co-authored-by` trailers are added automatically. Credit authorship accurately.

@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "EufySecurity",
+  "pluginAlias": "HomebridgeEufy",
   "pluginType": "platform",
   "singular": true,
   "customUi": true,

@@ -10,6 +10,7 @@ describe('V5 configuration', () => {
   it('publishes the same defaults and closed entity-preference vocabulary in its schema', () => {
     const repository = fileURLToPath(new URL('../..', import.meta.url));
     const schema = JSON.parse(readFileSync(`${repository}/config.schema.json`, 'utf8')) as {
+      pluginAlias: string;
       schema: {
         properties: Record<
           string,
@@ -23,6 +24,7 @@ describe('V5 configuration', () => {
       };
     };
 
+    expect(schema.pluginAlias).toBe('HomebridgeEufy');
     expect(schema.schema.properties.password.format).toBe('password');
     expect(schema.schema.properties.country.default).toBe('US');
     expect(schema.schema.properties.trustedDeviceName.default).toBe('Homebridge Eufy');
@@ -43,7 +45,7 @@ describe('V5 configuration', () => {
   });
 
   it('applies the fresh V5 defaults', () => {
-    const config = parseConfig({ platform: 'EufySecurity' });
+    const config = parseConfig({ platform: 'HomebridgeEufy' });
 
     expect(config).toMatchObject({
       country: 'US',
@@ -59,10 +61,14 @@ describe('V5 configuration', () => {
     });
   });
 
+  it('rejects the V4 platform alias instead of registering a compatibility identity', () => {
+    expect(() => parseConfig({ platform: 'EufySecurity' })).toThrowError('platform must be HomebridgeEufy');
+  });
+
   it('round trips overrides and preferences for entities absent from discovery', () => {
     const absentSerial = 'synthetic-absent-entity';
     const input = {
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'guest@example.invalid',
       password: 'synthetic-password',
       country: 'gb',
@@ -82,7 +88,7 @@ describe('V5 configuration', () => {
     const roundTrip = parseConfig(serializeConfig(parseConfig(input)));
 
     expect(roundTrip).toEqual<EufyConfig>({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'guest@example.invalid',
       password: 'synthetic-password',
       country: 'GB',
@@ -107,7 +113,7 @@ describe('V5 configuration', () => {
 
   it('does not import discarded V4 device arrays or feature settings', () => {
     const config = parseConfig({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'guest@example.invalid',
       cameras: [{ serialNumber: 'synthetic-camera', enableCamera: false }],
       stations: [{ serialNumber: 'synthetic-station' }],
@@ -137,7 +143,7 @@ describe('V5 configuration', () => {
   it('rejects attempts to manufacture SDK capabilities through configuration', () => {
     expect(() =>
       parseConfig({
-        platform: 'EufySecurity',
+        platform: 'HomebridgeEufy',
         entityPreferences: {
           'synthetic-entity': {
             capabilities: ['lock'],
@@ -146,7 +152,7 @@ describe('V5 configuration', () => {
       }),
     ).toThrowError('entityPreferences.synthetic-entity.capabilities is not a V5 entity preference');
 
-    expect(() => parseConfig({ platform: 'EufySecurity', capabilities: ['lock'] })).toThrowError(
+    expect(() => parseConfig({ platform: 'HomebridgeEufy', capabilities: ['lock'] })).toThrowError(
       'capabilities cannot be supplied by configuration',
     );
   });

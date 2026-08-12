@@ -37,7 +37,7 @@ describe('platform lifecycle', () => {
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       {
-        platform: 'EufySecurity',
+        platform: 'HomebridgeEufy',
         country: 'ca',
         entityPreferences: { 'synthetic-absent-entity': { represented: false } },
       },
@@ -62,7 +62,7 @@ describe('platform lifecycle', () => {
 
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      { platform: 'EufySecurity' },
+      { platform: 'HomebridgeEufy' },
       {
         on(event, listener): void {
           listeners[event] = listener;
@@ -80,7 +80,7 @@ describe('platform lifecycle', () => {
     const persistence = new AccountSessionPersistence(join(directory, 'homebridge-eufy', 'accounts'));
     const staging = await persistence.stage('guest@example.invalid');
     staging.configuration.save(
-      parseConfig({ platform: 'EufySecurity', username: 'guest@example.invalid', password: 'synthetic-password' }),
+      parseConfig({ platform: 'HomebridgeEufy', username: 'guest@example.invalid', password: 'synthetic-password' }),
     );
     staging.session.save(session());
     await staging.commit();
@@ -94,7 +94,7 @@ describe('platform lifecycle', () => {
     try {
       new Platform(
         { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-        { platform: 'EufySecurity', username: 'guest@example.invalid' },
+        { platform: 'HomebridgeEufy', username: 'guest@example.invalid' },
         {
           on(event, listener): void {
             listeners[event] = listener;
@@ -130,7 +130,7 @@ describe('platform lifecycle', () => {
     const root = join(directory, 'homebridge-eufy');
     const persistence = new AccountSessionPersistence(join(root, 'accounts'));
     const replacementConfig = parseConfig({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'replacement@example.invalid',
       password: 'synthetic-password',
       country: 'CA',
@@ -153,7 +153,7 @@ describe('platform lifecycle', () => {
     try {
       new Platform(
         { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-        { platform: 'EufySecurity', username: 'old@example.invalid', password: 'old-password' },
+        { platform: 'HomebridgeEufy', username: 'old@example.invalid', password: 'old-password' },
         {
           on(event, listener): void {
             listeners[event] = listener;
@@ -202,7 +202,7 @@ describe('platform lifecycle', () => {
 
     new Platform(
       { error, info: vi.fn(), warn: vi.fn() },
-      { platform: 'EufySecurity' },
+      { platform: 'HomebridgeEufy' },
       {
         on(event, listener): void {
           listeners[event] = listener;
@@ -228,7 +228,7 @@ describe('platform lifecycle', () => {
 
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn },
-      { platform: 'EufySecurity' },
+      { platform: 'HomebridgeEufy' },
       {
         on(event, listener): void {
           listeners[event] = listener;
@@ -264,7 +264,7 @@ describe('platform lifecycle', () => {
 
     new Platform(
       { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      { platform: 'EufySecurity' },
+      { platform: 'HomebridgeEufy' },
       {
         on(event, listener): void {
           listeners[event] = listener;

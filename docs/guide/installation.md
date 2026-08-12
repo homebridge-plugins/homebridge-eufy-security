@@ -2,7 +2,7 @@
 
 ## Stable public release
 
-Install through the Homebridge UI by searching for **Homebridge Eufy Security**, or install the scoped
+Install through the Homebridge UI by searching for **Homebridge Eufy**, or install the scoped
 package:
 
 ```bash

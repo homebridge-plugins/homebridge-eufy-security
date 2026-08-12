@@ -37,7 +37,7 @@ function push(id: string): PersistedPush {
 
 function configuration(account: string, serial: string) {
   return parseConfig({
-    platform: 'EufySecurity',
+    platform: 'HomebridgeEufy',
     username: account,
     password: `password-${account}`,
     country: 'US',

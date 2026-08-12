@@ -159,12 +159,14 @@ describe('packed plugin', () => {
   it('keeps the runtime dependency and entry-point surface closed', () => {
     const repository = fileURLToPath(new URL('../..', import.meta.url));
     const packageJson = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as {
+      displayName: string;
       version: string;
       main?: string;
       dependencies?: Record<string, string>;
     };
     const generatedVersion = readFileSync(join(repository, 'src', 'version.ts'), 'utf8');
 
+    expect(packageJson.displayName).toBe('Homebridge Eufy');
     expect(packageJson.main).toBe('dist/index.js');
     expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual([
       '@homebridge/plugin-ui-utils',
@@ -312,12 +314,12 @@ describe('packed plugin', () => {
       await firstSetupUi.continueButton.dispatch('click');
       expect(firstSetupUi).toMatchObject({ firstSetup: { hidden: true }, setupContent: { hidden: false } });
 
-      await expect(renderUi(script, [{ platform: 'EufySecurity' }], catalogs)).resolves.toMatchObject({
+      await expect(renderUi(script, [{ platform: 'HomebridgeEufy' }], catalogs)).resolves.toMatchObject({
         firstSetup: { hidden: false },
         setupContent: { hidden: true },
       });
       await expect(
-        renderUi(script, [{ platform: 'EufySecurity', username: 'guest@example.invalid' }], catalogs),
+        renderUi(script, [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }], catalogs),
       ).resolves.toMatchObject({
         firstSetup: { hidden: true },
         setupContent: { hidden: false },
@@ -362,7 +364,7 @@ describe('packed plugin', () => {
           path: '/auth/start',
           body: {
             configuration: {
-              platform: 'EufySecurity',
+              platform: 'HomebridgeEufy',
               username: 'guest@example.invalid',
               password: 'synthetic-password',
               country: 'US',
@@ -382,7 +384,7 @@ describe('packed plugin', () => {
       expect(englishUi.requests[1]).toEqual({ path: '/auth/captcha', body: { answer: '1234' } });
       expect(englishUi.updatedConfig).toEqual([
         {
-          platform: 'EufySecurity',
+          platform: 'HomebridgeEufy',
           username: 'guest@example.invalid',
           password: 'synthetic-password',
           country: 'US',

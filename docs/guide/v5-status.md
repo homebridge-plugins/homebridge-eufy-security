@@ -5,7 +5,7 @@ The beta is closed to maintainers and enrollment is not open.
 
 ## Available foundation
 
-- Homebridge 2 platform registration under the historical `EufySecurity` alias
+- Homebridge 2 platform registration under the V5 `HomebridgeEufy` alias
 - Temporary authentication with captcha and two-factor continuation
 - Atomic account replacement and persisted session handoff
 - One account-scoped runtime owner

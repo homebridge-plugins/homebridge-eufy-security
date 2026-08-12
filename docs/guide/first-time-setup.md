@@ -7,6 +7,9 @@
 5. Wait for complete discovery and the success message.
 6. Restart Homebridge normally.
 
+V5 requires a configuration block with `platform: "HomebridgeEufy"`. The V4 `EufySecurity` alias is
+not registered or migrated.
+
 Authentication stages a new account generation. Only a successful login and complete discovery replace
 the active generation. The restart then transfers ownership to the long-lived runtime.
 

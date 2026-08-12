@@ -60,7 +60,7 @@ async function activeRuntime(withSession = true): Promise<{
   const staging = await persistence.stage('runtime@example.invalid');
   staging.configuration.save(
     parseConfig({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'runtime@example.invalid',
       password: 'persisted-password',
     }),
@@ -96,7 +96,7 @@ describe('persisted runtime owner', () => {
   it('owns startup, complete publication, and shutdown through one direct interface', async () => {
     const calls: string[] = [];
     const config = parseConfig({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'runtime@example.invalid',
       password: 'persisted-password',
     });
@@ -173,7 +173,7 @@ describe('persisted runtime owner', () => {
 
   it('publishes versioned complete registry views separately from runtime availability', async () => {
     const config = parseConfig({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: 'runtime@example.invalid',
       password: 'persisted-password',
     });
@@ -278,7 +278,11 @@ describe('persisted runtime owner', () => {
     const events = lifecycle();
     const Platform = createEufyPlatform(factory);
 
-    new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      { platform: 'HomebridgeEufy' },
+      events.api(directory),
+    );
     events.listeners.didFinishLaunching?.();
     events.listeners.didFinishLaunching?.();
 
@@ -309,7 +313,11 @@ describe('persisted runtime owner', () => {
     const factory = vi.fn();
     const Platform = createEufyPlatform(factory);
 
-    new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      { platform: 'HomebridgeEufy' },
+      events.api(directory),
+    );
     events.listeners.didFinishLaunching?.();
 
     const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
@@ -334,7 +342,11 @@ describe('persisted runtime owner', () => {
     const events = lifecycle();
     const Platform = createEufyPlatform(() => client);
 
-    new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      { platform: 'HomebridgeEufy' },
+      events.api(directory),
+    );
     events.listeners.didFinishLaunching?.();
 
     const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
@@ -367,7 +379,11 @@ describe('persisted runtime owner', () => {
     const events = lifecycle();
     const Platform = createEufyPlatform(() => client);
 
-    new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      { platform: 'HomebridgeEufy' },
+      events.api(directory),
+    );
     events.listeners.didFinishLaunching?.();
     const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     await vi.waitFor(async () => await expect(tracker.read()).resolves.toMatchObject({ state: 'ready' }));
@@ -390,7 +406,11 @@ describe('persisted runtime owner', () => {
     const events = lifecycle();
     const Platform = createEufyPlatform(factory);
 
-    new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      { platform: 'HomebridgeEufy' },
+      events.api(directory),
+    );
     events.listeners.didFinishLaunching?.();
 
     const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
@@ -425,7 +445,7 @@ describe('persisted runtime owner', () => {
     const Platform = createEufyPlatform(factory);
 
     try {
-      new Platform({ error, info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
+      new Platform({ error, info: vi.fn(), warn: vi.fn() }, { platform: 'HomebridgeEufy' }, events.api(directory));
       events.listeners.didFinishLaunching?.();
 
       await vi.waitFor(() =>
@@ -460,7 +480,7 @@ describe('persisted runtime owner', () => {
     } as unknown as EufyMega;
     const runtime = new PersistedSdkClient(
       parseConfig({
-        platform: 'EufySecurity',
+        platform: 'HomebridgeEufy',
         username: 'runtime@example.invalid',
         password: 'persisted-password',
       }),
@@ -501,7 +521,7 @@ describe('persisted runtime owner', () => {
     } as unknown as EufyMega;
     const runtime = new PersistedSdkClient(
       parseConfig({
-        platform: 'EufySecurity',
+        platform: 'HomebridgeEufy',
         username: 'runtime@example.invalid',
         password: 'persisted-password',
       }),

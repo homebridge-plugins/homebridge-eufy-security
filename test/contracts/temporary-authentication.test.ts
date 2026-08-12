@@ -17,7 +17,7 @@ import { bindTemporaryAuthenticationProcessCleanup } from '../../src/ui/server.j
 function authenticationInput(account = 'guest@example.invalid') {
   return {
     configuration: parseConfig({
-      platform: 'EufySecurity',
+      platform: 'HomebridgeEufy',
       username: account,
       password: 'synthetic-password',
       country: 'US',

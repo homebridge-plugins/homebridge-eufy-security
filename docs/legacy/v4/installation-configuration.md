@@ -9,5 +9,5 @@ V4 used the unscoped `homebridge-eufy-security` package, Homebridge 1.x-compatib
 `eufy-security-client`. Its custom UI included per-device camera, audio, bridge, stream, HKSV, ignore,
 guard-mode, and detailed-logging options.
 
-Those configuration keys are intentionally not imported by V5. V5 keeps only the stable platform
-alias and explicit fresh configuration fields.
+Those configuration keys are intentionally not imported by V5. V5 also replaces the `EufySecurity`
+platform alias with `HomebridgeEufy`; a V4 block is not loaded or migrated.
