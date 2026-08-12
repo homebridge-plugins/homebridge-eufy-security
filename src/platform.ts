@@ -1,7 +1,12 @@
 import type { API, DynamicPlatformPlugin, HAP, PlatformAccessory, PlatformConfig } from 'homebridge';
 
 import { parseConfig } from './configuration.js';
-import { HomeKitReconciler, type HomeKitAccessoryStore, type HomeKitDiagnostic } from './homekit/reconciler.js';
+import {
+  HomeKitReconciler,
+  type HomeKitAccessoryStore,
+  type HomeKitDiagnostic,
+  type HomeKitEventTrace,
+} from './homekit/reconciler.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -16,6 +21,7 @@ export interface PlatformSignalTarget {
 }
 
 export interface PlatformLogger {
+  debug?(message: string): void;
   error(message: string): void;
   info(message: string): void;
   warn(message: string): void;
@@ -72,6 +78,7 @@ export function createEufyPlatform(
             accessoryStore,
             (diagnostic) => reportHomeKitDiagnostic(log, diagnostic),
             this.cachedAccessories,
+            (trace) => reportHomeKitEvent(log, trace),
           );
           this.reconciler.start();
         }
@@ -113,6 +120,10 @@ function reportHomeKitDiagnostic(log: PlatformLogger, diagnostic: HomeKitDiagnos
   } else {
     log.info(message);
   }
+}
+
+function reportHomeKitEvent(log: PlatformLogger, trace: HomeKitEventTrace): void {
+  log.debug?.(JSON.stringify({ scope: 'homekit', ...trace }));
 }
 
 export const EufyPlatform = createEufyPlatform(createPersistedSdkClient, 10_000, process);

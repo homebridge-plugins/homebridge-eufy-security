@@ -1,20 +1,11 @@
-import type { AnyDeviceEvent, Device, DeviceEventMap } from '@mega-yfue/eufy-sdk';
-import type { Characteristic, HapStatusError, PlatformAccessory, Service } from 'homebridge';
+import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
+import type { PlatformAccessory } from 'homebridge';
 
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
-import {
-  adaptContact,
-  CONTACT_ADAPTER_KEY,
-  HapReadError,
-  type ContactDiagnostic,
-  type ContactHapDefinitions,
-  type ContactHapRecorder,
-  type HapCharacteristicDefinition,
-  type HapServiceDefinition,
-} from './adapters/contact.js';
-import { adaptInformation, type InformationRecorder } from './adapters/information.js';
-import { ADAPTER_REGISTRY, type AdapterAttachmentContext } from './adapters/registry.js';
+import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
+import { ADAPTER_REGISTRY } from './adapters/registry.js';
 
+/** One complete canonical registry and snapshot published from the same discovery pass. */
 export interface HomeKitRegistryView {
   readonly version: number;
   readonly generation: string;
@@ -24,19 +15,14 @@ export interface HomeKitRegistryView {
 
 export type HomeKitRegistryListener = (view: HomeKitRegistryView) => void;
 
+/** The retained complete-registry seam consumed independently from runtime availability. */
 export interface HomeKitRegistrySource {
   currentRegistry(): HomeKitRegistryView | undefined;
   subscribeRegistry(listener: HomeKitRegistryListener): () => void;
   subscribeEvents(listener: (event: AnyDeviceEvent) => void): () => void;
 }
 
-export interface HomeKitDefinitions {
-  readonly Service: typeof Service;
-  readonly Characteristic: typeof Characteristic;
-  readonly HAPStatus: { readonly SERVICE_COMMUNICATION_FAILURE: number };
-  readonly HapStatusError: typeof HapStatusError;
-}
-
+/** Homebridge operations used to create and persist accessory containers. */
 export interface HomeKitAccessoryStore {
   readonly hap: HomeKitDefinitions;
   generateUuid(input: string): string;
@@ -46,16 +32,26 @@ export interface HomeKitAccessoryStore {
   unregister(accessories: PlatformAccessory[]): void;
 }
 
+/** Aggregate condition for recognized devices that cannot be represented. */
 export interface RepresentationDiagnostic {
   code: 'recognized-device-not-represented';
   active: boolean;
   reason: 'no-primary-purpose-member' | 'primary-adapter-unavailable' | 'recovered';
 }
 
-export type HomeKitDiagnostic = (RepresentationDiagnostic | ContactDiagnostic) & {
+export type HomeKitDiagnostic = (RepresentationDiagnostic | AdapterDiagnostic) & {
   affectedDeviceCount: number;
 };
 export type HomeKitDiagnosticSink = (diagnostic: HomeKitDiagnostic) => void;
+
+/** Redacted debug evidence that an SDK event reached one self-hosted adapter. */
+export interface HomeKitEventTrace {
+  adapter: string;
+  event: string;
+  observation: AdapterEventTrace['observation'];
+}
+
+export type HomeKitEventTraceSink = (trace: HomeKitEventTrace) => void;
 
 interface AccessoryContext {
   homebridgeEufy?: {
@@ -71,12 +67,16 @@ interface AccessoryContext {
 export class HomeKitReconciler {
   private readonly accessories = new Map<string, PlatformAccessory>();
   private readonly representedSerials = new Set<string>();
-  private readonly contactHandles = new Map<string, { observe(event: DeviceEventMap['contactState']): void }>();
+  private readonly attachedAdapters = new Map<string, ReadonlyMap<string, AttachedAdapter>>();
+  private readonly activeAdapters = new Map<string, ReadonlySet<string>>();
   private readonly representationDiagnostics = new Map<
     string,
     Exclude<RepresentationDiagnostic['reason'], 'recovered'>
   >();
-  private readonly adapterDiagnostics = new Map<string, { serial: string; diagnostic: ContactDiagnostic }>();
+  private readonly adapterDiagnostics = new Map<
+    string,
+    { serial: string; adapter: string; diagnostic: AdapterDiagnostic }
+  >();
   private unsubscribeRegistry?: () => void;
   private unsubscribeEvents?: () => void;
   private lastPublication?: string;
@@ -86,6 +86,7 @@ export class HomeKitReconciler {
     private readonly store: HomeKitAccessoryStore,
     private readonly diagnose: HomeKitDiagnosticSink,
     cachedAccessories: readonly PlatformAccessory[] = [],
+    private readonly trace?: HomeKitEventTraceSink,
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -130,14 +131,17 @@ export class HomeKitReconciler {
     const nextRepresented = new Set<string>();
     for (const [serial, device] of view.registry) {
       const manifest = manifests.get(serial)!;
-      if (!ADAPTER_REGISTRY[CONTACT_ADAPTER_KEY].admits(manifest)) {
-        this.contactHandles.delete(serial);
-        this.clearAdapterDiagnostics(serial);
+      const admittedAdapters = Object.entries(ADAPTER_REGISTRY).filter(([, adapter]) => adapter.admits(manifest));
+      const admittedKeys = new Set(admittedAdapters.map(([key]) => key));
+      for (const previousKey of this.activeAdapters.get(serial) ?? []) {
+        if (!admittedKeys.has(previousKey)) {
+          this.clearAdapterDiagnostics(serial, undefined, previousKey);
+        }
       }
-      const admittedPrimaryAdapters = Object.values(ADAPTER_REGISTRY).filter(
-        (adapter) => adapter.role === 'primary-purpose' && adapter.admits(manifest),
-      );
+      this.activeAdapters.set(serial, admittedKeys);
+      const admittedPrimaryAdapters = admittedAdapters.filter(([, adapter]) => adapter.role === 'primary-purpose');
       if (admittedPrimaryAdapters.length === 0) {
+        this.attachedAdapters.delete(serial);
         this.setRepresentationDiagnostic(serial, 'no-primary-purpose-member');
         continue;
       }
@@ -145,37 +149,38 @@ export class HomeKitReconciler {
       const uuid = this.store.generateUuid(`d1_${serial}`);
       const existing = this.accessories.get(uuid);
       const accessory = existing ?? this.store.createAccessory(manifest.name, uuid);
-      const context: AdapterAttachmentContext = {
-        contact: () => {
-          const handle = adaptContact(
-            device,
-            this.contactDefinitions(),
-            this.contactRecorder(accessory, serial),
-            (diagnostic) => this.setAdapterDiagnostic(serial, diagnostic),
-          );
-          if (handle) {
-            this.contactHandles.set(serial, handle);
-          }
-          return handle;
-        },
-        information: () => adaptInformation(device, this.informationRecorder(accessory)),
+      const handles = new Map<string, AttachedAdapter>();
+      const attach = (key: string, adapter: (typeof ADAPTER_REGISTRY)[keyof typeof ADAPTER_REGISTRY]): boolean => {
+        const handle = adapter.attach({
+          device,
+          accessory,
+          hap: this.store.hap,
+          diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
+          observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
+        });
+        if (handle) {
+          handles.set(key, handle);
+        }
+        return handle !== undefined;
       };
       let primaryAttached = false;
-      for (const adapter of admittedPrimaryAdapters) {
-        primaryAttached = Boolean(adapter.attach(context)) || primaryAttached;
+      for (const [key, adapter] of admittedPrimaryAdapters) {
+        primaryAttached = attach(key, adapter) || primaryAttached;
       }
       if (!primaryAttached) {
+        this.attachedAdapters.set(serial, handles);
         this.setRepresentationDiagnostic(serial, 'primary-adapter-unavailable');
         continue;
       }
 
       accessory.updateDisplayName(manifest.name);
       (accessory.context as AccessoryContext).homebridgeEufy = { version: 1, serial };
-      for (const adapter of Object.values(ADAPTER_REGISTRY)) {
-        if (adapter.role === 'supplemental' && adapter.admits(manifest)) {
-          adapter.attach(context);
+      for (const [key, adapter] of admittedAdapters) {
+        if (adapter.role === 'supplemental') {
+          attach(key, adapter);
         }
       }
+      this.attachedAdapters.set(serial, handles);
       this.accessories.set(uuid, accessory);
       nextRepresented.add(serial);
       this.clearRepresentationDiagnostic(serial);
@@ -196,7 +201,8 @@ export class HomeKitReconciler {
         this.store.unregister([accessory]);
         this.accessories.delete(uuid);
       }
-      this.contactHandles.delete(serial);
+      this.attachedAdapters.delete(serial);
+      this.activeAdapters.delete(serial);
       this.clearAdapterDiagnostics(serial);
     }
     for (const serial of this.representationDiagnostics.keys()) {
@@ -210,6 +216,12 @@ export class HomeKitReconciler {
     for (const serial of removedDiagnosticSerials) {
       this.clearAdapterDiagnostics(serial);
     }
+    for (const serial of this.activeAdapters.keys()) {
+      if (!manifests.has(serial)) {
+        this.activeAdapters.delete(serial);
+        this.attachedAdapters.delete(serial);
+      }
+    }
     this.representedSerials.clear();
     for (const serial of nextRepresented) {
       this.representedSerials.add(serial);
@@ -218,77 +230,15 @@ export class HomeKitReconciler {
   }
 
   private observe(event: AnyDeviceEvent): void {
-    if (event.eventName !== 'contactState' || !event.deviceSn) {
+    if (!event.deviceSn) {
       return;
     }
-    this.contactHandles.get(event.deviceSn)?.observe(event);
-    if (typeof event.open === 'boolean') {
-      this.clearAdapterDiagnostics(event.deviceSn, 'invalid-contact-observation');
+    for (const [adapter, handle] of this.attachedAdapters.get(event.deviceSn) ?? []) {
+      const result = handle.event?.(event);
+      if (result) {
+        this.trace?.({ adapter, ...result });
+      }
     }
-  }
-
-  private contactDefinitions(): ContactHapDefinitions {
-    return {
-      ContactSensor: this.store.hap.Service.ContactSensor,
-      ContactSensorState: this.store.hap.Characteristic.ContactSensorState,
-      StatusFault: this.store.hap.Characteristic.StatusFault,
-      serviceCommunicationFailure: this.store.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-    };
-  }
-
-  private contactRecorder(accessory: PlatformAccessory, serial: string): ContactHapRecorder {
-    return {
-      addService: (definition, key) =>
-        accessory.getServiceById(this.serviceDefinition(definition), key) ??
-        accessory.addService(this.serviceDefinition(definition), accessory.displayName, key),
-      onGet: (service, characteristic, handler) => {
-        (service as Service).getCharacteristic(this.characteristicDefinition(characteristic)).onGet(() => {
-          try {
-            const value = handler();
-            if (characteristic.UUID === this.store.hap.Characteristic.ContactSensorState.UUID) {
-              this.clearAdapterDiagnostics(serial, 'invalid-contact-observation');
-            }
-            return value;
-          } catch (error) {
-            if (error instanceof HapReadError) {
-              throw new this.store.hap.HapStatusError(error.hapStatus);
-            }
-            throw error;
-          }
-        });
-      },
-      update: (service, characteristic, value) => {
-        (service as Service).updateCharacteristic(this.characteristicDefinition(characteristic), value);
-      },
-    } satisfies ContactHapRecorder;
-  }
-
-  private serviceDefinition(definition: HapServiceDefinition): typeof Service.ContactSensor {
-    if (definition.UUID !== this.store.hap.Service.ContactSensor.UUID) {
-      throw new TypeError('unsupported HomeKit service definition');
-    }
-    return this.store.hap.Service.ContactSensor;
-  }
-
-  private characteristicDefinition(
-    definition: HapCharacteristicDefinition,
-  ): typeof Characteristic.ContactSensorState | typeof Characteristic.StatusFault {
-    if (definition.UUID === this.store.hap.Characteristic.ContactSensorState.UUID) {
-      return this.store.hap.Characteristic.ContactSensorState;
-    }
-    if (definition.UUID === this.store.hap.Characteristic.StatusFault.UUID) {
-      return this.store.hap.Characteristic.StatusFault;
-    }
-    throw new TypeError('unsupported HomeKit characteristic definition');
-  }
-
-  private informationRecorder(accessory: PlatformAccessory): InformationRecorder {
-    const service = accessory.getService(this.store.hap.Service.AccessoryInformation)!;
-    return {
-      set: (characteristic, value) => {
-        service.updateCharacteristic(this.store.hap.Characteristic[characteristic], value);
-      },
-    };
   }
 
   private setRepresentationDiagnostic(
@@ -320,13 +270,13 @@ export class HomeKitReconciler {
     });
   }
 
-  private setAdapterDiagnostic(serial: string, diagnostic: ContactDiagnostic): void {
-    const key = `${serial}:${diagnostic.code}:${diagnostic.capability}:${diagnostic.member}`;
+  private setAdapterDiagnostic(serial: string, adapter: string, diagnostic: AdapterDiagnostic): void {
+    const key = `${serial}:${adapter}:${diagnostic.code}:${diagnostic.capability}:${diagnostic.member}`;
     if (diagnostic.active) {
       if (this.adapterDiagnostics.get(key)?.diagnostic.reason === diagnostic.reason) {
         return;
       }
-      this.adapterDiagnostics.set(key, { serial, diagnostic });
+      this.adapterDiagnostics.set(key, { serial, adapter, diagnostic });
       this.diagnose({ ...diagnostic, affectedDeviceCount: this.adapterDiagnosticCount(diagnostic.code) });
       return;
     }
@@ -342,31 +292,29 @@ export class HomeKitReconciler {
     }
   }
 
-  private adapterDiagnosticCount(code: ContactDiagnostic['code']): number {
+  private adapterDiagnosticCount(code: string): number {
     return [...this.adapterDiagnostics.values()].filter(({ diagnostic }) => diagnostic.code === code).length;
   }
 
-  private clearAdapterDiagnostics(serial: string, onlyCode?: ContactDiagnostic['code']): void {
+  private clearAdapterDiagnostics(serial: string, onlyCode?: string, onlyAdapter?: string): void {
     const prefix = `${serial}:`;
-    const removedCodes = new Set<ContactDiagnostic['code']>();
+    const removed = new Map<string, AdapterDiagnostic>();
     for (const [key, entry] of this.adapterDiagnostics) {
-      if (key.startsWith(prefix) && (onlyCode === undefined || entry.diagnostic.code === onlyCode)) {
+      if (
+        key.startsWith(prefix) &&
+        (onlyCode === undefined || entry.diagnostic.code === onlyCode) &&
+        (onlyAdapter === undefined || entry.adapter === onlyAdapter)
+      ) {
         this.adapterDiagnostics.delete(key);
-        removedCodes.add(entry.diagnostic.code);
+        removed.set(entry.diagnostic.code, entry.diagnostic);
       }
     }
-    for (const code of removedCodes) {
+    for (const [code, removedDiagnostic] of removed) {
       const remaining = [...this.adapterDiagnostics.values()]
         .map((entry) => entry.diagnostic)
         .find((diagnostic) => diagnostic.code === code);
       this.diagnose({
-        ...(remaining ?? {
-          code,
-          capability: 'contact',
-          member: 'open',
-          reason: 'recovered',
-          active: false,
-        }),
+        ...(remaining ?? { ...removedDiagnostic, reason: 'recovered', active: false }),
         active: remaining !== undefined,
         affectedDeviceCount: this.adapterDiagnosticCount(code),
       });

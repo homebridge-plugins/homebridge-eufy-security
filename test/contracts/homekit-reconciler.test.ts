@@ -7,6 +7,7 @@ import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import {
   HomeKitReconciler,
   type HomeKitDiagnostic,
+  type HomeKitEventTrace,
   type HomeKitRegistryListener,
   type HomeKitRegistrySource,
   type HomeKitRegistryView,
@@ -166,7 +167,14 @@ describe('HomeKit registry reconciliation', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
     const diagnostics: HomeKitDiagnostic[] = [];
-    const reconciler = new HomeKitReconciler(source, recording.api, (diagnostic) => diagnostics.push(diagnostic));
+    const traces: HomeKitEventTrace[] = [];
+    const reconciler = new HomeKitReconciler(
+      source,
+      recording.api,
+      (diagnostic) => diagnostics.push(diagnostic),
+      [],
+      (trace) => traces.push(trace),
+    );
     reconciler.start();
 
     const serial = 'synthetic-contact';
@@ -187,6 +195,14 @@ describe('HomeKit registry reconciliation', () => {
         .getServiceById(Service.ContactSensor, 'contact.sensor')
         ?.getCharacteristic(Characteristic.ContactSensorState).value,
     ).toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
+    expect(traces).toEqual([
+      {
+        adapter: 'contact.sensor',
+        event: 'contact-state',
+        observation: 'valid',
+      },
+    ]);
+    expect(JSON.stringify(traces)).not.toContain(serial);
 
     source.publish(
       registryView(

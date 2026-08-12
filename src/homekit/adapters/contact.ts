@@ -1,45 +1,24 @@
-import type { ContactActions, DeviceEventMap } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, ContactActions, DeviceManifest } from '@mega-yfue/eufy-sdk';
+
+import type {
+  AdapterAttachmentContext,
+  AdapterDiagnostic,
+  AdapterEventTrace,
+  AttachedAdapter,
+  HomeKitAdapter,
+} from '../adapter.js';
 
 export const CONTACT_ADAPTER_KEY = 'contact.sensor';
 
-export interface HapServiceDefinition {
-  readonly UUID: string;
-}
-
-export interface HapCharacteristicDefinition {
-  readonly UUID: string;
-}
-
-interface ContactSensorStateDefinition extends HapCharacteristicDefinition {
-  readonly CONTACT_DETECTED: number;
-  readonly CONTACT_NOT_DETECTED: number;
-}
-
-interface StatusFaultDefinition extends HapCharacteristicDefinition {
-  readonly NO_FAULT: number;
-  readonly GENERAL_FAULT: number;
-}
-
-export interface ContactHapDefinitions {
-  readonly ContactSensor: HapServiceDefinition;
-  readonly ContactSensorState: ContactSensorStateDefinition;
-  readonly StatusFault: StatusFaultDefinition;
-  readonly serviceCommunicationFailure: number;
-}
-
-export interface ContactHapRecorder {
-  addService(definition: HapServiceDefinition, key: string): object;
-  onGet(service: object, characteristic: HapCharacteristicDefinition, handler: () => number): void;
-  update(service: object, characteristic: HapCharacteristicDefinition, value: number): void;
-}
-
+/** The typed SDK contact accessor consumed by HomeKit. */
 export interface ContactSdkDevice {
   contact?: () => ContactActions | undefined;
 }
 
 export type ContactDiagnosticReason = 'missing' | 'malformed' | 'sdk-fault' | 'recovered';
 
-export interface ContactDiagnostic {
+/** Structured conditions emitted by the contact adapter. */
+export interface ContactDiagnostic extends AdapterDiagnostic {
   code: 'contact-capability-unavailable' | 'invalid-contact-observation';
   capability: 'contact';
   member: 'open';
@@ -47,32 +26,31 @@ export interface ContactDiagnostic {
   reason: ContactDiagnosticReason;
 }
 
-export type ContactDiagnosticSink = (diagnostic: ContactDiagnostic) => void;
-
-export class HapReadError extends Error {
-  constructor(
-    readonly hapStatus: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'HapReadError';
-  }
+function admitsContact(manifest: DeviceManifest): boolean {
+  return manifest.details.some(
+    (detail) =>
+      detail.capability === 'contact' &&
+      detail.reads.some((read) => read.accessor === 'open' && read.type === 'bool' && !read.writable),
+  );
 }
 
-export interface ContactAdapterHandle {
-  observe(event: DeviceEventMap['contactState']): void;
-}
+/** Complete HomeKit policy for the contact capability. */
+export const CONTACT_ADAPTER = {
+  key: CONTACT_ADAPTER_KEY,
+  role: 'primary-purpose',
+  primaryRows: ['contact.open.read'],
+  rows: ['contact.open.read', 'contact.contactState.event'],
+  admits: admitsContact,
+  attach: attachContact,
+} as const satisfies HomeKitAdapter;
 
-/** Adapts verified SDK contact observations to one official HAP Contact Sensor service. */
-export function adaptContact(
-  device: ContactSdkDevice,
-  definitions: ContactHapDefinitions,
-  recorder: ContactHapRecorder,
-  diagnose: ContactDiagnosticSink,
-): ContactAdapterHandle | undefined {
+/** Attaches verified SDK contact semantics to one official HomeKit Contact Sensor service. */
+function attachContact(context: AdapterAttachmentContext): AttachedAdapter | undefined {
+  const { accessory, hap } = context;
+  const device = context.device as ContactSdkDevice;
   const contact = device.contact?.();
   if (!contact) {
-    diagnose({
+    context.diagnose({
       code: 'contact-capability-unavailable',
       capability: 'contact',
       member: 'open',
@@ -81,7 +59,7 @@ export function adaptContact(
     });
     return undefined;
   }
-  diagnose({
+  context.diagnose({
     code: 'contact-capability-unavailable',
     capability: 'contact',
     member: 'open',
@@ -89,7 +67,9 @@ export function adaptContact(
     reason: 'recovered',
   });
 
-  const service = recorder.addService(definitions.ContactSensor, CONTACT_ADAPTER_KEY);
+  const service =
+    accessory.getServiceById(hap.Service.ContactSensor, CONTACT_ADAPTER_KEY) ??
+    accessory.addService(hap.Service.ContactSensor, accessory.displayName, CONTACT_ADAPTER_KEY);
   let observedOpen: boolean | undefined;
   let eventObservationInvalid = false;
   let faulted = true;
@@ -103,8 +83,8 @@ export function adaptContact(
     }
     reportedFault = true;
     faultReason = reason;
-    recorder.update(service, definitions.StatusFault, definitions.StatusFault.GENERAL_FAULT);
-    diagnose({
+    service.updateCharacteristic(hap.Characteristic.StatusFault, hap.Characteristic.StatusFault.GENERAL_FAULT);
+    context.diagnose({
       code: 'invalid-contact-observation',
       capability: 'contact',
       member: 'open',
@@ -118,11 +98,11 @@ export function adaptContact(
       return;
     }
     faulted = false;
-    recorder.update(service, definitions.StatusFault, definitions.StatusFault.NO_FAULT);
+    service.updateCharacteristic(hap.Characteristic.StatusFault, hap.Characteristic.StatusFault.NO_FAULT);
     if (reportedFault) {
       reportedFault = false;
       faultReason = undefined;
-      diagnose({
+      context.diagnose({
         code: 'invalid-contact-observation',
         capability: 'contact',
         member: 'open',
@@ -133,56 +113,54 @@ export function adaptContact(
   };
 
   const hapValue = (open: boolean): number =>
-    open ? definitions.ContactSensorState.CONTACT_NOT_DETECTED : definitions.ContactSensorState.CONTACT_DETECTED;
+    open
+      ? hap.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED
+      : hap.Characteristic.ContactSensorState.CONTACT_DETECTED;
 
-  const read = (): number => {
+  service.getCharacteristic(hap.Characteristic.ContactSensorState).onGet(() => {
     if (eventObservationInvalid) {
       setFault('malformed');
-      throw new HapReadError(definitions.serviceCommunicationFailure, 'SDK contact observation is malformed');
+      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-
     let open: unknown;
     try {
       open = observedOpen ?? contact.open;
     } catch {
       setFault('sdk-fault');
-      throw new HapReadError(definitions.serviceCommunicationFailure, 'SDK contact observation failed');
+      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-
-    if (open === undefined) {
-      setFault('missing');
-      throw new HapReadError(definitions.serviceCommunicationFailure, 'SDK contact observation is unavailable');
+    if (open === undefined || typeof open !== 'boolean') {
+      setFault(open === undefined ? 'missing' : 'malformed');
+      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-    if (typeof open !== 'boolean') {
-      setFault('malformed');
-      throw new HapReadError(definitions.serviceCommunicationFailure, 'SDK contact observation is malformed');
-    }
-
     recover();
+    context.observed('invalid-contact-observation');
     return hapValue(open);
-  };
-
-  recorder.onGet(service, definitions.ContactSensorState, read);
-  recorder.onGet(service, definitions.StatusFault, () =>
-    faulted ? definitions.StatusFault.GENERAL_FAULT : definitions.StatusFault.NO_FAULT,
-  );
+  });
+  service
+    .getCharacteristic(hap.Characteristic.StatusFault)
+    .onGet(() => (faulted ? hap.Characteristic.StatusFault.GENERAL_FAULT : hap.Characteristic.StatusFault.NO_FAULT));
 
   return {
-    observe(event): void {
+    event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
+      if (event.eventName !== 'contactState') {
+        return undefined;
+      }
       if (event.open === undefined) {
-        return;
+        return { event: 'contact-state', observation: 'missing' };
       }
       if (typeof event.open !== 'boolean') {
         observedOpen = undefined;
         eventObservationInvalid = true;
         setFault('malformed');
-        return;
+        return { event: 'contact-state', observation: 'malformed' };
       }
-
       eventObservationInvalid = false;
       observedOpen = event.open;
       recover();
-      recorder.update(service, definitions.ContactSensorState, hapValue(event.open));
+      service.updateCharacteristic(hap.Characteristic.ContactSensorState, hapValue(event.open));
+      context.observed('invalid-contact-observation');
+      return { event: 'contact-state', observation: 'valid' };
     },
   };
 }

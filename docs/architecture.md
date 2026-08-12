@@ -84,6 +84,11 @@ The contract suite rejects unlisted top-level modules, dependency edges, interna
 sharing buckets, and internal barrels. A new module or edge is an architecture decision and therefore
 requires a deliberate update to both this document and the executable contract.
 
+Each HomeKit capability adapter is self-hosted in one file: its admission evidence, coverage rows,
+stable keys, HAP attachment, observations, events, and diagnostics stay together. The adapter registry
+only assembles those modules; the reconciler owns containers and complete-snapshot lifecycle, not
+capability behavior.
+
 ## Composition roots
 
 `platform.ts` and `ui/server.ts` are composition roots. They may see multiple modules to construct and

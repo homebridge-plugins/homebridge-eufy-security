@@ -72,6 +72,8 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
 
 - Map SDK capabilities through explicit capability adapters. Do not build a generic shape-driven
   mapper.
+- Keep each capability adapter self-hosted in one file: admission, coverage rows, stable keys, HAP
+  attachment, observations, events, and diagnostics change together.
 - Use bundle adapters where several capabilities or HomeKit services have coupled behavior.
 - Keep observations distinct from projections. A successful SDK command acknowledges delivery, not
   physical convergence; a later device observation is authoritative.

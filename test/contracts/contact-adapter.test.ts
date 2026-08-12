@@ -1,87 +1,59 @@
-import type { ContactActions, DeviceEventMap } from '@mega-yfue/eufy-sdk';
-import { Characteristic, HAPStatus, Service } from '@homebridge/hap-nodejs';
+import type { AnyDeviceEvent, ContactActions } from '@mega-yfue/eufy-sdk';
+import { Accessory, Characteristic, HAPStatus, HapStatusError, Service, uuid } from '@homebridge/hap-nodejs';
+import type { PlatformAccessory } from 'homebridge';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  adaptContact,
+  CONTACT_ADAPTER,
   CONTACT_ADAPTER_KEY,
-  HapReadError,
   type ContactDiagnostic,
-  type ContactHapDefinitions,
-  type ContactHapRecorder,
   type ContactSdkDevice,
-  type HapCharacteristicDefinition,
-  type HapServiceDefinition,
 } from '../../src/homekit/adapters/contact.js';
 
-const HAP: ContactHapDefinitions = {
-  ContactSensor: Service.ContactSensor,
-  ContactSensorState: Characteristic.ContactSensorState,
-  StatusFault: Characteristic.StatusFault,
-  serviceCommunicationFailure: HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-};
+const HAP = { Service, Characteristic, HAPStatus, HapStatusError };
 
-class RecordingHap implements ContactHapRecorder {
-  readonly services: Array<{ definition: HapServiceDefinition; key: string }> = [];
-  readonly getters = new Map<string, () => number>();
-  readonly updates: Array<{ characteristic: HapCharacteristicDefinition; value: number }> = [];
-
-  addService(definition: HapServiceDefinition, key: string): object {
-    this.services.push({ definition, key });
-    return {};
-  }
-
-  onGet(_service: object, characteristic: HapCharacteristicDefinition, handler: () => number): void {
-    this.getters.set(characteristic.UUID, handler);
-  }
-
-  update(_service: object, characteristic: HapCharacteristicDefinition, value: number): void {
-    this.updates.push({ characteristic, value });
-  }
-
-  read(characteristic: HapCharacteristicDefinition): number {
-    const getter = this.getters.get(characteristic.UUID);
-    if (!getter) {
-      throw new Error(`missing getter for ${characteristic.UUID}`);
-    }
-    return getter();
-  }
+function accessory(): PlatformAccessory {
+  return new Accessory('Synthetic contact', uuid.generate('synthetic-contact')) as unknown as PlatformAccessory;
 }
 
 function contactDevice(read: () => unknown, extra: Partial<ContactActions> = {}): ContactSdkDevice {
-  const contact = {
-    ...extra,
-    get open(): boolean | undefined {
-      return read() as boolean | undefined;
-    },
-  } satisfies ContactActions;
-  return { contact: () => contact };
+  return {
+    contact: () => ({
+      ...extra,
+      get open(): boolean | undefined {
+        return read() as boolean | undefined;
+      },
+    }),
+  };
+}
+
+function attach(
+  device: ContactSdkDevice,
+  target: PlatformAccessory,
+  diagnose: (diagnostic: ContactDiagnostic) => void = vi.fn(),
+) {
+  return CONTACT_ADAPTER.attach({ device: device as never, accessory: target, hap: HAP, diagnose, observed: vi.fn() });
 }
 
 describe('contact capability adapter', () => {
-  it('maps authoritative SDK contact polarity through real HAP definitions', () => {
+  it('maps authoritative SDK contact polarity through real HAP definitions', async () => {
     let open: unknown = false;
-    const hap = new RecordingHap();
-    const adapter = adaptContact(
+    const target = accessory();
+    const adapter = attach(
       contactDevice(() => open),
-      HAP,
-      hap,
-      vi.fn(),
+      target,
     )!;
+    const service = target.getServiceById(Service.ContactSensor, CONTACT_ADAPTER_KEY)!;
+    const state = service.getCharacteristic(Characteristic.ContactSensorState);
 
-    expect(hap.read(Characteristic.ContactSensorState)).toBe(Characteristic.ContactSensorState.CONTACT_DETECTED);
+    await expect(state.handleGetRequest()).resolves.toBe(Characteristic.ContactSensorState.CONTACT_DETECTED);
     open = true;
-    expect(hap.read(Characteristic.ContactSensorState)).toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
+    await expect(state.handleGetRequest()).resolves.toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
 
-    adapter.observe({ open: false });
-    adapter.observe({ open: true });
-    expect(hap.updates.filter(({ characteristic }) => characteristic === Characteristic.ContactSensorState)).toEqual([
-      { characteristic: Characteristic.ContactSensorState, value: Characteristic.ContactSensorState.CONTACT_DETECTED },
-      {
-        characteristic: Characteristic.ContactSensorState,
-        value: Characteristic.ContactSensorState.CONTACT_NOT_DETECTED,
-      },
-    ]);
+    adapter.event({ eventName: 'contactState', open: false } as AnyDeviceEvent);
+    expect(state.value).toBe(Characteristic.ContactSensorState.CONTACT_DETECTED);
+    adapter.event({ eventName: 'contactState', open: true } as AnyDeviceEvent);
+    expect(state.value).toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
   });
 
   it.each([
@@ -93,45 +65,42 @@ describe('contact capability adapter', () => {
         throw new Error('synthetic SDK read failure');
       },
     ],
-  ])('fails %s reads instead of supplying a closed default', (_case, read) => {
-    const hap = new RecordingHap();
+  ])('fails %s reads instead of supplying a closed default', async (_case, read) => {
+    const target = accessory();
     const diagnostics: ContactDiagnostic[] = [];
-    adaptContact(contactDevice(read), HAP, hap, (diagnostic) => diagnostics.push(diagnostic));
+    attach(contactDevice(read), target, (diagnostic) => diagnostics.push(diagnostic));
+    const service = target.getServiceById(Service.ContactSensor, CONTACT_ADAPTER_KEY)!;
 
-    expect(() => hap.read(Characteristic.ContactSensorState)).toThrowError(HapReadError);
-    try {
-      hap.read(Characteristic.ContactSensorState);
-    } catch (error) {
-      expect(error).toMatchObject({ hapStatus: HAPStatus.SERVICE_COMMUNICATION_FAILURE });
-    }
-    expect(hap.read(Characteristic.StatusFault)).toBe(Characteristic.StatusFault.GENERAL_FAULT);
-    const observationDiagnostics = diagnostics.filter(({ code }) => code === 'invalid-contact-observation');
-    expect(observationDiagnostics.at(-1)).toMatchObject({ active: true });
-    expect(observationDiagnostics).toHaveLength(1);
+    await expect(service.getCharacteristic(Characteristic.ContactSensorState).handleGetRequest()).rejects.toBe(
+      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+    );
+    await expect(service.getCharacteristic(Characteristic.StatusFault).handleGetRequest()).resolves.toBe(
+      Characteristic.StatusFault.GENERAL_FAULT,
+    );
+    expect(diagnostics.filter(({ code }) => code === 'invalid-contact-observation')).toHaveLength(1);
   });
 
-  it('ignores omitted event state and clears a fault only after a valid observation', () => {
-    const hap = new RecordingHap();
+  it('ignores omitted events and recovers only from valid contact evidence', async () => {
+    const target = accessory();
     const diagnostics: ContactDiagnostic[] = [];
-    const adapter = adaptContact(
+    const adapter = attach(
       contactDevice(() => undefined),
-      HAP,
-      hap,
+      target,
       (diagnostic) => diagnostics.push(diagnostic),
     )!;
+    const service = target.getServiceById(Service.ContactSensor, CONTACT_ADAPTER_KEY)!;
+    const state = service.getCharacteristic(Characteristic.ContactSensorState);
 
-    expect(() => hap.read(Characteristic.ContactSensorState)).toThrowError(HapReadError);
-    adapter.observe({});
-    expect(hap.updates).toEqual([
-      { characteristic: Characteristic.StatusFault, value: Characteristic.StatusFault.GENERAL_FAULT },
-    ]);
+    await expect(state.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    expect(adapter.event({ eventName: 'contactState' } as AnyDeviceEvent)).toMatchObject({ observation: 'missing' });
+    expect(adapter.event({ eventName: 'contactState', open: 'malformed' } as unknown as AnyDeviceEvent)).toMatchObject({
+      observation: 'malformed',
+    });
+    expect(adapter.event({ eventName: 'contactState', open: false } as AnyDeviceEvent)).toMatchObject({
+      observation: 'valid',
+    });
 
-    adapter.observe({ open: 'malformed' } as unknown as DeviceEventMap['contactState']);
-    expect(() => hap.read(Characteristic.ContactSensorState)).toThrowError(HapReadError);
-    adapter.observe({ open: false });
-
-    expect(hap.read(Characteristic.ContactSensorState)).toBe(Characteristic.ContactSensorState.CONTACT_DETECTED);
-    expect(hap.read(Characteristic.StatusFault)).toBe(Characteristic.StatusFault.NO_FAULT);
+    expect(state.value).toBe(Characteristic.ContactSensorState.CONTACT_DETECTED);
     expect(diagnostics.filter(({ code }) => code === 'invalid-contact-observation')).toEqual([
       expect.objectContaining({ active: true, reason: 'missing' }),
       expect.objectContaining({ active: true, reason: 'malformed' }),
@@ -139,49 +108,12 @@ describe('contact capability adapter', () => {
     ]);
   });
 
-  it('omits contact representation when the SDK capability is absent', () => {
-    const hap = new RecordingHap();
+  it('does not create a service when the SDK contact capability is absent', () => {
+    const target = accessory();
     const diagnostics: ContactDiagnostic[] = [];
 
-    const adapter = adaptContact({}, HAP, hap, (diagnostic) => diagnostics.push(diagnostic));
-
-    expect(adapter).toBeUndefined();
-    expect(hap.services).toEqual([]);
-    adaptContact(
-      contactDevice(() => false),
-      HAP,
-      hap,
-      (diagnostic) => diagnostics.push(diagnostic),
-    );
-    expect(diagnostics.filter(({ code }) => code === 'contact-capability-unavailable')).toEqual([
-      expect.objectContaining({ active: true, reason: 'missing' }),
-      expect.objectContaining({ active: false, reason: 'recovered' }),
-    ]);
-  });
-
-  it('uses one stable semantic service key and omits diagnostic-only contact members', () => {
-    const hap = new RecordingHap();
-    const setAlarmSoundType = vi.fn().mockResolvedValue(undefined);
-    const setAlarmVolume = vi.fn().mockResolvedValue(undefined);
-    adaptContact(
-      contactDevice(() => false, {
-        lastSeen: 1_786_000_000,
-        rssi: -61,
-        alarmSoundType: 2,
-        alarmVolume: 20,
-        setAlarmSoundType,
-        setAlarmVolume,
-      }),
-      HAP,
-      hap,
-      vi.fn(),
-    );
-
-    expect(hap.services).toEqual([{ definition: Service.ContactSensor, key: CONTACT_ADAPTER_KEY }]);
-    expect([...hap.getters.keys()].sort()).toEqual(
-      [Characteristic.ContactSensorState.UUID, Characteristic.StatusFault.UUID].sort(),
-    );
-    expect(setAlarmSoundType).not.toHaveBeenCalled();
-    expect(setAlarmVolume).not.toHaveBeenCalled();
+    expect(attach({}, target, (diagnostic) => diagnostics.push(diagnostic))).toBeUndefined();
+    expect(target.getServiceById(Service.ContactSensor, CONTACT_ADAPTER_KEY)).toBeUndefined();
+    expect(diagnostics).toEqual([expect.objectContaining({ code: 'contact-capability-unavailable', active: true })]);
   });
 });
