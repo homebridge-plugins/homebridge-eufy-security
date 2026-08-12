@@ -1,8 +1,10 @@
-import type { DynamicPlatformPlugin, PlatformAccessory, PlatformConfig } from 'homebridge';
+import type { API, DynamicPlatformPlugin, HAP, PlatformAccessory, PlatformConfig } from 'homebridge';
 
 import { parseConfig } from './configuration.js';
+import { HomeKitReconciler, type HomeKitAccessoryStore, type HomeKitDiagnostic } from './homekit/reconciler.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
+import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { resolveStorageRoot } from './storage.js';
 
 export type PlatformLifecycleEvent = 'didFinishLaunching' | 'shutdown';
@@ -22,6 +24,11 @@ export interface PlatformLogger {
 export interface PlatformApi {
   on(event: PlatformLifecycleEvent, listener: () => void): void;
   user?: { storagePath(): string };
+  hap?: HAP;
+  platformAccessory?: API['platformAccessory'];
+  registerPlatformAccessories?: API['registerPlatformAccessories'];
+  updatePlatformAccessories?: API['updatePlatformAccessories'];
+  unregisterPlatformAccessories?: API['unregisterPlatformAccessories'];
 }
 
 export interface EufyPlatformConstructor {
@@ -35,6 +42,8 @@ export function createEufyPlatform(
 ): EufyPlatformConstructor {
   return class EufyPlatform implements DynamicPlatformPlugin {
     private readonly runtime: RuntimeOwner;
+    private readonly cachedAccessories: PlatformAccessory[] = [];
+    private reconciler?: HomeKitReconciler;
 
     constructor(log: PlatformLogger, config: PlatformConfig, api: PlatformApi) {
       const configuredConfig = parseConfig(config);
@@ -49,19 +58,61 @@ export function createEufyPlatform(
             signalTarget?.off(signal, stop);
           }
         }
+        this.reconciler?.stop();
         void this.runtime.stop();
       };
       for (const signal of signals) {
         signalTarget?.on(signal, stop);
       }
       api.on('didFinishLaunching', () => {
+        const accessoryStore = createAccessoryStore(api);
+        if (accessoryStore) {
+          this.reconciler ??= new HomeKitReconciler(
+            this.runtime,
+            accessoryStore,
+            (diagnostic) => reportHomeKitDiagnostic(log, diagnostic),
+            this.cachedAccessories,
+          );
+          this.reconciler.start();
+        }
         void this.runtime.start();
       });
       api.on('shutdown', stop);
     }
 
-    configureAccessory(_accessory: PlatformAccessory): void {}
+    configureAccessory(accessory: PlatformAccessory): void {
+      this.cachedAccessories.push(accessory);
+    }
   };
+}
+
+function createAccessoryStore(api: PlatformApi): HomeKitAccessoryStore | undefined {
+  if (
+    !api.hap ||
+    !api.platformAccessory ||
+    !api.registerPlatformAccessories ||
+    !api.updatePlatformAccessories ||
+    !api.unregisterPlatformAccessories
+  ) {
+    return undefined;
+  }
+  return {
+    hap: api.hap,
+    generateUuid: (input) => api.hap!.uuid.generate(input),
+    createAccessory: (name, uuid) => new api.platformAccessory!(name, uuid),
+    register: (accessories) => api.registerPlatformAccessories!(PLUGIN_NAME, PLATFORM_NAME, accessories),
+    update: (accessories) => api.updatePlatformAccessories!(accessories),
+    unregister: (accessories) => api.unregisterPlatformAccessories!(PLUGIN_NAME, PLATFORM_NAME, accessories),
+  };
+}
+
+function reportHomeKitDiagnostic(log: PlatformLogger, diagnostic: HomeKitDiagnostic): void {
+  const message = JSON.stringify({ scope: 'homekit', ...diagnostic });
+  if (diagnostic.active) {
+    log.warn(message);
+  } else {
+    log.info(message);
+  }
 }
 
 export const EufyPlatform = createEufyPlatform(createPersistedSdkClient, 10_000, process);

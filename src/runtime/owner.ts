@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import type { Device, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, Device, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import { AccountOwnership, type AccountOwnerEvidence, type AccountReleaseResult } from '../account/ownership.js';
 import { AccountSessionPersistence } from '../account/persistence.js';
@@ -68,6 +68,7 @@ export interface RuntimeRegistryView {
 }
 
 export type RuntimeRegistryListener = (view: RuntimeRegistryView) => void;
+export type RuntimeEventListener = (event: AnyDeviceEvent) => void;
 export type RuntimeStateListener = (state: RuntimeState) => void;
 
 /** Owns the long-lived SDK session, canonical registry, and runtime state transitions. */
@@ -85,6 +86,7 @@ export class RuntimeOwner {
   private registryView?: RuntimeRegistryView;
   private registryVersion = 0;
   private readonly registryListeners = new Set<RuntimeRegistryListener>();
+  private readonly eventListeners = new Set<RuntimeEventListener>();
   private readonly stateListeners = new Set<RuntimeStateListener>();
   private stopping = false;
   private cleanupTerminalState?: 'authentication-required' | 'failed' | 'stopped';
@@ -129,6 +131,11 @@ export class RuntimeOwner {
   subscribeRegistry(listener: RuntimeRegistryListener): () => void {
     this.registryListeners.add(listener);
     return () => this.registryListeners.delete(listener);
+  }
+
+  subscribeEvents(listener: RuntimeEventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   subscribeState(listener: RuntimeStateListener): () => void {
@@ -221,6 +228,7 @@ export class RuntimeOwner {
           return;
         }
         this.client = this.clientFactory(config, active);
+        this.client.onEvent?.((event) => this.publishEvent(event));
         this.client.onInventory?.((result) => {
           void this.applyRuntimeResult(active, result).catch((error: unknown) => this.failRuntime(error));
         });
@@ -479,6 +487,16 @@ export class RuntimeOwner {
         listener(view);
       } catch {
         this.log.warn('Runtime registry subscriber failed');
+      }
+    }
+  }
+
+  private publishEvent(event: AnyDeviceEvent): void {
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch {
+        this.log.warn('Runtime event subscriber failed');
       }
     }
   }

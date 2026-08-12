@@ -11,10 +11,14 @@ V5 distinguishes three claims:
 | Area | Status |
 |---|---|
 | Account and device discovery | Runtime available |
-| Contact sensor adapter | Implemented, not yet wired to production accessory publication |
+| Contact sensor adapter | Published from complete runtime registry snapshots |
 | Cameras, streaming, snapshots, talkback, HKSV | Deferred/in progress |
 | Motion and doorbell events | Deferred/in progress |
 | Security modes, locks, lights, sirens, battery | Deferred/in progress |
 
 Primitive type similarity never admits a mapping. Unsupported members remain diagnostic-only or blocked
 until verified SDK evidence and a semantic HomeKit contract both exist.
+
+Accessory containers use the SDK entity serial as their physical identity input. Station, channel,
+endpoint, and discovery order do not affect identity. Identity metadata supplements an already
+represented accessory but cannot create one by itself.

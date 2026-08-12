@@ -41,6 +41,11 @@ Consumers can read the current registry view and subscribe to later complete ver
 the minimal source interface it consumes; the platform composition root injects the structurally
 compatible `RuntimeOwner`. HomeKit does not import or construct the runtime implementation.
 
+The HomeKit reconciler keys accessory containers from the historical device UUID input `d1_<serial>`.
+Routing facts and discovery order never participate in identity. An explicit primary-purpose adapter
+must attach before a container is published; supplemental identity metadata can enrich that container
+but cannot establish representation. Services use stable semantic adapter keys within the container.
+
 ## Module graph
 
 ```text

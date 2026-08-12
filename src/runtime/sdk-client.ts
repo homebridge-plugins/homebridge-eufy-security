@@ -1,4 +1,4 @@
-import type { Device, EufyMega, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, Device, EufyMega, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import type { EufyConfig } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
@@ -16,6 +16,7 @@ export interface SdkClient {
   start(): Promise<void | SdkStartResult>;
   stop(): Promise<void>;
   onInventory?(listener: (result: SdkStartResult) => void): void;
+  onEvent?(listener: (event: AnyDeviceEvent) => void): void;
 }
 
 export interface RuntimeClientStores {
@@ -41,6 +42,7 @@ export class PersistedSdkClient implements SdkClient {
   private client?: EufyMega;
   private registry: ReadonlyMap<string, Device> = new Map();
   private inventoryListener?: (result: SdkStartResult) => void;
+  private eventListener?: (event: AnyDeviceEvent) => void;
   private refresh = Promise.resolve();
   private epoch = 0;
   private connected = false;
@@ -50,7 +52,7 @@ export class PersistedSdkClient implements SdkClient {
       this.inventoryListener?.({ state: 'authentication-required' });
     }
   };
-  private readonly handleEvent = (): void => undefined;
+  private readonly handleEvent = (event: AnyDeviceEvent): void => this.eventListener?.(event);
   private readonly handleConnect = (): void => {
     this.connected = true;
     this.epoch += 1;
@@ -125,6 +127,7 @@ export class PersistedSdkClient implements SdkClient {
     const client = this.client;
     this.client = undefined;
     this.inventoryListener = undefined;
+    this.eventListener = undefined;
     client?.off('error', this.handleError);
     client?.off('event', this.handleEvent);
     client?.off('connect', this.handleConnect);
@@ -138,6 +141,10 @@ export class PersistedSdkClient implements SdkClient {
 
   onInventory(listener: (result: SdkStartResult) => void): void {
     this.inventoryListener = listener;
+  }
+
+  onEvent(listener: (event: AnyDeviceEvent) => void): void {
+    this.eventListener = listener;
   }
 
   private scheduleRefresh(): void {

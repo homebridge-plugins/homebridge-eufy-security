@@ -107,4 +107,25 @@ describe('SDK/HAP coverage matrix', () => {
         .every((row) => row.adapter === null),
     ).toBe(true);
   });
+
+  it('distinguishes representation-establishing adapters from supplemental enrichment', () => {
+    expect(ADAPTER_REGISTRY['contact.sensor']).toMatchObject({
+      role: 'primary-purpose',
+      primaryRows: ['contact.open.read'],
+    });
+    expect(ADAPTER_REGISTRY['accessory.information']).toMatchObject({
+      role: 'supplemental',
+      primaryRows: [],
+    });
+
+    const informationRows = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ capability }) => capability === 'info');
+    const representedInformation = informationRows.filter(({ adapter }) => adapter === 'accessory.information');
+    expect(representedInformation).toHaveLength(6);
+    expect(representedInformation.every(({ followUp }) => followUp === undefined)).toBe(true);
+    expect(
+      representedInformation.every(({ verification }) =>
+        verification.some(({ file }) => file === 'test/contracts/homekit-reconciler.test.ts'),
+      ),
+    ).toBe(true);
+  });
 });

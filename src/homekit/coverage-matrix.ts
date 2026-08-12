@@ -292,24 +292,13 @@ const BLOCKED = new Set([
   'storage.total.read',
 ]);
 
-const DEFERRED_FOLLOW_UPS: Readonly<Record<string, string>> = {
-  'info.manufacturer.read': '#986: attach identity metadata only after a primary-purpose adapter represents the device',
-  'info.model.read': '#986: attach identity metadata only after a primary-purpose adapter represents the device',
-  'info.serialNumber.read': '#986: attach identity metadata only after a primary-purpose adapter represents the device',
-  'info.name.read': '#986: attach identity metadata only after a primary-purpose adapter represents the device',
-  'info.firmwareVersion.read':
-    '#986: attach identity metadata only after a primary-purpose adapter represents the device',
-  'info.hardwareVersion.read':
-    '#986: attach identity metadata only after a primary-purpose adapter represents the device',
-};
-
 function defer(rows: readonly string[], issue: string, risk: string): void {
   for (const row of rows) {
     DEFERRED[row] = `${issue}: ${risk}`;
   }
 }
 
-const DEFERRED: Record<string, string> = { ...DEFERRED_FOLLOW_UPS };
+const DEFERRED: Record<string, string> = {};
 defer(
   [
     'camera.enabled.read',
@@ -411,6 +400,7 @@ function makeRow(id: string): CoverageRow {
   const adapter = ADAPTER_BY_ROW.get(id) ?? null;
   const required = adapter !== null;
   const followUp = DEFERRED[id];
+  const supplementalInformation = adapter === 'accessory.information';
   const disposition: CoverageDisposition = required
     ? 'required-adapter'
     : BLOCKED.has(id)
@@ -426,7 +416,9 @@ function makeRow(id: string): CoverageRow {
     memberKind,
     evidence: memberEvidence(CAPABILITY_MODULES[capability as keyof typeof CAPABILITY_MODULES], member, memberKind),
     hapFit: required
-      ? 'Contact Sensor ContactSensorState; SDK open=true maps to HAP contact not detected'
+      ? supplementalInformation
+        ? 'Accessory Information characteristic with the matching typed SDK identity field'
+        : 'Contact Sensor ContactSensorState; SDK open=true maps to HAP contact not detected'
       : disposition === 'blocked-sdk-gap'
         ? 'No HAP representation is permitted without verified SDK truth'
         : disposition === 'explicitly-deferred'
@@ -437,11 +429,15 @@ function makeRow(id: string): CoverageRow {
     representationStatus: required ? 'represented' : 'not-represented',
     controlStatus: required ? 'not-controllable' : 'not-represented',
     identityEffect: required
-      ? 'Primary-purpose contact service uses stable semantic key contact.sensor; accessory-container identity is unchanged'
+      ? supplementalInformation
+        ? 'Supplements an existing represented accessory and cannot establish accessory-container identity'
+        : 'Primary-purpose contact service uses stable semantic key contact.sensor; accessory-container identity is unchanged'
       : 'No HomeKit service or accessory identity effect',
     diagnostics:
       disposition === 'required-adapter'
-        ? 'Emit and clear a structured invalid-contact-observation condition'
+        ? supplementalInformation
+          ? 'Omit unavailable optional identity fields without creating an accessory'
+          : 'Emit and clear a structured invalid-contact-observation condition'
         : disposition === 'blocked-sdk-gap'
           ? 'Report the SDK evidence gap without representation'
           : disposition === 'explicitly-deferred'
@@ -455,8 +451,12 @@ function makeRow(id: string): CoverageRow {
       ...(required
         ? [
             {
-              file: 'test/contracts/contact-adapter.test.ts',
-              behavior: 'maps authoritative SDK contact polarity through real HAP definitions',
+              file: supplementalInformation
+                ? 'test/contracts/homekit-reconciler.test.ts'
+                : 'test/contracts/contact-adapter.test.ts',
+              behavior: supplementalInformation
+                ? 'creates and updates one serial-based contact accessory with stable semantic services'
+                : 'maps authoritative SDK contact polarity through real HAP definitions',
             },
           ]
         : []),

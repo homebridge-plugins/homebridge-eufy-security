@@ -192,7 +192,11 @@ describe('persisted runtime owner', () => {
     const first = snapshot('synthetic-first');
     const second = snapshot('synthetic-second');
     let reportInventory: ((result: SdkStartResult) => void) | undefined;
+    let reportEvent: ((event: { eventName: 'contactState'; deviceSn: string; open: boolean }) => void) | undefined;
     const client: SdkClient = {
+      onEvent(listener): void {
+        reportEvent = listener;
+      },
       onInventory(listener): void {
         reportInventory = listener;
       },
@@ -227,7 +231,9 @@ describe('persisted runtime owner', () => {
     });
     const states: string[] = [];
     const views: Array<{ version: number; serials: string[]; state: string }> = [];
+    const events: string[] = [];
     const unsubscribeState = runtime.subscribeState((state) => states.push(state));
+    const unsubscribeEvents = runtime.subscribeEvents((event) => events.push(`${event.eventName}:${event.deviceSn}`));
     runtime.subscribeRegistry(() => {
       throw new Error('synthetic subscriber failure');
     });
@@ -250,6 +256,9 @@ describe('persisted runtime owner', () => {
     expect(views).toEqual([{ version: 1, serials: ['synthetic-first'], state: 'starting' }]);
     expect(warn).toHaveBeenCalledWith('Runtime registry subscriber failed');
 
+    reportEvent?.({ eventName: 'contactState', deviceSn: 'synthetic-first', open: true });
+    expect(events).toEqual(['contactState:synthetic-first']);
+
     reportInventory?.({ state: 'degraded' });
     await vi.waitFor(() => expect(runtime.currentState()).toBe('degraded'));
     expect(runtime.currentRegistry()?.version).toBe(1);
@@ -267,6 +276,7 @@ describe('persisted runtime owner', () => {
     expect(runtime.currentRegistry()).toMatchObject({ version: 2, snapshot: second });
 
     unsubscribeRegistry();
+    unsubscribeEvents();
     unsubscribeState();
     await runtime.stop();
     expect(runtime.currentState()).toBe('stopped');
@@ -605,7 +615,9 @@ describe('persisted runtime owner', () => {
       client,
     );
     const inventory = vi.fn();
+    const events = vi.fn();
     runtime.onInventory(inventory);
+    runtime.onEvent(events);
 
     await expect(runtime.start()).resolves.toMatchObject({ state: 'ready' });
     expect([...listeners.keys()]).toEqual([
@@ -617,6 +629,10 @@ describe('persisted runtime owner', () => {
       'deviceRemoved',
       'deviceCapabilities',
     ]);
+
+    const contactEvent = { eventName: 'contactState', deviceSn: 'synthetic-current', open: true };
+    listeners.get('event')?.forEach((listener) => listener(contactEvent as never));
+    expect(events).toHaveBeenCalledWith(contactEvent);
 
     listeners.get('deviceAdded')?.forEach((listener) => listener());
     await vi.waitFor(() => expect(getDevices).toHaveBeenCalledTimes(2));

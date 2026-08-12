@@ -10,11 +10,10 @@ The beta is closed to maintainers and enrollment is not open.
 - Atomic account replacement and persisted session handoff
 - One account-scoped runtime owner
 - Complete device discovery, canonical registry, and versioned runtime snapshot
-- Explicit coverage matrix and the first contact-sensor adapter implementation
+- Explicit coverage matrix and serial-based contact-sensor accessory publication
 
 ## Not yet available as HomeKit behavior
 
-- Accessory publication and reconciliation
 - Camera streaming, snapshots, talkback, and HomeKit Secure Video
 - Motion and doorbell events
 - Security modes, locks, lights, sirens, and battery services
