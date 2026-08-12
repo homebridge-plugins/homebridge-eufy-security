@@ -89,6 +89,10 @@ stable keys, HAP attachment, observations, events, and diagnostics stay together
 only assembles those modules; the reconciler owns containers and complete-snapshot lifecycle, not
 capability behavior.
 
+`device/member-evidence.ts` indexes the typed members in one SDK manifest without assigning HomeKit
+meaning. Adapters declare exact semantic requirements, and the reconciler admits them through that
+shared evidence seam before attachment. Primitive shape alone never selects an adapter.
+
 ## Composition roots
 
 `platform.ts` and `ui/server.ts` are composition roots. They may see multiple modules to construct and

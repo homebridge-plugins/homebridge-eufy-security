@@ -2,6 +2,7 @@ import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
 import type { PlatformAccessory } from 'homebridge';
 
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
+import { indexDeviceMemberEvidence, satisfiesMemberRequirements } from '../device/member-evidence.js';
 import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
 import { ADAPTER_REGISTRY } from './adapters/registry.js';
 
@@ -131,7 +132,10 @@ export class HomeKitReconciler {
     const nextRepresented = new Set<string>();
     for (const [serial, device] of view.registry) {
       const manifest = manifests.get(serial)!;
-      const admittedAdapters = Object.entries(ADAPTER_REGISTRY).filter(([, adapter]) => adapter.admits(manifest));
+      const evidence = indexDeviceMemberEvidence(manifest);
+      const admittedAdapters = Object.entries(ADAPTER_REGISTRY).filter(([, adapter]) =>
+        satisfiesMemberRequirements(evidence, adapter.requires),
+      );
       const admittedKeys = new Set(admittedAdapters.map(([key]) => key));
       for (const previousKey of this.activeAdapters.get(serial) ?? []) {
         if (!admittedKeys.has(previousKey)) {

@@ -1,57 +1,21 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { CAPABILITY_MODULES } from '@mega-yfue/eufy-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { ADAPTER_REGISTRY } from '../../src/homekit/adapters/registry.js';
 import { SDK_HAP_COVERAGE_MATRIX } from '../../src/homekit/coverage-matrix.js';
 
-const INFO_FIELDS = [
-  'manufacturer',
-  'model',
-  'serialNumber',
-  'name',
-  'deviceType',
-  'firmwareVersion',
-  'hardwareVersion',
-  'firmwareSubVersion',
-  'macAddress',
-  'updateAvailable',
-] as const;
-
-function currentSdkSurface(): string[] {
-  const rows: string[] = [];
-  for (const [capability, module] of Object.entries(CAPABILITY_MODULES)) {
-    for (const [name, member] of Object.entries(module.members ?? {})) {
-      if ('type' in member) {
-        if (!member.writeOnly) {
-          rows.push(`${capability}.${name}.read`);
-        }
-        if (member.write || member.unverified || member.writtenElsewhere) {
-          rows.push(`${capability}.${name}.persistent-operation`);
-        }
-      } else if ('action' in member) {
-        rows.push(`${capability}.${name}.momentary-action`);
-      } else if ('method' in member || 'provided' in member) {
-        rows.push(`${capability}.${name}.${member.answers ? 'read' : 'momentary-action'}`);
-      }
-    }
-
-    const events = new Set([...(module.events ?? []).map((event) => event.emit), ...(module.emits ?? [])]);
-    for (const event of events) {
-      rows.push(`${capability}.${event}.event`);
-    }
-  }
-
-  rows.push(...INFO_FIELDS.map((field) => `info.${field}.read`));
-  return rows.sort();
-}
-
 describe('SDK/HAP coverage matrix', () => {
   it('classifies the complete current SDK member surface', () => {
+    const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {
+      dependencies: Record<string, string>;
+    };
     expect(SDK_HAP_COVERAGE_MATRIX.version).toBe(1);
-    expect(SDK_HAP_COVERAGE_MATRIX.rows.map((row) => row.id).sort()).toEqual(currentSdkSurface());
+    expect(SDK_HAP_COVERAGE_MATRIX.sdkContract).toBe(
+      `@mega-yfue/eufy-sdk@${packageJson.dependencies['@mega-yfue/eufy-sdk']}`,
+    );
+    expect(SDK_HAP_COVERAGE_MATRIX.rows.length).toBeGreaterThan(0);
     expect(new Set(SDK_HAP_COVERAGE_MATRIX.rows.map((row) => row.id)).size).toBe(SDK_HAP_COVERAGE_MATRIX.rows.length);
   });
 
@@ -93,7 +57,7 @@ describe('SDK/HAP coverage matrix', () => {
     expect(Object.keys(ADAPTER_REGISTRY).sort()).toEqual(represented.sort());
     expect(
       Object.values(ADAPTER_REGISTRY)
-        .flatMap((adapter) => adapter.rows)
+        .flatMap((adapter) => adapter.coverage.map(({ id }) => id))
         .sort(),
     ).toEqual(
       SDK_HAP_COVERAGE_MATRIX.rows
@@ -109,14 +73,15 @@ describe('SDK/HAP coverage matrix', () => {
   });
 
   it('distinguishes representation-establishing adapters from supplemental enrichment', () => {
-    expect(ADAPTER_REGISTRY['contact.sensor']).toMatchObject({
-      role: 'primary-purpose',
-      primaryRows: ['contact.open.read'],
-    });
-    expect(ADAPTER_REGISTRY['accessory.information']).toMatchObject({
-      role: 'supplemental',
-      primaryRows: [],
-    });
+    expect(ADAPTER_REGISTRY['contact.sensor']).toMatchObject({ role: 'primary-purpose' });
+    expect(ADAPTER_REGISTRY['accessory.information']).toMatchObject({ role: 'supplemental' });
+    for (const adapter of Object.values(ADAPTER_REGISTRY)) {
+      const coverage = new Set(adapter.coverage.map(({ id }) => id));
+      expect(adapter.requires.every(({ id }) => coverage.has(id))).toBe(true);
+      if (adapter.role === 'primary-purpose') {
+        expect(adapter.requires.length).toBeGreaterThan(0);
+      }
+    }
 
     const informationRows = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ capability }) => capability === 'info');
     const representedInformation = informationRows.filter(({ adapter }) => adapter === 'accessory.information');

@@ -1,8 +1,31 @@
-import type { DeviceInfo, DeviceManifest } from '@mega-yfue/eufy-sdk';
+import type { DeviceInfo } from '@mega-yfue/eufy-sdk';
 
 import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 
 export const INFORMATION_ADAPTER_KEY = 'accessory.information';
+
+type InformationCharacteristic =
+  'Manufacturer' | 'Model' | 'SerialNumber' | 'Name' | 'FirmwareRevision' | 'HardwareRevision';
+
+const INFORMATION_POLICY = {
+  manufacturer: 'Manufacturer',
+  model: 'Model',
+  serialNumber: 'SerialNumber',
+  name: 'Name',
+  deviceType: null,
+  firmwareVersion: 'FirmwareRevision',
+  hardwareVersion: 'HardwareRevision',
+  firmwareSubVersion: null,
+  macAddress: null,
+  updateAvailable: null,
+} as const satisfies Record<keyof DeviceInfo, InformationCharacteristic | null>;
+
+const REPRESENTED_INFORMATION = Object.entries(INFORMATION_POLICY).filter(
+  (entry): entry is [keyof DeviceInfo, InformationCharacteristic] => entry[1] !== null,
+);
+
+/** The complete DeviceInfo surface reviewed by the plugin, including diagnostic-only members. */
+export const INFORMATION_SDK_ROWS = [...Object.keys(INFORMATION_POLICY).map((member) => `info.${member}.read`)];
 
 /** The typed SDK identity accessor consumed by HomeKit. */
 export interface InformationSdkDevice {
@@ -13,16 +36,19 @@ export interface InformationSdkDevice {
 export const INFORMATION_ADAPTER = {
   key: INFORMATION_ADAPTER_KEY,
   role: 'supplemental',
-  primaryRows: [],
-  rows: [
-    'info.manufacturer.read',
-    'info.model.read',
-    'info.serialNumber.read',
-    'info.name.read',
-    'info.firmwareVersion.read',
-    'info.hardwareVersion.read',
-  ],
-  admits: (_manifest: DeviceManifest) => true,
+  requires: [],
+  coverage: REPRESENTED_INFORMATION.map(([member]) => ({
+    id: `info.${member}.read`,
+    hapFit: 'Accessory Information characteristic with the matching typed SDK identity field',
+    identityEffect: 'Supplements an existing represented accessory and cannot establish accessory-container identity',
+    diagnostics: 'Omit unavailable optional identity fields without creating an accessory',
+    verification: [
+      {
+        file: 'test/contracts/homekit-reconciler.test.ts',
+        behavior: 'creates and updates one serial-based contact accessory with stable semantic services',
+      },
+    ],
+  })),
   attach: attachInformation,
 } as const satisfies HomeKitAdapter;
 
@@ -35,16 +61,9 @@ function attachInformation(context: AdapterAttachmentContext): AttachedAdapter |
   }
 
   const service = context.accessory.getService(context.hap.Service.AccessoryInformation)!;
-  const fields = [
-    ['Manufacturer', info.manufacturer],
-    ['Model', info.model],
-    ['SerialNumber', info.serialNumber],
-    ['Name', info.name],
-    ['FirmwareRevision', info.firmwareVersion],
-    ['HardwareRevision', info.hardwareVersion],
-  ] as const;
-  for (const [characteristic, value] of fields) {
-    if (value !== undefined) {
+  for (const [member, characteristic] of REPRESENTED_INFORMATION) {
+    const value = info[member];
+    if (typeof value === 'string') {
       service.updateCharacteristic(context.hap.Characteristic[characteristic], value);
     }
   }

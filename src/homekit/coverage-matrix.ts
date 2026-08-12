@@ -1,9 +1,18 @@
+import { createHash } from 'node:crypto';
+
 import { CAPABILITY_MODULES, type CapabilityModule, type Member } from '@mega-yfue/eufy-sdk';
 
+import type { AdapterCoverage } from './adapter.js';
+import { INFORMATION_SDK_ROWS } from './adapters/information.js';
 import { ADAPTER_REGISTRY } from './adapters/registry.js';
 
 export type CoverageMemberKind = 'read' | 'event' | 'persistent-operation' | 'momentary-action';
 export type CoverageDisposition = 'required-adapter' | 'diagnostic-only' | 'blocked-sdk-gap' | 'explicitly-deferred';
+
+export interface CoverageVerification {
+  file: string;
+  behavior: string;
+}
 
 export interface CoverageRow {
   id: string;
@@ -22,11 +31,6 @@ export interface CoverageRow {
   followUp?: string;
 }
 
-export interface CoverageVerification {
-  file: string;
-  behavior: string;
-}
-
 export interface SdkHapCoverageMatrix {
   version: 1;
   sdkContract: string;
@@ -34,243 +38,39 @@ export interface SdkHapCoverageMatrix {
   rows: CoverageRow[];
 }
 
-const KNOWN_SDK_SURFACE = {
-  rtsp: [
-    'published.read',
-    'published.persistent-operation',
-    'recordingMode.read',
-    'recordingMode.persistent-operation',
-    'publish.momentary-action',
-    'withdraw.momentary-action',
-    'requireAuth.momentary-action',
-    'allowAnonymous.momentary-action',
-    'setRecordingMode.momentary-action',
-  ],
-  motion: [
-    'detectionEnabled.read',
-    'detectionEnabled.persistent-operation',
-    'aiDetectType.read',
-    'aiDetectType.persistent-operation',
-    'testMode.read',
-    'testMode.persistent-operation',
-    'snoozeTime.read',
-    'snoozeTime.persistent-operation',
-    'humanOnlyAtNight.read',
-    'humanOnlyAtNight.persistent-operation',
-    'loiteringDetection.read',
-    'loiteringDetection.persistent-operation',
-    'motionSensitivity.read',
-    'soloSensitivity.read',
-    'indoorSensitivity.read',
-    'pirSensitivityRaw.read',
-    'sensorPirSensitivity.read',
-    'motion.event',
-    'cryingDetected.event',
-    'soundDetected.event',
-    'vehicleDetected.event',
-    'dogDetected.event',
-  ],
-  person_detection: ['detectionEnabled.read', 'detected.read', 'personDetected.event', 'strangerDetected.event'],
-  battery: [
-    'level.read',
-    'charging.read',
-    'powerSource.read',
-    'powerSource.persistent-operation',
-    'workingMode.read',
-    'workingMode.persistent-operation',
-    'recordDuration.read',
-    'recordDuration.persistent-operation',
-    'recordInterval.read',
-    'recordInterval.persistent-operation',
-    'recordAutoStop.read',
-    'recordAutoStop.persistent-operation',
-    'temperature.read',
-    'health.read',
-    'solarIntensity.read',
-    'solarConnected24h.read',
-    'batteryPowerStats.read',
-    'cameraInfo.read',
-    'batteryLevel.event',
-    'batteryAlert.event',
-  ],
-  light: [
-    'isOn.read',
-    'isOn.persistent-operation',
-    'brightness.read',
-    'brightness.persistent-operation',
-    'colorTemp.persistent-operation',
-    'spotlightEnabled.persistent-operation',
-  ],
-  smart_light: [
-    'power.read',
-    'power.persistent-operation',
-    'brightness.read',
-    'brightness.persistent-operation',
-    'lightLength.read',
-    'effectId.read',
-    'colorGradient.read',
-    'cloudEffectId.read',
-    'lightEffectMode.read',
-    'refreshState.momentary-action',
-    'setEffect.momentary-action',
-    'smartLightState.event',
-  ],
-  ptz: [
-    'rotationSpeed.read',
-    'panAngle.read',
-    'tiltAngle.read',
-    'rotate.momentary-action',
-    'left.momentary-action',
-    'right.momentary-action',
-    'up.momentary-action',
-    'down.momentary-action',
-    'zoom.momentary-action',
-    'preset.read',
-    'ptzNotify.event',
-  ],
-  camera: [
-    'enabled.read',
-    'enabled.persistent-operation',
-    'imageFlipped.read',
-    'imageFlipped.persistent-operation',
-    'watermark.read',
-    'watermark.persistent-operation',
-    'nightVision.read',
-    'nightVision.persistent-operation',
-    'videoQuality.read',
-    'videoQuality.persistent-operation',
-    'antiTheftDetection.read',
-    'antiTheftDetection.persistent-operation',
-    'privacy.persistent-operation',
-    'statusLed.read',
-    'statusLed.persistent-operation',
-    'snapshotStored.momentary-action',
-    'snapshotLive.momentary-action',
-    'live.momentary-action',
-    'record.momentary-action',
-    'openReadable.momentary-action',
-    'recordFragments.momentary-action',
-    'talkback.momentary-action',
-  ],
-  audio: [
-    'microphone.read',
-    'microphone.persistent-operation',
-    'speaker.read',
-    'speaker.persistent-operation',
-    'volume.read',
-    'volume.persistent-operation',
-    'audioRecording.read',
-    'audioRecording.persistent-operation',
-    'ringtoneVolume.persistent-operation',
-    'alarmVolume.persistent-operation',
-    'promptVolume.persistent-operation',
-    'alarmTone.read',
-    'alarmTone.persistent-operation',
-  ],
-  doorbell: [
-    'chimeSwitch.read',
-    'chimeSwitch.persistent-operation',
-    'mechanicalChimeSwitch.read',
-    'mechanicalChimeSwitch.persistent-operation',
-    'wdrSwitch.read',
-    'wdrSwitch.persistent-operation',
-    'ringtoneVolume.read',
-    'ringtoneVolume.persistent-operation',
-    'dingdongVolume.read',
-    'dingdongVolume.persistent-operation',
-    'dingdongRingtone.read',
-    'dingdongRingtone.persistent-operation',
-    'notificationMode.read',
-    'playQuickResponse.momentary-action',
-    'quickResponses.momentary-action',
-    'doorbellPress.event',
-    'petDetection.event',
-    'packageDelivered.event',
-    'packageTaken.event',
-    'packageStranded.event',
-  ],
-  contact: [
-    'open.read',
-    'lastSeen.read',
-    'rssi.read',
-    'alarmSoundType.read',
-    'alarmSoundType.persistent-operation',
-    'alarmVolume.read',
-    'alarmVolume.persistent-operation',
-    'contactState.event',
-  ],
-  leak: ['leakDetected.read', 'lastSeen.read'],
-  smoke: ['smokeDetected.read', 'lastSeen.read'],
-  co: ['coDetected.read', 'lastSeen.read'],
-  siren: [
-    'active.read',
-    'volume.read',
-    'volume.persistent-operation',
-    'alarmDuration.read',
-    'alarmDuration.persistent-operation',
-    'doNotDisturb.read',
-    'test.momentary-action',
-    'stop.momentary-action',
-  ],
-  lock: [
-    'locked.read',
-    'locked.persistent-operation',
-    'battery.read',
-    'rssi.read',
-    'lock.momentary-action',
-    'unlock.momentary-action',
-    'setAutoLock.momentary-action',
-    'setRainMode.momentary-action',
-    'oneTouchLock.persistent-operation',
-    'scramblePasscode.persistent-operation',
-    'wifiStatus.persistent-operation',
-    'logEnabled.persistent-operation',
-    'privacyMode.persistent-operation',
-    'oneTouchRearLock.persistent-operation',
-    'getAutoLockState.read',
-    'lockState.event',
-  ],
-  keypad: ['rssi.read', 'batteryLow.read', 'charging.read'],
-  arming: [
-    'mode.read',
-    'mode.persistent-operation',
-    'setAlarmDelayConfig.momentary-action',
-    'armingModeChanged.event',
-    'alarm.event',
-  ],
-  storage: ['sdCard.read', 'free.read', 'total.read'],
-  vacuum_clean: [
-    'power.read',
-    'power.persistent-operation',
-    'activity.read',
-    'volume.read',
-    'battery.read',
-    'cleanType.read',
-    'startCleaning.momentary-action',
-    'returnToDock.momentary-action',
-    'pauseCleaning.momentary-action',
-  ],
-  suction: ['level.read', 'level.persistent-operation', 'boostIq.read', 'boostIq.persistent-operation'],
-  locate: ['locating.read', 'locating.persistent-operation', 'locate.momentary-action'],
-  info: [
-    'manufacturer.read',
-    'model.read',
-    'serialNumber.read',
-    'name.read',
-    'deviceType.read',
-    'firmwareVersion.read',
-    'hardwareVersion.read',
-    'firmwareSubVersion.read',
-    'macAddress.read',
-    'updateAvailable.read',
-  ],
-} as const;
-
-const ADAPTER_BY_ROW = new Map<string, string>(
+const COVERAGE_BY_ROW = new Map<string, { adapter: string; coverage: AdapterCoverage }>(
   Object.entries(ADAPTER_REGISTRY).flatMap(([adapter, registration]) =>
-    registration.rows.map((row) => [row, adapter] as const),
+    registration.coverage.map((coverage) => [coverage.id, { adapter, coverage }] as const),
   ),
 );
+
+const REVIEWED_SDK_SURFACE_SHA256 = '3db91a1edd3a1f2cdd3d63c6d85e59b5cf9d0293d68a151d0c51ab0e31b3d0ee';
+
+function stableContractValue(value: unknown, ancestors = new WeakSet<object>()): unknown {
+  if (typeof value === 'function') {
+    return '<function>';
+  }
+  if (value === undefined) {
+    return '<undefined>';
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => stableContractValue(entry, ancestors));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  if (ancestors.has(value)) {
+    return '<cycle>';
+  }
+  ancestors.add(value);
+  const normalized = Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, stableContractValue(entry, ancestors)]),
+  );
+  ancestors.delete(value);
+  return normalized;
+}
 
 const BLOCKED = new Set([
   'person_detection.detectionEnabled.read',
@@ -292,13 +92,14 @@ const BLOCKED = new Set([
   'storage.total.read',
 ]);
 
+const DEFERRED: Record<string, string> = {};
+
 function defer(rows: readonly string[], issue: string, risk: string): void {
   for (const row of rows) {
     DEFERRED[row] = `${issue}: ${risk}`;
   }
 }
 
-const DEFERRED: Record<string, string> = {};
 defer(
   [
     'camera.enabled.read',
@@ -373,6 +174,35 @@ defer(
   'requires represented-device-only battery enrichment',
 );
 
+/** Derives the current semantic member inventory directly from the pinned SDK contract. */
+function currentSdkSurface(): string[] {
+  const rows: string[] = [];
+  for (const [capability, module] of Object.entries(CAPABILITY_MODULES)) {
+    for (const [name, member] of Object.entries(module.members ?? {})) {
+      if ('type' in member) {
+        if (!member.writeOnly) {
+          rows.push(`${capability}.${name}.read`);
+        }
+        if (member.write || member.unverified || member.writtenElsewhere) {
+          rows.push(`${capability}.${name}.persistent-operation`);
+        }
+      } else if ('action' in member) {
+        rows.push(`${capability}.${name}.momentary-action`);
+      } else if ('method' in member || 'provided' in member) {
+        rows.push(`${capability}.${name}.${member.answers ? 'read' : 'momentary-action'}`);
+      } else {
+        throw new TypeError(`unrecognized SDK member contract: ${capability}.${name}`);
+      }
+    }
+    const events = new Set([...(module.events ?? []).map((event) => event.emit), ...(module.emits ?? [])]);
+    for (const event of events) {
+      rows.push(`${capability}.${event}.event`);
+    }
+  }
+  rows.push(...INFORMATION_SDK_ROWS);
+  return rows.sort();
+}
+
 function parseRowId(id: string): { capability: string; member: string; memberKind: CoverageMemberKind } {
   const [capability, member, memberKind] = id.split('.');
   if (!capability || !member || !memberKind) {
@@ -397,11 +227,9 @@ function memberEvidence(module: CapabilityModule | undefined, memberName: string
 
 function makeRow(id: string): CoverageRow {
   const { capability, member, memberKind } = parseRowId(id);
-  const adapter = ADAPTER_BY_ROW.get(id) ?? null;
-  const required = adapter !== null;
+  const represented = COVERAGE_BY_ROW.get(id);
   const followUp = DEFERRED[id];
-  const supplementalInformation = adapter === 'accessory.information';
-  const disposition: CoverageDisposition = required
+  const disposition: CoverageDisposition = represented
     ? 'required-adapter'
     : BLOCKED.has(id)
       ? 'blocked-sdk-gap'
@@ -415,63 +243,57 @@ function makeRow(id: string): CoverageRow {
     member,
     memberKind,
     evidence: memberEvidence(CAPABILITY_MODULES[capability as keyof typeof CAPABILITY_MODULES], member, memberKind),
-    hapFit: required
-      ? supplementalInformation
-        ? 'Accessory Information characteristic with the matching typed SDK identity field'
-        : 'Contact Sensor ContactSensorState; SDK open=true maps to HAP contact not detected'
-      : disposition === 'blocked-sdk-gap'
+    hapFit:
+      represented?.coverage.hapFit ??
+      (disposition === 'blocked-sdk-gap'
         ? 'No HAP representation is permitted without verified SDK truth'
         : disposition === 'explicitly-deferred'
           ? 'A selected official HAP contract exists but its named adapter policy is not admitted by this matrix version'
-          : 'No selected semantically matching official HAP contract',
+          : 'No selected semantically matching official HAP contract'),
     disposition,
-    adapter,
-    representationStatus: required ? 'represented' : 'not-represented',
-    controlStatus: required ? 'not-controllable' : 'not-represented',
-    identityEffect: required
-      ? supplementalInformation
-        ? 'Supplements an existing represented accessory and cannot establish accessory-container identity'
-        : 'Primary-purpose contact service uses stable semantic key contact.sensor; accessory-container identity is unchanged'
-      : 'No HomeKit service or accessory identity effect',
+    adapter: represented?.adapter ?? null,
+    representationStatus: represented ? 'represented' : 'not-represented',
+    controlStatus: represented ? 'not-controllable' : 'not-represented',
+    identityEffect: represented?.coverage.identityEffect ?? 'No HomeKit service or accessory identity effect',
     diagnostics:
-      disposition === 'required-adapter'
-        ? supplementalInformation
-          ? 'Omit unavailable optional identity fields without creating an accessory'
-          : 'Emit and clear a structured invalid-contact-observation condition'
-        : disposition === 'blocked-sdk-gap'
-          ? 'Report the SDK evidence gap without representation'
-          : disposition === 'explicitly-deferred'
-            ? 'Report the member as deferred without representation'
-            : 'Report the member as diagnostic-only without representation',
+      represented?.coverage.diagnostics ??
+      (disposition === 'blocked-sdk-gap'
+        ? 'Report the SDK evidence gap without representation'
+        : disposition === 'explicitly-deferred'
+          ? 'Report the member as deferred without representation'
+          : 'Report the member as diagnostic-only without representation'),
     verification: [
       {
         file: 'test/contracts/coverage-matrix.test.ts',
         behavior: 'classifies the complete current SDK member surface',
       },
-      ...(required
-        ? [
-            {
-              file: supplementalInformation
-                ? 'test/contracts/homekit-reconciler.test.ts'
-                : 'test/contracts/contact-adapter.test.ts',
-              behavior: supplementalInformation
-                ? 'creates and updates one serial-based contact accessory with stable semantic services'
-                : 'maps authoritative SDK contact polarity through real HAP definitions',
-            },
-          ]
-        : []),
+      ...(represented?.coverage.verification ?? []),
     ],
     followUp,
   };
 }
 
-const rows = Object.entries(KNOWN_SDK_SURFACE).flatMap(([capability, members]) =>
-  members.map((member) => makeRow(`${capability}.${member}`)),
-);
+function reviewedRows(): CoverageRow[] {
+  const surface = currentSdkSurface();
+  const reviewedContract = stableContractValue({
+    capabilityModules: CAPABILITY_MODULES,
+    information: INFORMATION_SDK_ROWS,
+  });
+  const fingerprint = createHash('sha256').update(JSON.stringify(reviewedContract)).digest('hex');
+  if (fingerprint !== REVIEWED_SDK_SURFACE_SHA256) {
+    throw new TypeError(`SDK member surface requires review: ${fingerprint}`);
+  }
+  const current = new Set(surface);
+  const stalePolicy = [...BLOCKED, ...Object.keys(DEFERRED)].find((id) => !current.has(id));
+  if (stalePolicy) {
+    throw new TypeError(`coverage policy references a missing SDK member: ${stalePolicy}`);
+  }
+  return surface.map(makeRow);
+}
 
 export const SDK_HAP_COVERAGE_MATRIX: SdkHapCoverageMatrix = {
   version: 1,
   sdkContract: '@mega-yfue/eufy-sdk@0.1.0-beta.11',
   hapContract: 'Homebridge 2 HAP definitions',
-  rows,
+  rows: reviewedRows(),
 };

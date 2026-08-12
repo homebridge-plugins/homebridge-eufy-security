@@ -1,4 +1,4 @@
-import type { AnyDeviceEvent, ContactActions, DeviceManifest } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, ContactActions } from '@mega-yfue/eufy-sdk';
 
 import type {
   AdapterAttachmentContext,
@@ -9,6 +9,13 @@ import type {
 } from '../adapter.js';
 
 export const CONTACT_ADAPTER_KEY = 'contact.sensor';
+
+const CONTACT_OPEN_REQUIREMENT = {
+  id: 'contact.open.read',
+  kind: 'read',
+  type: 'bool',
+  writable: false,
+} as const;
 
 /** The typed SDK contact accessor consumed by HomeKit. */
 export interface ContactSdkDevice {
@@ -26,21 +33,23 @@ export interface ContactDiagnostic extends AdapterDiagnostic {
   reason: ContactDiagnosticReason;
 }
 
-function admitsContact(manifest: DeviceManifest): boolean {
-  return manifest.details.some(
-    (detail) =>
-      detail.capability === 'contact' &&
-      detail.reads.some((read) => read.accessor === 'open' && read.type === 'bool' && !read.writable),
-  );
-}
-
 /** Complete HomeKit policy for the contact capability. */
 export const CONTACT_ADAPTER = {
   key: CONTACT_ADAPTER_KEY,
   role: 'primary-purpose',
-  primaryRows: ['contact.open.read'],
-  rows: ['contact.open.read', 'contact.contactState.event'],
-  admits: admitsContact,
+  requires: [CONTACT_OPEN_REQUIREMENT],
+  coverage: [CONTACT_OPEN_REQUIREMENT.id, 'contact.contactState.event'].map((id) => ({
+    id,
+    hapFit: 'Contact Sensor ContactSensorState; SDK open=true maps to HAP contact not detected',
+    identityEffect: 'Primary-purpose service uses stable semantic key contact.sensor',
+    diagnostics: 'Emit and clear a structured invalid-contact-observation condition',
+    verification: [
+      {
+        file: 'test/contracts/contact-adapter.test.ts',
+        behavior: 'maps authoritative SDK contact polarity through real HAP definitions',
+      },
+    ],
+  })),
   attach: attachContact,
 } as const satisfies HomeKitAdapter;
 

@@ -185,9 +185,13 @@ describe('HomeKit registry reconciliation', () => {
     const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
     expect(accessory.displayName).toBe('Synthetic contact tracer');
     expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).toBeDefined();
-    expect(
-      accessory.getService(Service.AccessoryInformation)?.getCharacteristic(Characteristic.Manufacturer).value,
-    ).toBe('eufy');
+    const information = accessory.getService(Service.AccessoryInformation)!;
+    expect(information.getCharacteristic(Characteristic.Manufacturer).value).toBe('eufy');
+    expect(information.getCharacteristic(Characteristic.Model).value).toBe('T0000');
+    expect(information.getCharacteristic(Characteristic.SerialNumber).value).toBe('synthetic-contact');
+    expect(information.getCharacteristic(Characteristic.Name).value).toBe('Synthetic contact tracer');
+    expect(information.getCharacteristic(Characteristic.FirmwareRevision).value).toBe('1.2.3');
+    expect(information.getCharacteristic(Characteristic.HardwareRevision).value).toBe('4.5');
 
     source.publishEvent({ eventName: 'contactState', deviceSn: serial, stationSn: 'routing-only', open: true });
     expect(

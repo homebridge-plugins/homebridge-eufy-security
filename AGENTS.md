@@ -74,6 +74,8 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   mapper.
 - Keep each capability adapter self-hosted in one file: admission, coverage rows, stable keys, HAP
   attachment, observations, events, and diagnostics change together.
+- Index typed SDK manifest evidence once in `device/`; adapters declare exact semantic requirements.
+  The evidence index never infers HomeKit meaning from member shape.
 - Use bundle adapters where several capabilities or HomeKit services have coupled behavior.
 - Keep observations distinct from projections. A successful SDK command acknowledges delivery, not
   physical convergence; a later device observation is authoritative.
