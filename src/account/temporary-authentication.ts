@@ -2,7 +2,6 @@ import type { FcmStore, LoginResult, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import type { EufyConfig } from '../configuration.js';
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
-import type { FreshRuntimeEvidence } from '../runtime/tracker.js';
 import type { AccountOwnerEvidence, AccountReleaseResult } from './ownership.js';
 
 const FLOW_TIMEOUT = Symbol('flow-timeout');
@@ -62,7 +61,12 @@ interface TemporaryPersistence {
 }
 
 interface TemporaryRuntimeActivity {
-  fresh(): Promise<FreshRuntimeEvidence | null>;
+  fresh(): Promise<TemporaryRuntimeEvidence | null>;
+}
+
+interface TemporaryRuntimeEvidence {
+  state: string;
+  updatedAt: string;
 }
 
 export interface TemporaryAuthenticationOptions {
@@ -75,7 +79,7 @@ export type TemporaryAuthenticationResult =
   | { status: 'two-factor'; method: string }
   | { status: 'restart-required' }
   | { status: 'blocked'; owner: AccountOwnerEvidence }
-  | ({ status: 'plugin-running' } & FreshRuntimeEvidence)
+  | ({ status: 'plugin-running' } & TemporaryRuntimeEvidence)
   | { status: 'failed' }
   | { status: 'timed-out' }
   | { status: 'closed' };

@@ -156,6 +156,24 @@ async function renderUi(
 }
 
 describe('packed plugin', () => {
+  it('keeps the runtime dependency and entry-point surface closed', () => {
+    const repository = fileURLToPath(new URL('../..', import.meta.url));
+    const packageJson = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as {
+      version: string;
+      main?: string;
+      dependencies?: Record<string, string>;
+    };
+    const generatedVersion = readFileSync(join(repository, 'src', 'version.ts'), 'utf8');
+
+    expect(packageJson.main).toBe('dist/index.js');
+    expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual([
+      '@homebridge/plugin-ui-utils',
+      '@mega-yfue/eufy-sdk',
+      'ffmpeg-for-homebridge',
+    ]);
+    expect(generatedVersion).toBe(`export const LIB_VERSION = ${JSON.stringify(packageJson.version)};\n`);
+  });
+
   it('contains an importable runtime and production custom UI shell', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'homebridge-eufy-security-'));
     const repository = fileURLToPath(new URL('../..', import.meta.url));

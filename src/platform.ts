@@ -1,9 +1,9 @@
 import type { DynamicPlatformPlugin, PlatformAccessory, PlatformConfig } from 'homebridge';
-import { join } from 'node:path';
 
 import { parseConfig } from './configuration.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
+import { resolveStorageRoot } from './storage.js';
 
 export type PlatformLifecycleEvent = 'didFinishLaunching' | 'shutdown';
 
@@ -31,7 +31,7 @@ export function createEufyPlatform(
 
     constructor(log: PlatformLogger, config: PlatformConfig, api: PlatformApi) {
       const configuredConfig = parseConfig(config);
-      const storageRoot = api.user ? join(api.user.storagePath(), 'eufy-security') : undefined;
+      const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       this.runtime = new RuntimeOwner(log, configuredConfig, clientFactory, { storageRoot, shutdownTimeoutMs });
       api.on('didFinishLaunching', () => {
         void this.runtime.start();

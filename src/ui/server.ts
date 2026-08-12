@@ -14,6 +14,7 @@ import {
 import { parseConfig } from '../configuration.js';
 import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
 import { RuntimeTracker } from '../runtime/tracker.js';
+import { resolveStorageRoot } from '../storage.js';
 
 const AUTHENTICATION_FLOW_TIMEOUT_MS = 5 * 60_000;
 const AUTHENTICATION_CLEANUP_TIMEOUT_MS = 10_000;
@@ -129,7 +130,7 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
     if (!this.homebridgeStoragePath) {
       throw new Error('Homebridge storage path is unavailable');
     }
-    const root = join(this.homebridgeStoragePath, 'eufy-security');
+    const root = resolveStorageRoot(this.homebridgeStoragePath);
     this.ownership = new AccountOwnership(join(root, 'ownership'));
     this.persistence = new AccountSessionPersistence(join(root, 'accounts'));
     this.runtimeTracker = new RuntimeTracker(join(root, 'tracker.json'));

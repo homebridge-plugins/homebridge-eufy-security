@@ -34,6 +34,38 @@ HomeKit representation, configuration, UI, diagnostics, media adaptation, and pr
   SDK to simplify an adapter.
 - The SDK reports evidence. Primitive value shape alone never determines HomeKit meaning.
 
+## Module graph
+
+Internal dependencies follow a closed graph enforced by the contract suite. Adding a top-level module
+or dependency edge requires updating this section and the architecture contract deliberately.
+
+- `settings.ts` has no internal dependency. `storage.ts` owns the `homebridge-eufy` persistence root,
+  imports only account-owner liveness, and atomically migrates the pre-rename V5 path.
+  `configuration.ts` may import `settings.ts`.
+- `device/` owns complete discovery and snapshot vocabulary and has no dependency on another domain.
+- `account/` may import `configuration.ts` and `device/`. It never imports runtime, UI, HomeKit, or
+  media.
+- `runtime/` may import account, configuration, and device. It never imports UI, HomeKit, or media.
+- `media/` may import configuration and device. It owns FFmpeg processes, media sessions, snapshots,
+  and HKSV adaptation without importing runtime or HomeKit implementations.
+- `homekit/` may import device. It defines the media interfaces it consumes and never imports account,
+  runtime, UI, or concrete media implementations.
+- `platform.ts` and `ui/server.ts` are composition roots. They construct and connect modules but do not
+  absorb their behavior. `index.ts` only registers the platform.
+
+Only `runtime/sdk-client.ts` and `ui/server.ts` may create a concrete SDK client. HomeKit adapters may
+import typed public SDK capabilities, but never an SDK transport, deep package path, or client facade.
+
+- Define an interface beside its consumer and inject a structurally compatible implementation. Do not
+  create generic `common/`, `contracts/`, `shared/`, or `utils/` buckets.
+- Keep composition roots thin and behavior in the module that owns the policy.
+- Do not add internal barrels. The package entry point and closed registries such as the capability
+  adapter registry are the exceptions.
+- Keep one source of truth for registry, observation, projection, diagnostics, and media lifetime.
+- Test behavior through a module's public seam in centralized `test/contracts/` specifications. Tests
+  do not import past that seam merely to exercise private structure.
+- Internal import cycles are forbidden.
+
 ## Capability adapters
 
 The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
@@ -53,6 +85,12 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
 ## Runtime and UI ownership
 
 - The plugin runtime owns the canonical connected SDK client and device registry.
+- `RuntimeOwner` presents the latest complete, versioned registry view and runtime availability as
+  separate observable interfaces. HomeKit defines the minimal consumer interface and receives the
+  owner through composition rather than importing the concrete class.
+- A degraded, authentication-required, stopping, or stopped runtime retains its latest complete
+  registry view for HomeKit topology. Runtime state separately determines whether operations are
+  available. Only a later complete inventory may replace that view or withdraw capability evidence.
 - The custom UI may own interactive login, captcha, and two-factor continuation, but credentials and
   challenge answers do not cross runtime IPC.
 - UI and runtime access to a shared SDK session must use an explicit, bounded handoff. Never run two
@@ -88,10 +126,12 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   package; document the transitive and audit footprint of any addition.
 - Comments are declaration-level JSDoc that state ground truth. Avoid inline body narration and
   iteration-history comments.
-- Do not cite planning Markdown from shipped source. Put durable behavior in code and JSDoc, and put
-  trade-off decisions in ADRs.
+- Do not cite planning Markdown from shipped source. Put durable behavior in code and JSDoc, and keep
+  durable architectural reasoning in `docs/architecture.md`.
 - Preserve user state across upgrades: platform identity, accessory UUIDs, configuration semantics,
   and cached accessory ownership change only through an explicit migration decision.
+- Persist V5 state under `homebridge-eufy`. A storage-root rename must preserve the complete directory
+  atomically and must not move a directory held by a live SDK owner.
 - No `Co-authored-by` trailers are added automatically. Credit authorship accurately.
 
 ## Development workflow
@@ -100,6 +140,7 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   maintainer specifies otherwise.
 - Use Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:`).
 - Run `npm run verify` before opening a pull request.
+- Keep contract specifications under `test/contracts/`; do not colocate them under `src/`.
 - Pull requests are concise and state what changed, why, what was verified, and what remains deferred.
 - Release notes are written for users and put required actions before internal detail.
 

@@ -13,6 +13,7 @@ BANNED=(
   "pick-port"                 # node:net
   "rotating-file-stream"      # homebridge owns log rotation
   "PropertyName"              # ECS property enum; use typed dev.<cap>() getters
+  "CommandName"               # ECS command enum; use typed capability operations
   "getProperty("              # untyped escape hatch; a missing read is an SDK gap to file
 )
 

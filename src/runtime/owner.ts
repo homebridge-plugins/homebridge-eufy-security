@@ -1,11 +1,11 @@
 import { join } from 'node:path';
 
-import type { FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
+import type { Device, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import { AccountOwnership, type AccountOwnerEvidence, type AccountReleaseResult } from '../account/ownership.js';
 import { AccountSessionPersistence } from '../account/persistence.js';
 import type { EufyConfig } from '../configuration.js';
-import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
+import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 import type { SdkClient, SdkClientFactory, SdkStartResult } from './sdk-client.js';
 import { RuntimeTracker, type RuntimeState, type RuntimeTrackerUpdate } from './tracker.js';
 
@@ -58,6 +58,16 @@ export interface RuntimeOwnerOptions {
   statusPublisher?: RuntimeStatusPublisher;
 }
 
+export interface RuntimeRegistryView {
+  readonly version: number;
+  readonly generation: string;
+  readonly registry: ReadonlyMap<string, Device>;
+  readonly snapshot: CompleteDeviceSnapshot;
+}
+
+export type RuntimeRegistryListener = (view: RuntimeRegistryView) => void;
+export type RuntimeStateListener = (state: RuntimeState) => void;
+
 /** Owns the long-lived SDK session, canonical registry, and runtime state transitions. */
 export class RuntimeOwner {
   private client?: SdkClient;
@@ -68,6 +78,10 @@ export class RuntimeOwner {
   private accountScope?: string;
   private runtimeLease?: RuntimeLease;
   private runtimeState: RuntimeState = 'stopped';
+  private registryView?: RuntimeRegistryView;
+  private registryVersion = 0;
+  private readonly registryListeners = new Set<RuntimeRegistryListener>();
+  private readonly stateListeners = new Set<RuntimeStateListener>();
   private stopping = false;
   private readonly storageRoot?: string;
   private readonly persistence?: RuntimePersistence;
@@ -99,11 +113,29 @@ export class RuntimeOwner {
     return this.startPromise;
   }
 
+  currentRegistry(): RuntimeRegistryView | undefined {
+    return this.registryView;
+  }
+
+  currentState(): RuntimeState {
+    return this.runtimeState;
+  }
+
+  subscribeRegistry(listener: RuntimeRegistryListener): () => void {
+    this.registryListeners.add(listener);
+    return () => this.registryListeners.delete(listener);
+  }
+
+  subscribeState(listener: RuntimeStateListener): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
   stop(): Promise<void> {
     if (!this.stopPromise) {
       this.stopping = true;
       if (this.runtimeState !== 'owner-conflict') {
-        this.runtimeState = 'stopping';
+        this.transitionTo('stopping');
         this.statusPublisher?.update('stopping');
       }
       this.stopPromise = this.stopWithinDeadline();
@@ -123,10 +155,10 @@ export class RuntimeOwner {
         this.statusPublisher ??= this.createStatusPublisher();
       }
       if (this.ownership && this.accountScope && active) {
-        this.runtimeState = 'acquiring-ownership';
+        this.transitionTo('acquiring-ownership');
         const ownership = await this.ownership.acquire(this.accountScope, 'runtime');
         if (ownership.state === 'owner-conflict') {
-          this.runtimeState = 'owner-conflict';
+          this.transitionTo('owner-conflict');
           this.log.error('Eufy SDK startup blocked by another live account owner');
           return;
         }
@@ -143,14 +175,14 @@ export class RuntimeOwner {
           this.runtimeLease = undefined;
           return;
         }
-        this.runtimeState = 'starting';
+        this.transitionTo('starting');
         if (!active.session.load()) {
           await this.releaseRuntimeLease();
           this.statusPublisher.update('authentication-required', {
             generation: active.generation,
             snapshot: previousSnapshot,
           });
-          this.runtimeState = 'authentication-required';
+          this.transitionTo('authentication-required');
           return;
         }
         this.client = this.clientFactory(config, active);
@@ -180,7 +212,7 @@ export class RuntimeOwner {
       if (this.storageRoot) {
         this.statusPublisher ??= this.createStatusPublisher();
         this.statusPublisher.update('authentication-required');
-        this.runtimeState = 'authentication-required';
+        this.transitionTo('authentication-required');
       }
       return { active: null, config: this.configuredConfig };
     }
@@ -215,7 +247,7 @@ export class RuntimeOwner {
       if (this.runtimeState === 'authentication-required') {
         return;
       }
-      this.runtimeState = 'authentication-required';
+      this.transitionTo('authentication-required');
       await this.client?.stop();
       await this.releaseRuntimeLease();
       this.statusPublisher?.update('authentication-required', {
@@ -231,7 +263,7 @@ export class RuntimeOwner {
         complete: false,
         snapshot: previousSnapshot,
       });
-      this.runtimeState = 'degraded';
+      this.transitionTo('degraded');
       return;
     }
     const registrySerials = [...result.registry.keys()].sort();
@@ -240,6 +272,7 @@ export class RuntimeOwner {
       throw new Error('canonical registry does not match its complete device snapshot');
     }
     active.snapshot.save(result.snapshot);
+    this.publishRegistry(active.generation, result.registry, result.snapshot);
     if (
       !this.statusPublisher?.update('ready', {
         generation: active.generation,
@@ -249,7 +282,7 @@ export class RuntimeOwner {
     ) {
       throw new Error('complete runtime snapshot could not be published');
     }
-    this.runtimeState = 'ready';
+    this.transitionTo('ready');
   }
 
   private async releaseRuntimeLease(): Promise<boolean> {
@@ -305,13 +338,48 @@ export class RuntimeOwner {
       }
       if (completedState === 'stopped') {
         this.statusPublisher?.stop();
-        this.runtimeState = 'stopped';
+        this.transitionTo('stopped');
       } else {
         this.statusPublisher?.update('failed');
-        this.runtimeState = 'failed';
+        this.transitionTo('failed');
       }
     } else if (result === 'timeout') {
       this.log.warn(`Eufy SDK shutdown exceeded ${this.shutdownTimeoutMs}ms; Homebridge shutdown will continue`);
+    }
+  }
+
+  private publishRegistry(
+    generation: string,
+    registry: ReadonlyMap<string, Device>,
+    snapshot: CompleteDeviceSnapshot,
+  ): void {
+    const view = Object.freeze({
+      version: ++this.registryVersion,
+      generation,
+      registry: new Map(registry),
+      snapshot: parseCompleteDeviceSnapshot(snapshot),
+    });
+    this.registryView = view;
+    for (const listener of this.registryListeners) {
+      try {
+        listener(view);
+      } catch {
+        this.log.warn('Runtime registry subscriber failed');
+      }
+    }
+  }
+
+  private transitionTo(state: RuntimeState): void {
+    if (this.runtimeState === state) {
+      return;
+    }
+    this.runtimeState = state;
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state);
+      } catch {
+        this.log.warn('Runtime state subscriber failed');
+      }
     }
   }
 }

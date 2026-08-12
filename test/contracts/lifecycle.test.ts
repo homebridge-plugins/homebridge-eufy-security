@@ -77,7 +77,7 @@ describe('platform lifecycle', () => {
 
   it('publishes fresh runtime evidence until the SDK client stops', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'eufy-platform-runtime-'));
-    const persistence = new AccountSessionPersistence(join(directory, 'eufy-security', 'accounts'));
+    const persistence = new AccountSessionPersistence(join(directory, 'homebridge-eufy', 'accounts'));
     const staging = await persistence.stage('guest@example.invalid');
     staging.configuration.save(
       parseConfig({ platform: 'EufySecurity', username: 'guest@example.invalid', password: 'synthetic-password' }),
@@ -102,12 +102,12 @@ describe('platform lifecycle', () => {
           user: { storagePath: () => directory },
         },
       );
-      const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+      const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
 
       listeners.didFinishLaunching?.();
       await vi.waitFor(async () => await expect(tracker.fresh()).resolves.toMatchObject({ state: 'starting' }));
       await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
-      const ownership = new AccountOwnership(join(directory, 'eufy-security', 'ownership'));
+      const ownership = new AccountOwnership(join(directory, 'homebridge-eufy', 'ownership'));
       await expect(ownership.acquire('guest@example.invalid', 'temporary-authentication')).resolves.toMatchObject({
         state: 'owner-conflict',
         owner: { kind: 'runtime' },
@@ -127,7 +127,7 @@ describe('platform lifecycle', () => {
 
   it('acquires the atomically published replacement account only after a normal restart', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'eufy-platform-replacement-'));
-    const root = join(directory, 'eufy-security');
+    const root = join(directory, 'homebridge-eufy');
     const persistence = new AccountSessionPersistence(join(root, 'accounts'));
     const replacementConfig = parseConfig({
       platform: 'EufySecurity',

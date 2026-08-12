@@ -10,15 +10,15 @@ export interface DiscoveryDevice {
   describe(): DeviceManifest;
 }
 
-interface DiscoveryClient {
+interface DiscoveryClient<T extends DiscoveryDevice = DiscoveryDevice> {
   on(event: 'error', listener: (error: Error) => void): unknown;
   off(event: 'error', listener: (error: Error) => void): unknown;
   getDevices(): Promise<readonly { sn: string }[]>;
-  getDevice(serial: string): Promise<DiscoveryDevice>;
+  getDevice(serial: string): Promise<T>;
 }
 
-export interface CompleteDeviceDiscovery {
-  registry: ReadonlyMap<string, DiscoveryDevice>;
+export interface CompleteDeviceDiscovery<T extends DiscoveryDevice = DiscoveryDevice> {
+  registry: ReadonlyMap<string, T>;
   snapshot: CompleteDeviceSnapshot;
 }
 
@@ -195,18 +195,22 @@ export function parseCompleteDeviceSnapshot(value: unknown): CompleteDeviceSnaps
 }
 
 /** Resolves every listed device and rejects SDK evidence that the inventory was partial. */
-export async function discoverCompleteDeviceSnapshot(client: DiscoveryClient): Promise<CompleteDeviceSnapshot> {
+export async function discoverCompleteDeviceSnapshot<T extends DiscoveryDevice>(
+  client: DiscoveryClient<T>,
+): Promise<CompleteDeviceSnapshot> {
   return (await discoverCompleteDeviceRegistry(client)).snapshot;
 }
 
 /** Builds the canonical registry and its snapshot from the same complete inventory pass. */
-export async function discoverCompleteDeviceRegistry(client: DiscoveryClient): Promise<CompleteDeviceDiscovery> {
+export async function discoverCompleteDeviceRegistry<T extends DiscoveryDevice>(
+  client: DiscoveryClient<T>,
+): Promise<CompleteDeviceDiscovery<T>> {
   const errors: Error[] = [];
   const onError = (error: Error) => errors.push(error);
   client.on('error', onError);
   try {
     const devices = await client.getDevices();
-    const registry = new Map<string, DiscoveryDevice>();
+    const registry = new Map<string, T>();
     const manifests: DeviceManifest[] = [];
     for (const device of devices) {
       const resolved = await client.getDevice(device.sn);

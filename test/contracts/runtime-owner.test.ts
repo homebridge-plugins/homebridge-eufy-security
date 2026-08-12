@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { DeviceManifest, EufyMega, PersistedSession } from '@mega-yfue/eufy-sdk';
+import type { Device, DeviceManifest, EufyMega, PersistedSession } from '@mega-yfue/eufy-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AccountOwnership } from '../../src/account/ownership.js';
@@ -11,7 +11,7 @@ import { parseConfig } from '../../src/configuration.js';
 import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
 import { RuntimeOwner } from '../../src/runtime/owner.js';
-import { PersistedSdkClient, type SdkClient } from '../../src/runtime/sdk-client.js';
+import { PersistedSdkClient, type SdkClient, type SdkStartResult } from '../../src/runtime/sdk-client.js';
 import { RuntimeTracker } from '../../src/runtime/tracker.js';
 
 const roots: string[] = [];
@@ -33,6 +33,10 @@ function snapshot(serial: string): CompleteDeviceSnapshot {
   return { version: 1, complete: true, devices: [manifest(serial)] };
 }
 
+function sdkDevice(serial: string): Device {
+  return { describe: () => manifest(serial) } as unknown as Device;
+}
+
 function session(): PersistedSession {
   return {
     userId: 'synthetic-user',
@@ -52,7 +56,7 @@ async function activeRuntime(withSession = true): Promise<{
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'eufy-runtime-owner-'));
   roots.push(directory);
-  const persistence = new AccountSessionPersistence(join(directory, 'eufy-security', 'accounts'));
+  const persistence = new AccountSessionPersistence(join(directory, 'homebridge-eufy', 'accounts'));
   const staging = await persistence.stage('runtime@example.invalid');
   staging.configuration.save(
     parseConfig({
@@ -106,7 +110,7 @@ describe('persisted runtime owner', () => {
         calls.push('client:start');
         return {
           state: 'ready' as const,
-          registry: new Map([['synthetic-current', { describe: () => manifest('synthetic-current') }]]),
+          registry: new Map([['synthetic-current', sdkDevice('synthetic-current')]]),
           snapshot: current,
         };
       }),
@@ -167,6 +171,96 @@ describe('persisted runtime owner', () => {
     ]);
   });
 
+  it('publishes versioned complete registry views separately from runtime availability', async () => {
+    const config = parseConfig({
+      platform: 'EufySecurity',
+      username: 'runtime@example.invalid',
+      password: 'persisted-password',
+    });
+    const first = snapshot('synthetic-first');
+    const second = snapshot('synthetic-second');
+    let reportInventory: ((result: SdkStartResult) => void) | undefined;
+    const client: SdkClient = {
+      onInventory(listener): void {
+        reportInventory = listener;
+      },
+      start: vi.fn(async () => ({
+        state: 'ready' as const,
+        registry: new Map([['synthetic-first', sdkDevice('synthetic-first')]]),
+        snapshot: first,
+      })),
+      stop: vi.fn(async () => undefined),
+    };
+    const warn = vi.fn();
+    const runtime = new RuntimeOwner({ error: vi.fn(), warn }, config, () => client, {
+      storageRoot: '/synthetic-runtime',
+      ownership: {
+        acquire: vi.fn(async () => ({
+          state: 'owner' as const,
+          lease: { release: vi.fn(async () => ({ state: 'stopped' as const })) },
+          recovered: false,
+        })),
+      },
+      persistence: {
+        active: vi.fn(async () => ({
+          account: 'runtime@example.invalid',
+          generation: 'synthetic-generation',
+          configuration: { load: () => config },
+          session: { load: () => session(), save: vi.fn(), clear: vi.fn() },
+          push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+          snapshot: { load: () => null, save: vi.fn() },
+        })),
+      },
+      statusPublisher: { start: () => true, update: () => true, stop: vi.fn() },
+    });
+    const states: string[] = [];
+    const views: Array<{ version: number; serials: string[]; state: string }> = [];
+    const unsubscribeState = runtime.subscribeState((state) => states.push(state));
+    runtime.subscribeRegistry(() => {
+      throw new Error('synthetic subscriber failure');
+    });
+    const unsubscribeRegistry = runtime.subscribeRegistry((view) => {
+      views.push({ version: view.version, serials: [...view.registry.keys()], state: runtime.currentState() });
+      expect(runtime.currentRegistry()).toBe(view);
+    });
+
+    expect(runtime.currentState()).toBe('stopped');
+    expect(runtime.currentRegistry()).toBeUndefined();
+    await runtime.start();
+
+    expect(runtime.currentState()).toBe('ready');
+    expect(runtime.currentRegistry()).toMatchObject({
+      version: 1,
+      generation: 'synthetic-generation',
+      snapshot: first,
+    });
+    expect(states).toEqual(['acquiring-ownership', 'starting', 'ready']);
+    expect(views).toEqual([{ version: 1, serials: ['synthetic-first'], state: 'starting' }]);
+    expect(warn).toHaveBeenCalledWith('Runtime registry subscriber failed');
+
+    reportInventory?.({ state: 'degraded' });
+    await vi.waitFor(() => expect(runtime.currentState()).toBe('degraded'));
+    expect(runtime.currentRegistry()?.version).toBe(1);
+
+    reportInventory?.({
+      state: 'ready',
+      registry: new Map([['synthetic-second', sdkDevice('synthetic-second')]]),
+      snapshot: second,
+    });
+    await vi.waitFor(() => expect(runtime.currentRegistry()?.version).toBe(2));
+    expect(views.at(-1)).toEqual({ version: 2, serials: ['synthetic-second'], state: 'degraded' });
+
+    reportInventory?.({ state: 'authentication-required' });
+    await vi.waitFor(() => expect(runtime.currentState()).toBe('authentication-required'));
+    expect(runtime.currentRegistry()).toMatchObject({ version: 2, snapshot: second });
+
+    unsubscribeRegistry();
+    unsubscribeState();
+    await runtime.stop();
+    expect(runtime.currentState()).toBe('stopped');
+    expect(runtime.currentRegistry()).toMatchObject({ version: 2, snapshot: second });
+  });
+
   it('acquires once and publishes a complete snapshot before becoming ready', async () => {
     const { directory, persistence } = await activeRuntime();
     const active = await persistence.active();
@@ -174,7 +268,7 @@ describe('persisted runtime owner', () => {
     const client: SdkClient = {
       start: vi.fn(async () => ({
         state: 'ready' as const,
-        registry: new Map([['synthetic-current', { describe: () => manifest('synthetic-current') }]]),
+        registry: new Map([['synthetic-current', sdkDevice('synthetic-current')]]),
         snapshot: nextSnapshot,
       })),
       stop: vi.fn(async () => undefined),
@@ -188,7 +282,7 @@ describe('persisted runtime owner', () => {
     events.listeners.didFinishLaunching?.();
     events.listeners.didFinishLaunching?.();
 
-    const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+    const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     await vi.waitFor(
       async () =>
         await expect(tracker.read()).resolves.toMatchObject({
@@ -218,12 +312,12 @@ describe('persisted runtime owner', () => {
     new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
     events.listeners.didFinishLaunching?.();
 
-    const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+    const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     await vi.waitFor(
       async () => await expect(tracker.read()).resolves.toMatchObject({ state: 'authentication-required' }),
     );
     expect(factory).not.toHaveBeenCalled();
-    const ownership = new AccountOwnership(join(directory, 'eufy-security', 'ownership'));
+    const ownership = new AccountOwnership(join(directory, 'homebridge-eufy', 'ownership'));
     const result = await ownership.acquire('runtime@example.invalid', 'temporary-authentication');
     expect(result.state).toBe('owner');
     if (result.state === 'owner') {
@@ -243,7 +337,7 @@ describe('persisted runtime owner', () => {
     new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
     events.listeners.didFinishLaunching?.();
 
-    const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+    const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     await vi.waitFor(
       async () =>
         await expect(tracker.read()).resolves.toMatchObject({
@@ -265,7 +359,7 @@ describe('persisted runtime owner', () => {
       },
       start: vi.fn(async () => ({
         state: 'ready' as const,
-        registry: new Map([['synthetic-current', { describe: () => manifest('synthetic-current') }]]),
+        registry: new Map([['synthetic-current', sdkDevice('synthetic-current')]]),
         snapshot: current,
       })),
       stop: vi.fn(async () => undefined),
@@ -275,7 +369,7 @@ describe('persisted runtime owner', () => {
 
     new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
     events.listeners.didFinishLaunching?.();
-    const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+    const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     await vi.waitFor(async () => await expect(tracker.read()).resolves.toMatchObject({ state: 'ready' }));
 
     reportInventory?.({ state: 'degraded' });
@@ -299,13 +393,13 @@ describe('persisted runtime owner', () => {
     new Platform({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, { platform: 'EufySecurity' }, events.api(directory));
     events.listeners.didFinishLaunching?.();
 
-    const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+    const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     await vi.waitFor(
       async () => await expect(tracker.read()).resolves.toMatchObject({ state: 'authentication-required' }),
     );
     expect(factory).toHaveBeenCalledOnce();
     expect(client.stop).toHaveBeenCalledOnce();
-    const ownership = new AccountOwnership(join(directory, 'eufy-security', 'ownership'));
+    const ownership = new AccountOwnership(join(directory, 'homebridge-eufy', 'ownership'));
     const result = await ownership.acquire('runtime@example.invalid', 'temporary-authentication');
     expect(result.state).toBe('owner');
     if (result.state === 'owner') {
@@ -315,11 +409,11 @@ describe('persisted runtime owner', () => {
 
   it('reports owner conflict without constructing or stopping a client or stealing the live lease', async () => {
     const { directory, persistence } = await activeRuntime();
-    const ownership = new AccountOwnership(join(directory, 'eufy-security', 'ownership'));
+    const ownership = new AccountOwnership(join(directory, 'homebridge-eufy', 'ownership'));
     const held = await ownership.acquire('runtime@example.invalid', 'runtime');
     expect(held.state).toBe('owner');
     const active = await persistence.active();
-    const tracker = new RuntimeTracker(join(directory, 'eufy-security', 'tracker.json'));
+    const tracker = new RuntimeTracker(join(directory, 'homebridge-eufy', 'tracker.json'));
     tracker.start('ready', {
       generation: active?.generation,
       complete: true,

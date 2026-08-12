@@ -1,16 +1,12 @@
-import type { EufyMega, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
+import type { Device, EufyMega, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import type { EufyConfig } from '../configuration.js';
-import {
-  discoverCompleteDeviceRegistry,
-  type CompleteDeviceSnapshot,
-  type DiscoveryDevice,
-} from '../device/snapshot.js';
+import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 
 export type SdkStartResult =
   | {
       state: 'ready';
-      registry: ReadonlyMap<string, DiscoveryDevice>;
+      registry: ReadonlyMap<string, Device>;
       snapshot: CompleteDeviceSnapshot;
     }
   | { state: 'degraded' }
@@ -43,7 +39,7 @@ export function createSyntheticSdkClient(_config: EufyConfig): SdkClient {
 /** Long-lived SDK adapter that can only start from a locally accepted persisted session. */
 export class PersistedSdkClient implements SdkClient {
   private client?: EufyMega;
-  private registry: ReadonlyMap<string, DiscoveryDevice> = new Map();
+  private registry: ReadonlyMap<string, Device> = new Map();
   private inventoryListener?: (result: SdkStartResult) => void;
   private refresh = Promise.resolve();
   private epoch = 0;

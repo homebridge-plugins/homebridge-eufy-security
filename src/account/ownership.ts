@@ -36,6 +36,39 @@ interface OperationRecord {
 const GUARD_RETRY_MS = 10;
 const GUARD_TIMEOUT_MS = 5_000;
 
+function hasCode(error: unknown, code: string): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+}
+
+function readProcessIdentity(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
+    const startTime = fields[19];
+    return startTime ? `proc:${startTime}` : undefined;
+  } catch {
+    try {
+      const startTime = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8',
+        timeout: 1_000,
+      }).trim();
+      return startTime ? `ps:${createHash('sha256').update(startTime).digest('hex')}` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+export function isOwnerProcessAlive(record: { pid: number; processIdentity?: string }): boolean {
+  try {
+    process.kill(record.pid, 0);
+  } catch (error) {
+    return !hasCode(error, 'ESRCH');
+  }
+  const currentIdentity = readProcessIdentity(record.pid);
+  return !record.processIdentity || !currentIdentity || record.processIdentity === currentIdentity;
+}
+
 /** An acquired account-scoped SDK ownership lease. */
 export class AccountLease {
   private readonly ownership: AccountOwnership;
@@ -74,7 +107,7 @@ export class AccountOwnership {
     try {
       const ownerPath = join(accountDirectory, 'owner.json');
       const current = await this.readRecord(ownerPath);
-      if (current && this.isProcessAlive(current)) {
+      if (current && isOwnerProcessAlive(current)) {
         return { state: 'owner-conflict', owner: this.evidence(current) };
       }
 
@@ -83,7 +116,7 @@ export class AccountOwnership {
         token: randomUUID(),
         kind,
         pid: process.pid,
-        processIdentity: this.readProcessIdentity(process.pid),
+        processIdentity: readProcessIdentity(process.pid),
         acquiredAt: new Date().toISOString(),
       };
       await this.writeAtomically(ownerPath, record);
@@ -135,7 +168,7 @@ export class AccountOwnership {
       version: 1,
       token,
       pid: process.pid,
-      processIdentity: this.readProcessIdentity(process.pid),
+      processIdentity: readProcessIdentity(process.pid),
       choosing: true,
       ticket: 0,
     };
@@ -183,7 +216,7 @@ export class AccountOwnership {
       if (!record) {
         continue;
       }
-      if (!this.isProcessAlive(record)) {
+      if (!isOwnerProcessAlive(record)) {
         await rm(path, { force: true });
       } else {
         records.push(record);
@@ -252,36 +285,6 @@ export class AccountOwnership {
     }
   }
 
-  private isProcessAlive(record: { pid: number; processIdentity?: string }): boolean {
-    try {
-      process.kill(record.pid, 0);
-    } catch (error) {
-      return !this.hasCode(error, 'ESRCH');
-    }
-
-    const currentIdentity = this.readProcessIdentity(record.pid);
-    return !record.processIdentity || !currentIdentity || record.processIdentity === currentIdentity;
-  }
-
-  private readProcessIdentity(pid: number): string | undefined {
-    try {
-      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-      const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
-      const startTime = fields[19];
-      return startTime ? `proc:${startTime}` : undefined;
-    } catch {
-      try {
-        const startTime = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
-          encoding: 'utf8',
-          timeout: 1_000,
-        }).trim();
-        return startTime ? `ps:${createHash('sha256').update(startTime).digest('hex')}` : undefined;
-      } catch {
-        return undefined;
-      }
-    }
-  }
-
   private evidence(record: LeaseRecord): AccountOwnerEvidence {
     return { acquiredAt: record.acquiredAt, kind: record.kind, pid: record.pid };
   }
@@ -291,6 +294,6 @@ export class AccountOwnership {
   }
 
   private hasCode(error: unknown, code: string): boolean {
-    return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+    return hasCode(error, code);
   }
 }
