@@ -29,6 +29,7 @@ const legacyAcknowledge = document.querySelector('[data-legacy-acknowledge]');
 
 let messages = {};
 let pluginConfig = [];
+let savedConfigSignature = '';
 let pendingConfig;
 let challenge = '';
 let legacyNames = [];
@@ -105,11 +106,26 @@ function configuredBlock() {
   return pluginConfig.find((block) => block.platform === 'HomebridgeEufy');
 }
 
+function stableConfigValue(value) {
+  if (Array.isArray(value)) return value.map(stableConfigValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableConfigValue(value[key])]),
+  );
+}
+
+function configSignature(config) {
+  return JSON.stringify(stableConfigValue(config));
+}
+
 async function updateConfig(block) {
   pluginConfig = pluginConfig.map((candidate) => (candidate.platform === 'HomebridgeEufy' ? block : candidate));
   if (!pluginConfig.includes(block)) pluginConfig.push(block);
   await homebridge.updatePluginConfig(pluginConfig);
-  homebridge.enableSaveButton();
+  if (configSignature(pluginConfig) === savedConfigSignature) homebridge.disableSaveButton();
+  else homebridge.enableSaveButton();
 }
 
 dashboardView.bindPreferences(dashboardElements, configuredBlock, updateConfig, () => messages);
@@ -140,6 +156,7 @@ async function saveAuthenticatedConfig() {
     await homebridge.updatePluginConfig([pendingConfig]);
     await homebridge.savePluginConfig();
     pluginConfig = [pendingConfig];
+    savedConfigSignature = configSignature(pluginConfig);
     homebridge.disableSaveButton();
   } catch {
   } finally {
@@ -238,6 +255,7 @@ homebridge.addEventListener('ready', async () => {
   shell.dataset.theme = await homebridge.userCurrentLightingMode();
   const language = await homebridge.i18nCurrentLang();
   pluginConfig = await homebridge.getPluginConfig();
+  savedConfigSignature = configSignature(pluginConfig);
   await applyTranslations(language);
   const configured = pluginConfig.find(
     (block) =>

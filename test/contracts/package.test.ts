@@ -680,6 +680,18 @@ describe('packed plugin', () => {
       expect(dashboardUi.saveButtonEnables).toBe(1);
       expect(dashboardUi.saveButtonDisables).toBe(1);
       expect(dashboardUi.saves).toBe(0);
+      await dashboardUi.deviceGroups.dispatch('change', {
+        target: {
+          checked: false,
+          dataset: { preference: 'represented', serial: 'synthetic-contact' },
+        },
+      });
+      expect(dashboardUi.updatedConfig?.[0].entityPreferences).toEqual({
+        'synthetic-absent': { audio: false },
+        'synthetic-contact': { represented: false },
+      });
+      expect(dashboardUi.saveButtonEnables).toBe(1);
+      expect(dashboardUi.saveButtonDisables).toBe(2);
 
       const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
         status: 'two-factor',
