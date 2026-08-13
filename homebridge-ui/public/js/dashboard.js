@@ -17,18 +17,21 @@
     const represented = preference.represented;
     const dependent = key === 'represented' ? '' : ` data-requires-representation${represented ? '' : ' hidden'}`;
     if (key === 'snapshotMode') {
-      return `<label${dependent}><span class="setting-label">${escapeHtml(labels[key])}<span class="setting-help" role="img" tabindex="0" aria-label="${escapeHtml(messages.snapshotModeHelp)}" data-tooltip="${escapeHtml(messages.snapshotModeHelp)}"><img src="assets/icons/info.svg" alt=""></span></span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}">
-        ${['Cloud', 'Live', 'Refresh'].map((mode) => `<option${preference.snapshotMode === mode ? ' selected' : ''}>${mode}</option>`).join('')}
-      </select></label>`;
+      const descriptions = {
+        Cloud: messages.snapshotModeCloudDescription,
+        Live: messages.snapshotModeLiveDescription,
+        Refresh: messages.snapshotModeRefreshDescription,
+      };
+      return `<div class="snapshot-setting" data-setting${dependent}><span class="setting-label">${escapeHtml(labels[key])}</span><div class="snapshot-segments" role="radiogroup" aria-label="${escapeHtml(labels[key])}">${['Cloud', 'Live', 'Refresh'].map((mode) => `<label class="snapshot-segment"><input type="radio" name="snapshot-${escapeHtml(device.serial)}" value="${mode}" data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}" data-description="${escapeHtml(descriptions[mode])}"${preference.snapshotMode === mode ? ' checked' : ''}><span>${mode}</span></label>`).join('')}</div><p class="snapshot-description" data-snapshot-description>${escapeHtml(descriptions[preference.snapshotMode])}</p></div>`;
     }
-    return `<label class="toggle"${dependent}><input type="checkbox" data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${String(preference[key])}"${preference[key] ? ' checked' : ''}><span>${escapeHtml(labels[key])}</span></label>`;
+    return `<label class="toggle" data-setting${dependent}><input type="checkbox" data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${String(preference[key])}"${preference[key] ? ' checked' : ''}><span>${escapeHtml(labels[key])}</span></label>`;
   }
 
   function markPendingPreference(control, key, value) {
     if (!control?.classList || control.dataset.original === undefined) return;
     const current = key === 'snapshotMode' ? String(value) : String(Boolean(value));
     control.classList.toggle('preference-control-changed', current !== control.dataset.original);
-    control.closest('label')?.classList.toggle(
+    control.closest('[data-setting]')?.classList.toggle(
       'preference-changed',
       control.classList.contains('preference-control-changed'),
     );
@@ -150,6 +153,11 @@
       const defaults = { represented: true, audio: true, snapshotMode: 'Refresh' };
       const value = key === 'snapshotMode' ? control.value : control.checked;
       markPendingPreference(control, key, value);
+      if (key === 'snapshotMode') {
+        control.closest('.snapshot-setting')?.querySelector('[data-snapshot-description]').replaceChildren(
+          control.dataset.description,
+        );
+      }
       const entityPreferences = { ...(existing.entityPreferences ?? {}) };
       const preference = { ...(entityPreferences[serial] ?? {}) };
       if (value === defaults[key]) delete preference[key];

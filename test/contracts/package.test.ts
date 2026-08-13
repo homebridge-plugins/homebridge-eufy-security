@@ -287,7 +287,6 @@ describe('packed plugin', () => {
       expect(uiShellFiles).toEqual([
         'homebridge-ui/public/app.css',
         'homebridge-ui/public/assets/icons/bolt.svg',
-        'homebridge-ui/public/assets/icons/info.svg',
         'homebridge-ui/public/assets/icons/inventory.svg',
         'homebridge-ui/public/assets/icons/troubleshoot.svg',
         'homebridge-ui/public/assets/icons/warning.svg',
@@ -403,7 +402,9 @@ describe('packed plugin', () => {
         'preferenceRepresented',
         'preferenceSaveFailed',
         'preferenceSnapshotMode',
-        'snapshotModeHelp',
+        'snapshotModeCloudDescription',
+        'snapshotModeLiveDescription',
+        'snapshotModeRefreshDescription',
       ].sort();
       expect(Object.keys(catalogs['i18n/en.json']).sort()).toEqual(expectedCatalogKeys);
       expect(Object.keys(catalogs['i18n/fr.json']).sort()).toEqual(expectedCatalogKeys);

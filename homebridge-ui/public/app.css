@@ -543,7 +543,7 @@ h2 {
   cursor: default;
 }
 
-.preference-grid label.preference-changed {
+.preference-grid .preference-changed {
   border-left: 3px solid #d99a21;
   border-radius: 5px;
   background: color-mix(in srgb, #d99a21 10%, transparent);
@@ -556,48 +556,68 @@ h2 {
   gap: 5px;
 }
 
-.setting-help {
+.snapshot-setting {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.snapshot-segments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.snapshot-segments .snapshot-segment {
   position: relative;
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  cursor: help;
+  display: block;
+  color: var(--muted);
+  cursor: pointer;
 }
 
-.setting-help img {
-  width: 16px;
-  height: 16px;
-  opacity: 0.72;
-  filter: var(--tile-icon-filter);
+.snapshot-segment + .snapshot-segment {
+  border-left: 1px solid var(--line);
 }
 
-.setting-help::after {
-  content: attr(data-tooltip);
+.snapshot-segment input {
   position: absolute;
-  z-index: 6;
-  top: calc(100% + 6px);
-  left: 50%;
-  width: 180px;
-  border: 1px solid var(--tile-badge-border);
-  border-radius: 7px;
-  background: var(--tile-tooltip-bg);
-  color: var(--tile-tooltip-ink);
-  padding: 7px 9px;
-  box-shadow: 0 5px 16px rgb(0 0 0 / 18%);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
+  width: 1px;
+  min-height: 0;
+  height: 1px;
+  margin: 0;
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, -3px);
-  transition: opacity 120ms ease, transform 120ms ease;
 }
 
-.setting-help:hover::after,
-.setting-help:focus-visible::after {
-  opacity: 1;
-  transform: translate(-50%, 0);
+.snapshot-segment span {
+  display: block;
+  padding: 7px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.snapshot-segment input:checked + span {
+  background: var(--accent);
+  color: #07383a;
+}
+
+.snapshot-segment input:focus-visible + span {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+}
+
+.snapshot-description {
+  min-height: 30px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .preference-grid .toggle {
@@ -640,15 +660,6 @@ h2 {
 
 .preference-grid .toggle input:checked::before {
   transform: translateX(16px);
-}
-
-select {
-  min-height: 40px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--ink);
-  padding: 7px;
 }
 
 [hidden] {
