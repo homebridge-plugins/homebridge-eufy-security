@@ -127,9 +127,14 @@ async function handleResult(result) {
 
 authForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const existing = pluginConfig.find((block) => block.platform === 'HomebridgeEufy') ?? pluginConfig[0] ?? {};
+  const existing = pluginConfig.find((block) => block.platform === 'HomebridgeEufy') ?? {};
+  const retained = Object.fromEntries(
+    ['pollingIntervalMinutes', 'ffmpegPath', 'entityPreferences']
+      .filter((key) => Object.hasOwn(existing, key))
+      .map((key) => [key, existing[key]]),
+  );
   pendingConfig = {
-    ...existing,
+    ...retained,
     platform: 'HomebridgeEufy',
     username: accountInput.value.trim(),
     password: passwordInput.value,
@@ -170,7 +175,10 @@ homebridge.addEventListener('ready', async () => {
   const language = await homebridge.i18nCurrentLang();
   pluginConfig = await homebridge.getPluginConfig();
   await applyTranslations(language);
-  const configured = pluginConfig.find((block) => typeof block.username === 'string' && block.username.trim().length > 0);
+  const configured = pluginConfig.find(
+    (block) =>
+      block.platform === 'HomebridgeEufy' && typeof block.username === 'string' && block.username.trim().length > 0,
+  );
 
   firstSetup.hidden = Boolean(configured);
   setupContent.hidden = !configured;

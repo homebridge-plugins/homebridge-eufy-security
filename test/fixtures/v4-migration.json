@@ -1,0 +1,58 @@
+{
+  "configuration": {
+    "platform": "EufySecurity",
+    "username": "legacy@example.invalid",
+    "password": "synthetic-password",
+    "country": "ca",
+    "deviceName": "Legacy bridge",
+    "pollingIntervalMinutes": 2,
+    "ffmpegPath": "/legacy/ffmpeg",
+    "cameras": [
+      {
+        "serialNumber": "synthetic-v4-contact",
+        "enableCamera": false,
+        "rtsp": true,
+        "videoConfig": {
+          "audio": false,
+          "maxBitrate": 900,
+          "maxFPS": 15,
+          "maxWidth": 1280,
+          "vcodec": "copy",
+          "videoFilter": "legacy-filter"
+        }
+      }
+    ],
+    "stations": [
+      {
+        "serialNumber": "synthetic-v4-station",
+        "manualTriggerModes": [1, 2],
+        "hkHome": 1,
+        "hkAway": 2,
+        "hkNight": 3,
+        "hkOff": 0
+      }
+    ],
+    "ignoreDevices": ["synthetic-v4-contact"],
+    "ignoreStations": ["synthetic-v4-station"],
+    "enableDetailedLogging": true,
+    "omitLogFiles": false,
+    "CameraMaxLivestreamDuration": 30,
+    "cleanCache": true,
+    "syncStationModes": true,
+    "useEmbeddedPKCS1Support": true,
+    "experimentalMode": true
+  },
+  "cachedAccessory": {
+    "plugin": "@homebridge-plugins/homebridge-eufy-security",
+    "platform": "EufySecurity",
+    "uuidInput": "d1_synthetic-v4-contact",
+    "uuid": "062f0af6-9d97-494b-84cb-8fabe19a2c1f",
+    "context": {
+      "device": {
+        "uniqueId": "synthetic-v4-contact",
+        "displayName": "Legacy contact",
+        "type": 1
+      }
+    }
+  }
+}

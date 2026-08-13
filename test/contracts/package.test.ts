@@ -160,6 +160,7 @@ describe('packed plugin', () => {
     const repository = fileURLToPath(new URL('../..', import.meta.url));
     const packageJson = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as {
       displayName: string;
+      name: string;
       version: string;
       main?: string;
       dependencies?: Record<string, string>;
@@ -167,6 +168,7 @@ describe('packed plugin', () => {
     const generatedVersion = readFileSync(join(repository, 'src', 'version.ts'), 'utf8');
 
     expect(packageJson.displayName).toBe('Homebridge Eufy');
+    expect(packageJson.name).toBe('@homebridge-plugins/homebridge-eufy-security');
     expect(packageJson.main).toBe('dist/index.js');
     expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual([
       '@homebridge/plugin-ui-utils',
@@ -191,6 +193,9 @@ describe('packed plugin', () => {
       const entryPoint = pathToFileURL(join(directory, 'package', 'dist', 'index.js'));
       const plugin = (await import(entryPoint.href)) as { default: unknown };
       const packageDirectory = join(directory, 'package');
+      const packedPackage = JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as {
+        name: string;
+      };
       const schema = JSON.parse(readFileSync(join(packageDirectory, 'config.schema.json'), 'utf8')) as {
         customUi?: boolean;
       };
@@ -221,6 +226,7 @@ describe('packed plugin', () => {
         .sort();
 
       expect(plugin.default).toBeTypeOf('function');
+      expect(packedPackage.name).toBe('@homebridge-plugins/homebridge-eufy-security');
       expect(schema.customUi).toBe(true);
       expect(result.files.map((file) => file.path)).toContain('dist/ui/server.js');
       expect(uiFiles).toEqual([
@@ -397,6 +403,37 @@ describe('packed plugin', () => {
         challengeForm: { hidden: true },
       });
       expect(englishUi.saves).toBe(1);
+
+      const migrationFixture = JSON.parse(
+        readFileSync(join(repository, 'test', 'fixtures', 'v4-migration.json'), 'utf8'),
+      ) as {
+        cachedAccessory: { plugin: string };
+        configuration: Record<string, unknown>;
+      };
+      expect(migrationFixture.cachedAccessory.plugin).toBe(packedPackage.name);
+      const migratedUi = await renderUi(script, [migrationFixture.configuration], catalogs, 'en', [], {
+        status: 'restart-required',
+      });
+      expect(migratedUi).toMatchObject({
+        account: { value: '' },
+        country: { value: 'US' },
+        firstSetup: { hidden: false },
+        trustedDeviceName: { value: 'Homebridge Eufy' },
+      });
+      migratedUi.account.value = 'replacement@example.invalid';
+      migratedUi.password.value = 'replacement-password';
+      migratedUi.country.value = 'GB';
+      migratedUi.trustedDeviceName.value = 'Replacement bridge';
+      await migratedUi.authForm.dispatch('submit');
+      const expectedMigratedConfig = {
+        platform: 'HomebridgeEufy',
+        username: 'replacement@example.invalid',
+        password: 'replacement-password',
+        country: 'GB',
+        trustedDeviceName: 'Replacement bridge',
+      };
+      expect(migratedUi.requests).toEqual([{ path: '/auth/start', body: { configuration: expectedMigratedConfig } }]);
+      expect(migratedUi.updatedConfig).toEqual([expectedMigratedConfig]);
 
       const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
         status: 'two-factor',

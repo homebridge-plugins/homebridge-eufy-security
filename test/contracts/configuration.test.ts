@@ -7,8 +7,12 @@ import { describe, expect, it } from 'vitest';
 import { parseConfig, resolveEntityPreference, serializeConfig, type EufyConfig } from '../../src/configuration.js';
 
 describe('V5 configuration', () => {
+  const repository = fileURLToPath(new URL('../..', import.meta.url));
+  const migrationFixture = JSON.parse(readFileSync(`${repository}/test/fixtures/v4-migration.json`, 'utf8')) as {
+    configuration: Record<string, unknown>;
+  };
+
   it('publishes the same defaults and closed entity-preference vocabulary in its schema', () => {
-    const repository = fileURLToPath(new URL('../..', import.meta.url));
     const schema = JSON.parse(readFileSync(`${repository}/config.schema.json`, 'utf8')) as {
       pluginAlias: string;
       schema: {
@@ -111,33 +115,28 @@ describe('V5 configuration', () => {
     });
   });
 
-  it('does not import discarded V4 device arrays or feature settings', () => {
+  it('imports no discarded V4 arrays, toggles, maps, media options, flags, or workarounds', () => {
     const config = parseConfig({
+      ...migrationFixture.configuration,
       platform: 'HomebridgeEufy',
-      username: 'guest@example.invalid',
-      cameras: [{ serialNumber: 'synthetic-camera', enableCamera: false }],
-      stations: [{ serialNumber: 'synthetic-station' }],
-      ignoreDevices: ['synthetic-camera'],
-      enableDetailedLogging: true,
-      CameraMaxLivestreamDuration: 30,
+      trustedDeviceName: 'V5 bridge',
       entityPreferences: {
         'synthetic-absent-entity': { represented: false },
       },
     });
 
-    const serialized = serializeConfig(config);
-    expect(serialized).toEqual(
-      expect.objectContaining({
-        entityPreferences: {
-          'synthetic-absent-entity': { represented: false },
-        },
-      }),
-    );
-    expect(serialized).not.toHaveProperty('cameras');
-    expect(serialized).not.toHaveProperty('stations');
-    expect(serialized).not.toHaveProperty('ignoreDevices');
-    expect(serialized).not.toHaveProperty('enableDetailedLogging');
-    expect(serialized).not.toHaveProperty('CameraMaxLivestreamDuration');
+    expect(serializeConfig(config)).toEqual({
+      platform: 'HomebridgeEufy',
+      username: 'legacy@example.invalid',
+      password: 'synthetic-password',
+      country: 'CA',
+      trustedDeviceName: 'V5 bridge',
+      pollingIntervalMinutes: 2,
+      ffmpegPath: '/legacy/ffmpeg',
+      entityPreferences: {
+        'synthetic-absent-entity': { represented: false },
+      },
+    });
   });
 
   it('rejects attempts to manufacture SDK capabilities through configuration', () => {
