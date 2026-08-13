@@ -55,6 +55,23 @@ function identityOnlyManifest(serial: string): DeviceManifest {
   };
 }
 
+function batteryManifest(serial: string, primary = false): DeviceManifest {
+  const manifest = primary ? contactManifest(serial) : identityOnlyManifest(serial);
+  manifest.capabilities.push('battery');
+  manifest.details.push({
+    capability: 'battery',
+    accessor: 'battery',
+    reads: [
+      { accessor: 'level', property: 'synthetic_battery_level', type: 'number', writable: false },
+      { accessor: 'charging', property: 'synthetic_battery_charging', type: 'bool', writable: false },
+    ],
+    actions: [],
+    undescribedActions: [],
+    events: ['batteryLevel', 'batteryAlert'],
+  });
+  return manifest;
+}
+
 function eventManifest(
   serial: string,
   capability: 'motion' | 'person_detection' | 'doorbell',
@@ -96,6 +113,13 @@ function contactDevice(open: boolean, infoName = 'Synthetic contact tracer'): De
       firmwareVersion: '1.2.3',
       hardwareVersion: '4.5',
     }),
+  } as unknown as Device;
+}
+
+function batteryContactDevice(open: boolean, level: number): Device {
+  return {
+    ...contactDevice(open),
+    battery: () => ({ level, charging: false }),
   } as unknown as Device;
 }
 
@@ -248,6 +272,61 @@ describe('HomeKit registry reconciliation', () => {
     expect(accessory.displayName).toBe('Renamed contact tracer');
     expect(accessory.services.filter((service) => service.UUID === Service.ContactSensor.UUID)).toHaveLength(1);
     expect(diagnostics.filter(({ code }) => code === 'recognized-device-not-represented')).toEqual([]);
+  });
+
+  it('enriches a represented device with battery evidence and routes later low-state evidence', () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const traces: HomeKitEventTrace[] = [];
+    new HomeKitReconciler(source, recording.api, vi.fn(), [], (trace) => traces.push(trace)).start();
+    const serial = 'synthetic-battery-contact';
+
+    source.publish(
+      registryView(1, new Map([[serial, batteryContactDevice(false, 75)]]), snapshot(batteryManifest(serial, true))),
+    );
+
+    expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const battery = accessory.getServiceById(Service.Battery, 'battery.status')!;
+    expect(battery).toBeDefined();
+
+    source.publishEvent({ eventName: 'batteryAlert', deviceSn: serial, state: 'low' });
+    expect(battery.getCharacteristic(Characteristic.StatusLowBattery).value).toBe(
+      Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW,
+    );
+    source.publishEvent({ eventName: 'batteryLevel', deviceSn: serial, to: '30' });
+    expect(battery.getCharacteristic(Characteristic.BatteryLevel).value).toBe(30);
+    expect(battery.getCharacteristic(Characteristic.StatusLowBattery).value).toBe(
+      Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL,
+    );
+    expect(traces.map(({ adapter, event }) => ({ adapter, event }))).toEqual([
+      { adapter: 'battery.status', event: 'battery-alert' },
+      { adapter: 'battery.status', event: 'battery-level' },
+    ]);
+
+    source.publish(registryView(2, new Map([[serial, contactDevice(false)]]), snapshot(contactManifest(serial))));
+    expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).toBeDefined();
+    expect(accessory.getServiceById(Service.Battery, 'battery.status')).toBeUndefined();
+  });
+
+  it('keeps battery-only devices dashboard-only', () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const diagnostics: HomeKitDiagnostic[] = [];
+    new HomeKitReconciler(source, recording.api, (diagnostic) => diagnostics.push(diagnostic)).start();
+    const serial = 'synthetic-battery-only';
+
+    source.publish(
+      registryView(1, new Map([[serial, batteryContactDevice(false, 75)]]), snapshot(batteryManifest(serial))),
+    );
+
+    expect(recording.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(diagnostics).toContainEqual({
+      code: 'recognized-device-not-represented',
+      active: true,
+      reason: 'no-primary-purpose-member',
+      affectedDeviceCount: 1,
+    });
   });
 
   it.each([

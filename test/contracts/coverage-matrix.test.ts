@@ -75,6 +75,7 @@ describe('SDK/HAP coverage matrix', () => {
   it('distinguishes representation-establishing adapters from supplemental enrichment', () => {
     expect(ADAPTER_REGISTRY['contact.sensor']).toMatchObject({ role: 'primary-purpose' });
     expect(ADAPTER_REGISTRY['accessory.information']).toMatchObject({ role: 'supplemental' });
+    expect(ADAPTER_REGISTRY['battery.status']).toMatchObject({ role: 'supplemental' });
     for (const adapter of Object.values(ADAPTER_REGISTRY)) {
       const coverage = new Set(adapter.coverage.map(({ id }) => id));
       expect(adapter.requires.every(({ id }) => coverage.has(id))).toBe(true);
@@ -93,5 +94,16 @@ describe('SDK/HAP coverage matrix', () => {
         verification.some(({ file }) => file === 'test/contracts/homekit-reconciler.test.ts'),
       ),
     ).toBe(true);
+
+    const representedBattery = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'battery.status');
+    expect(representedBattery.map(({ id }) => id).sort()).toEqual(
+      [
+        'battery.level.read',
+        'battery.charging.read',
+        'battery.batteryLevel.event',
+        'battery.batteryAlert.event',
+      ].sort(),
+    );
+    expect(representedBattery.every(({ followUp }) => followUp === undefined)).toBe(true);
   });
 });

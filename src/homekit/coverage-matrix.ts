@@ -153,12 +153,6 @@ defer(
   '#992',
   'requires the T8531-only control boundary and unknown-current policy',
 );
-defer(
-  ['battery.level.read', 'battery.charging.read', 'battery.batteryLevel.event', 'battery.batteryAlert.event'],
-  '#995',
-  'requires represented-device-only battery enrichment',
-);
-
 /** Derives the current semantic member inventory directly from the pinned SDK contract. */
 function currentSdkSurface(): string[] {
   const rows: string[] = [];
