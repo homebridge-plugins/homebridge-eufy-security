@@ -87,13 +87,19 @@ h2 {
   box-shadow: 0 14px 40px rgb(32 48 78 / 9%);
 }
 
-.legacy-notice,
-.dashboard {
+.legacy-notice {
   margin-bottom: 16px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--panel);
   padding: clamp(16px, 4vw, 24px);
+}
+
+.dashboard {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .legacy-notice {
