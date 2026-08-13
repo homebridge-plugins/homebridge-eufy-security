@@ -780,9 +780,9 @@ button:disabled {
   }
 
   .device-art img[data-device-artwork] {
-    inset: 0 4% 0 auto;
+    inset: 12px 4% 12px auto;
     width: 76%;
-    height: 100%;
+    height: calc(100% - 24px);
     object-fit: contain;
     object-position: center right;
   }
