@@ -307,6 +307,7 @@ h2 {
   pointer-events: none;
   transform: rotateY(180deg);
   transition: opacity 100ms linear 200ms;
+  cursor: pointer;
 }
 
 .device-tile-flipped .device-card-front {
@@ -319,24 +320,6 @@ h2 {
   z-index: 1;
   opacity: 1;
   pointer-events: auto;
-}
-
-.device-flip-back {
-  position: absolute;
-  z-index: 2;
-  top: 9px;
-  right: 9px;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  min-height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--panel);
-  color: var(--ink);
-  padding: 0;
-  font-size: 20px;
-  line-height: 1;
 }
 
 .device-summary::after {
@@ -554,6 +537,7 @@ h2 {
   gap: 4px;
   color: var(--muted);
   font-size: 11px;
+  cursor: default;
 }
 
 .preference-grid label.preference-changed {
