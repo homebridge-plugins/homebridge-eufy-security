@@ -418,16 +418,6 @@ details.device-tile > .device-summary {
   padding: 12px 14px 14px;
 }
 
-.preference-panel > strong {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--accent-ink);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.preference-panel > strong img,
 .restart-guidance img {
   width: 16px;
   height: 16px;
@@ -840,7 +830,6 @@ button:disabled {
 .shell[data-theme="dark"] .notice-icon,
 .shell[data-theme="dark"] .status-icon,
 .shell[data-theme="dark"] .device-class-icon,
-.shell[data-theme="dark"] .preference-panel > strong img,
 .shell[data-theme="dark"] .restart-guidance img {
   filter: invert(1);
 }

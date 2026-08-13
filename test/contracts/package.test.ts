@@ -279,7 +279,6 @@ describe('packed plugin', () => {
         'homebridge-ui/public/assets/icons/info.svg',
         'homebridge-ui/public/assets/icons/inventory.svg',
         'homebridge-ui/public/assets/icons/refresh.svg',
-        'homebridge-ui/public/assets/icons/settings.svg',
         'homebridge-ui/public/assets/icons/warning.svg',
         'homebridge-ui/public/assets/logo-dark.svg',
         'homebridge-ui/public/assets/logo.svg',
@@ -308,7 +307,6 @@ describe('packed plugin', () => {
       expect(document).toContain('src="assets/icons/inventory.svg"');
       expect(document).toContain('src="assets/icons/refresh.svg"');
       expect(document).toContain('src="assets/icons/warning.svg"');
-      expect(script).toContain('src="assets/icons/settings.svg"');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
       expect(document).toContain('data-first-setup-continue');
@@ -395,7 +393,6 @@ describe('packed plugin', () => {
         'preferenceRepresented',
         'preferenceSaveFailed',
         'preferenceSnapshotMode',
-        'preferences',
       ].sort();
       expect(Object.keys(catalogs['i18n/en.json']).sort()).toEqual(expectedCatalogKeys);
       expect(Object.keys(catalogs['i18n/fr.json']).sort()).toEqual(expectedCatalogKeys);
