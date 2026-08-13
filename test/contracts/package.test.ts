@@ -38,6 +38,7 @@ async function renderUi(
   }
 
   const shell = { dataset: {} as Record<string, string>, lang: '' };
+  const masthead = { hidden: false };
   const firstSetup = interactiveElement({ hidden: true });
   const setupContent = { hidden: true };
   const acknowledgement = interactiveElement({ checked: false });
@@ -88,6 +89,7 @@ async function renderUi(
           '[data-first-setup-continue]': continueButton,
           '[data-setup-content]': setupContent,
           '[data-ui-shell]': shell,
+          '[data-masthead]': masthead,
           '[data-auth-form]': authForm,
           '[data-challenge-form]': challengeForm,
           '[data-account]': account,
@@ -175,6 +177,7 @@ async function renderUi(
     requests,
     setupContent,
     shell,
+    masthead,
     get saves() {
       return saves;
     },
@@ -429,6 +432,7 @@ describe('packed plugin', () => {
         firstSetup: { hidden: true },
         setupContent: { hidden: true },
         dashboard: { hidden: false, dataset: { state: 'ready' } },
+        masthead: { hidden: true },
         shell: { dataset: { theme: 'dark' } },
       });
 

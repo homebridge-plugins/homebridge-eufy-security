@@ -1,4 +1,5 @@
 const shell = document.querySelector('[data-ui-shell]');
+const masthead = document.querySelector('[data-masthead]');
 const firstSetup = document.querySelector('[data-first-setup]');
 const setupContent = document.querySelector('[data-setup-content]');
 const acknowledgement = document.querySelector('[data-first-setup-ack]');
@@ -45,6 +46,7 @@ const dashboardElements = {
   restart: restartGuidance,
   setup: setupContent,
   pageTitle,
+  masthead,
 };
 
 function requestWithinDeadline(path, body, timeoutMs = 320000) {
@@ -117,6 +119,7 @@ dashboardView.bindPreferences(dashboardElements, configuredBlock, saveConfig, ()
 dashboardAuthenticate.addEventListener('click', () => {
   dashboard.hidden = true;
   setupContent.hidden = false;
+  masthead.hidden = false;
   pageTitle.textContent = messages.pageTitle;
 });
 

@@ -90,6 +90,7 @@
     elements.summary.textContent = messages[`dashboard${suffix}Summary`] ?? messages.dashboardIncompleteSummary;
     elements.dashboard.dataset.state = result.state;
     elements.dashboard.hidden = false;
+    elements.masthead.hidden = true;
     renderDevices(result.devices, config, messages, elements.groups);
     elements.setup.hidden = true;
     elements.authenticate.hidden = result.state !== 'authentication-required' || result.devices.length === 0;
