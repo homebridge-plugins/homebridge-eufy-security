@@ -211,6 +211,7 @@ h2 {
 }
 
 .device-tile {
+  position: relative;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -218,8 +219,32 @@ h2 {
   background: var(--tile-bg);
 }
 
+.device-tile-changed {
+  border-color: #d99a21;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #d99a21 24%, transparent);
+}
+
+.device-tile-changed::after {
+  content: "";
+  position: absolute;
+  z-index: 5;
+  top: 11px;
+  left: 11px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--tile-bg);
+  border-radius: 50%;
+  background: #d99a21;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 28%);
+  pointer-events: none;
+}
+
 .device-tile[open] {
   border-color: var(--accent);
+}
+
+.device-tile[open].device-tile-changed {
+  border-color: #d99a21;
 }
 
 .device-summary {
@@ -435,6 +460,13 @@ details.device-tile > .device-summary {
   gap: 4px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.preference-grid label.preference-changed {
+  border-left: 3px solid #d99a21;
+  border-radius: 5px;
+  background: color-mix(in srgb, #d99a21 10%, transparent);
+  padding: 7px 8px;
 }
 
 .preference-grid .toggle {

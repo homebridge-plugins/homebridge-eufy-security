@@ -410,6 +410,8 @@ describe('packed plugin', () => {
       expect(script).toContain('homebridge.userCurrentLightingMode()');
       expect(server).toContain("from '../dist/ui/server.js'");
       expect(stylesheet).toContain('--accent: #00bfc4');
+      expect(stylesheet).toContain('.device-tile-changed');
+      expect(stylesheet).toContain('.preference-changed');
       expect(darkTheme).toContain('--ink: #edf1f7');
       expect(darkTheme).not.toContain('var(--bs-');
 

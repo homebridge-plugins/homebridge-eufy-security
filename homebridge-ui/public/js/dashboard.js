@@ -15,11 +15,23 @@
       snapshotMode: messages.preferenceSnapshotMode,
     };
     if (key === 'snapshotMode') {
-      return `<label><span>${escapeHtml(labels[key])}</span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}">
+      return `<label><span>${escapeHtml(labels[key])}</span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}">
         ${['Cloud', 'Live', 'Refresh'].map((mode) => `<option${preference.snapshotMode === mode ? ' selected' : ''}>${mode}</option>`).join('')}
       </select></label>`;
     }
-    return `<label class="toggle"><input type="checkbox" data-preference="${key}" data-serial="${escapeHtml(device.serial)}"${preference[key] ? ' checked' : ''}><span>${escapeHtml(labels[key])}</span></label>`;
+    return `<label class="toggle"><input type="checkbox" data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${String(preference[key])}"${preference[key] ? ' checked' : ''}><span>${escapeHtml(labels[key])}</span></label>`;
+  }
+
+  function markPendingPreference(control, key, value) {
+    if (!control?.classList || control.dataset.original === undefined) return;
+    const current = key === 'snapshotMode' ? String(value) : String(Boolean(value));
+    control.classList.toggle('preference-control-changed', current !== control.dataset.original);
+    control.closest('label')?.classList.toggle(
+      'preference-changed',
+      control.classList.contains('preference-control-changed'),
+    );
+    const tile = control.closest('.device-tile');
+    tile?.classList.toggle('device-tile-changed', Boolean(tile.querySelector('.preference-control-changed')));
   }
 
   function renderDevices(devices, config, messages, deviceGroups) {
@@ -126,6 +138,7 @@
       if (!existing || !serial || !key) return;
       const defaults = { represented: true, audio: true, snapshotMode: 'Refresh' };
       const value = key === 'snapshotMode' ? control.value : control.checked;
+      markPendingPreference(control, key, value);
       const entityPreferences = { ...(existing.entityPreferences ?? {}) };
       const preference = { ...(entityPreferences[serial] ?? {}) };
       if (value === defaults[key]) delete preference[key];
