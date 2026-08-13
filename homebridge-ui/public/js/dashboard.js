@@ -77,13 +77,13 @@
               <div class="device-copy"><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(device.modelName)}</p></div>
               <div class="device-badges">${badges.map(({ icon, label }) => `<span class="device-badge device-badge-${icon}" role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>`;
             if (device.diagnosticOnly) {
-              return `<article class="device-tile" data-category="${category}" data-rank="${rank}"><div class="device-summary">${tile}</div></article>`;
+              return `<article class="device-tile device-tile-flippable" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><button class="device-flip-back" type="button" aria-label="${escapeHtml(messages.closeSettings)}">×</button><div class="diagnostic-panel"><img src="assets/icons/info.svg" alt=""><strong>${escapeHtml(messages.diagnosticOnly)}</strong><p>${escapeHtml(messages.diagnosticDescription)}</p></div></div></div></article>`;
             }
             const controls = device.preferences
               .map((key) => preferenceControl(device, key, preference, messages))
               .join('');
             const disabledClass = rank === 1 ? ' device-tile-disabled' : '';
-            return `<details class="device-tile${disabledClass}" data-category="${category}" data-rank="${rank}"><summary class="device-summary">${tile}</summary><div class="preference-panel"><div class="preference-grid">${controls}</div></div></details>`;
+            return `<article class="device-tile device-tile-flippable${disabledClass}" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><button class="device-flip-back" type="button" aria-label="${escapeHtml(messages.closeSettings)}">×</button><div class="preference-panel"><div class="preference-grid">${controls}</div></div></div></div></article>`;
           })
           .join('');
         const categoryKey = `category${category[0].toUpperCase()}${category.slice(1)}`;
@@ -114,6 +114,13 @@
   }
 
   function bindPreferences(elements, getConfig, saveConfig, getMessages) {
+    elements.groups.addEventListener('click', (event) => {
+      const trigger = event.target.closest?.('.device-flip-control, .device-flip-back');
+      if (!trigger) return;
+      const tile = trigger.closest('.device-tile-flippable');
+      const flipped = tile.classList.toggle('device-tile-flipped');
+      tile.querySelector('.device-flip-control').setAttribute('aria-expanded', String(flipped));
+    });
     elements.groups.addEventListener(
       'load',
       (event) => {

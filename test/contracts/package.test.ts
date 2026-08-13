@@ -373,6 +373,7 @@ describe('packed plugin', () => {
         'categoryClean',
         'categoryLife',
         'categorySecurity',
+        'closeSettings',
         'controllable',
         'dashboardAuthenticationRequiredBadge',
         'dashboardAuthenticationRequiredSummary',
@@ -396,6 +397,7 @@ describe('packed plugin', () => {
         'dashboardStaleBadge',
         'dashboardStaleSummary',
         'dashboardStaleTitle',
+        'diagnosticDescription',
         'diagnosticOnly',
         'preferenceAudio',
         'preferenceRepresented',
@@ -668,8 +670,9 @@ describe('packed plugin', () => {
         dashboardUi.deviceGroups.innerHTML.indexOf('Floor cleaner'),
       );
       expect(dashboardUi.deviceGroups.innerHTML).toContain(catalogs['i18n/en.json'].diagnosticOnly);
-      expect(dashboardUi.deviceGroups.innerHTML.match(/<details class="device-tile/g)).toHaveLength(3);
-      expect(dashboardUi.deviceGroups.innerHTML.match(/<article class="device-tile"/g)).toHaveLength(2);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/device-tile-flippable/g)).toHaveLength(5);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/diagnostic-panel/g)).toHaveLength(2);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/preference-panel/g)).toHaveLength(3);
       await dashboardUi.deviceGroups.dispatch('change', {
         target: {
           checked: true,
