@@ -72,6 +72,38 @@ function batteryManifest(serial: string, primary = false): DeviceManifest {
   return manifest;
 }
 
+function sirenManifest(serial: string): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic indoor siren',
+    modelName: 'Synthetic siren',
+    codec: 'unknown',
+    source: 'security',
+    bound: true,
+    capabilities: ['siren'],
+    details: [
+      {
+        capability: 'siren',
+        accessor: 'siren',
+        reads: [
+          {
+            accessor: 'active',
+            property: 'synthetic_siren_active',
+            type: 'bool',
+            writable: false,
+          },
+        ],
+        actions: [
+          { name: 'test', form: 'momentary' },
+          { name: 'stop', form: 'momentary' },
+        ],
+        undescribedActions: [],
+        events: [],
+      },
+    ],
+  };
+}
+
 function eventManifest(
   serial: string,
   capability: 'motion' | 'person_detection' | 'doorbell',
@@ -120,6 +152,12 @@ function batteryContactDevice(open: boolean, level: number): Device {
   return {
     ...contactDevice(open),
     battery: () => ({ level, charging: false }),
+  } as unknown as Device;
+}
+
+function sirenDevice(active = false): Device {
+  return {
+    siren: () => ({ active, test: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) }),
   } as unknown as Device;
 }
 
@@ -349,6 +387,34 @@ describe('HomeKit registry reconciliation', () => {
       expect(accessory.getServiceById(service, key)).toBeDefined();
     },
   );
+
+  it('represents a siren only with active, test, and stop evidence', () => {
+    const serial = 'synthetic-siren';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn()).start();
+
+    source.publish(registryView(1, new Map([[serial, sirenDevice()]]), snapshot(sirenManifest(serial))));
+
+    expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    expect(accessory.getServiceById(Service.Switch, 'siren.test')).toBeDefined();
+
+    for (const missing of ['active', 'test', 'stop'] as const) {
+      const nearMiss = sirenManifest(`synthetic-siren-without-${missing}`);
+      const detail = nearMiss.details[0]!;
+      if (missing === 'active') {
+        detail.reads = [];
+      } else {
+        detail.actions = detail.actions.filter(({ name }) => name !== missing);
+      }
+      const nearMissSource = new RegistrySource();
+      const nearMissRecording = recordingApi();
+      new HomeKitReconciler(nearMissSource, nearMissRecording.api, vi.fn()).start();
+      nearMissSource.publish(registryView(1, new Map([[nearMiss.sn, sirenDevice()]]), snapshot(nearMiss)));
+      expect(nearMissRecording.registerPlatformAccessories, missing).not.toHaveBeenCalled();
+    }
+  });
 
   it('keeps devices without primary-purpose members dashboard-only with redacted diagnostics', () => {
     const source = new RegistrySource();

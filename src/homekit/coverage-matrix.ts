@@ -24,7 +24,7 @@ export interface CoverageRow {
   disposition: CoverageDisposition;
   adapter: string | null;
   representationStatus: 'represented' | 'not-represented';
-  controlStatus: 'not-controllable' | 'not-represented';
+  controlStatus: 'controllable' | 'not-controllable' | 'not-represented';
   identityEffect: string;
   diagnostics: string;
   verification: CoverageVerification[];
@@ -144,11 +144,6 @@ defer(
   'requires projection and partial-report reconciliation',
 );
 defer(
-  ['siren.active.read', 'siren.test.momentary-action', 'siren.stop.momentary-action'],
-  '#994',
-  'requires evidence-bounded indoor-siren test behavior',
-);
-defer(
   ['lock.lock.momentary-action', 'lock.unlock.momentary-action'],
   '#992',
   'requires the T8531-only control boundary and unknown-current policy',
@@ -232,7 +227,11 @@ function makeRow(id: string): CoverageRow {
     disposition,
     adapter: represented?.adapter ?? null,
     representationStatus: represented ? 'represented' : 'not-represented',
-    controlStatus: represented ? 'not-controllable' : 'not-represented',
+    controlStatus: represented
+      ? memberKind === 'persistent-operation' || memberKind === 'momentary-action'
+        ? 'controllable'
+        : 'not-controllable'
+      : 'not-represented',
     identityEffect: represented?.coverage.identityEffect ?? 'No HomeKit service or accessory identity effect',
     diagnostics:
       represented?.coverage.diagnostics ??

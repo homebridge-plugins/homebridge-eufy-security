@@ -3,6 +3,7 @@ import { CONTACT_ADAPTER, CONTACT_ADAPTER_KEY } from './contact.js';
 import { DOORBELL_ADAPTER, DOORBELL_ADAPTER_KEY } from './doorbell.js';
 import { INFORMATION_ADAPTER, INFORMATION_ADAPTER_KEY } from './information.js';
 import { MOTION_ADAPTER, MOTION_ADAPTER_KEY } from './motion.js';
+import { SIREN_ADAPTER, SIREN_ADAPTER_KEY } from './siren.js';
 import type { HomeKitAdapter } from '../adapter.js';
 
 export { BATTERY_ADAPTER_KEY } from './battery.js';
@@ -10,6 +11,7 @@ export { CONTACT_ADAPTER_KEY } from './contact.js';
 export { DOORBELL_ADAPTER_KEY } from './doorbell.js';
 export { INFORMATION_ADAPTER_KEY } from './information.js';
 export { MOTION_ADAPTER_KEY } from './motion.js';
+export { SIREN_ADAPTER_KEY } from './siren.js';
 
 /** The closed set of adapters permitted to create HomeKit representation. */
 export const ADAPTER_REGISTRY = {
@@ -18,4 +20,5 @@ export const ADAPTER_REGISTRY = {
   [DOORBELL_ADAPTER_KEY]: DOORBELL_ADAPTER,
   [INFORMATION_ADAPTER_KEY]: INFORMATION_ADAPTER,
   [MOTION_ADAPTER_KEY]: MOTION_ADAPTER,
+  [SIREN_ADAPTER_KEY]: SIREN_ADAPTER,
 } as const satisfies Readonly<Record<string, HomeKitAdapter>>;

@@ -26,7 +26,7 @@ describe('SDK/HAP coverage matrix', () => {
       expect(row.hapFit.length, row.id).toBeGreaterThan(0);
       expect(row).toHaveProperty('adapter');
       expect(row.representationStatus).toMatch(/^(represented|not-represented)$/);
-      expect(row.controlStatus).toMatch(/^(not-controllable|not-represented)$/);
+      expect(row.controlStatus).toMatch(/^(controllable|not-controllable|not-represented)$/);
       expect(row.identityEffect.length, row.id).toBeGreaterThan(0);
       expect(row.diagnostics.length, row.id).toBeGreaterThan(0);
       expect(row.verification.length, row.id).toBeGreaterThan(0);
@@ -105,5 +105,17 @@ describe('SDK/HAP coverage matrix', () => {
       ].sort(),
     );
     expect(representedBattery.every(({ followUp }) => followUp === undefined)).toBe(true);
+
+    const representedSiren = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'siren.test');
+    expect(representedSiren.map(({ id }) => id).sort()).toEqual(
+      ['siren.active.read', 'siren.test.momentary-action', 'siren.stop.momentary-action'].sort(),
+    );
+    expect(representedSiren.every(({ followUp }) => followUp === undefined)).toBe(true);
+    expect(representedSiren.find(({ id }) => id === 'siren.active.read')?.controlStatus).toBe('not-controllable');
+    expect(
+      representedSiren
+        .filter(({ memberKind }) => memberKind === 'momentary-action')
+        .every(({ controlStatus }) => controlStatus === 'controllable'),
+    ).toBe(true);
   });
 });
