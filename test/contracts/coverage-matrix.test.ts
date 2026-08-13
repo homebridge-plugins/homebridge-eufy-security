@@ -117,5 +117,20 @@ describe('SDK/HAP coverage matrix', () => {
         .filter(({ memberKind }) => memberKind === 'momentary-action')
         .every(({ controlStatus }) => controlStatus === 'controllable'),
     ).toBe(true);
+
+    const diagnosticOnlySiren = SDK_HAP_COVERAGE_MATRIX.rows.filter(
+      ({ capability, disposition }) => capability === 'siren' && disposition === 'diagnostic-only',
+    );
+    expect(diagnosticOnlySiren.map(({ id }) => id)).toEqual(
+      expect.arrayContaining([
+        'siren.alarmVolume.persistent-operation',
+        'siren.alarmTone.read',
+        'siren.alarmTone.persistent-operation',
+        'siren.trigger.momentary-action',
+      ]),
+    );
+    expect(diagnosticOnlySiren.every(({ representationStatus }) => representationStatus === 'not-represented')).toBe(
+      true,
+    );
   });
 });
