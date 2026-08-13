@@ -550,6 +550,56 @@ h2 {
   padding: 7px 8px;
 }
 
+.setting-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.setting-help {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  cursor: help;
+}
+
+.setting-help img {
+  width: 16px;
+  height: 16px;
+  opacity: 0.72;
+  filter: var(--tile-icon-filter);
+}
+
+.setting-help::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 6px);
+  left: 50%;
+  width: 180px;
+  border: 1px solid var(--tile-badge-border);
+  border-radius: 7px;
+  background: var(--tile-tooltip-bg);
+  color: var(--tile-tooltip-ink);
+  padding: 7px 9px;
+  box-shadow: 0 5px 16px rgb(0 0 0 / 18%);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.setting-help:hover::after,
+.setting-help:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .preference-grid .toggle {
   grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;

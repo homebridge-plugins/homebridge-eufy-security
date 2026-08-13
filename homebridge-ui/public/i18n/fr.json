@@ -58,6 +58,7 @@
   "preferenceRepresented": "Représenter dans HomeKit",
   "preferenceSaveFailed": "La préférence n’a pas pu être enregistrée. Réessayez.",
   "preferenceSnapshotMode": "Mode d’instantané",
+  "snapshotModeHelp": "Cloud utilise uniquement une image enregistrée sans réveiller la caméra. Live demande une nouvelle image à chaque fois. Refresh renvoie immédiatement l’image en cache et l’actualise en arrière-plan à fréquence limitée.",
   "sessionDetails": "La connexion, le captcha et la vérification auront lieu ici uniquement après l'arrêt de la connexion Eufy existante du plugin. Vos informations de connexion restent dans ce parcours de configuration.",
   "setupStatusEyebrow": "État de la configuration",
   "setupSequenceLabel": "Étapes de configuration",

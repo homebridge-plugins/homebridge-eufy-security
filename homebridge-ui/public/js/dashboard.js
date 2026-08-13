@@ -17,7 +17,7 @@
     const represented = preference.represented;
     const dependent = key === 'represented' ? '' : ` data-requires-representation${represented ? '' : ' hidden'}`;
     if (key === 'snapshotMode') {
-      return `<label${dependent}><span>${escapeHtml(labels[key])}</span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}">
+      return `<label${dependent}><span class="setting-label">${escapeHtml(labels[key])}<span class="setting-help" role="img" tabindex="0" aria-label="${escapeHtml(messages.snapshotModeHelp)}" data-tooltip="${escapeHtml(messages.snapshotModeHelp)}"><img src="assets/icons/info.svg" alt=""></span></span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}">
         ${['Cloud', 'Live', 'Refresh'].map((mode) => `<option${preference.snapshotMode === mode ? ' selected' : ''}>${mode}</option>`).join('')}
       </select></label>`;
     }

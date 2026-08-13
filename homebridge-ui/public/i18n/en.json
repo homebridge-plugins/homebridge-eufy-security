@@ -58,6 +58,7 @@
   "preferenceRepresented": "Represent in HomeKit",
   "preferenceSaveFailed": "The preference could not be saved. Try again.",
   "preferenceSnapshotMode": "Snapshot mode",
+  "snapshotModeHelp": "Cloud uses only a stored image without waking the camera. Live requests a fresh image each time. Refresh returns the cached image immediately and refreshes it in the background at a limited rate.",
   "sessionDetails": "Sign-in, captcha, and verification will run here only after the plugin has stopped its existing Eufy connection. Your sign-in details stay within this setup flow.",
   "setupStatusEyebrow": "Setup status",
   "setupSequenceLabel": "Setup sequence",

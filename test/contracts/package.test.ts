@@ -402,6 +402,7 @@ describe('packed plugin', () => {
         'preferenceRepresented',
         'preferenceSaveFailed',
         'preferenceSnapshotMode',
+        'snapshotModeHelp',
       ].sort();
       expect(Object.keys(catalogs['i18n/en.json']).sort()).toEqual(expectedCatalogKeys);
       expect(Object.keys(catalogs['i18n/fr.json']).sort()).toEqual(expectedCatalogKeys);
