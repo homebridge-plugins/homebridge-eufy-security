@@ -437,7 +437,7 @@ describe('HomeKit registry reconciliation', () => {
 
   it.each([
     ['active', 0],
-    ['expired', 30_000],
+    ['expired', 10_000],
   ] as const)('removes an %s motion hold when complete evidence withdraws motion', (_state, elapsedMs) => {
     vi.useFakeTimers();
     const source = new RegistrySource();

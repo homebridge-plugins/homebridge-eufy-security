@@ -4,7 +4,7 @@ import type { AdapterAttachmentContext, AdapterEventTrace, AttachedAdapter, Home
 
 export const MOTION_ADAPTER_KEY = 'motion.sensor';
 
-const MOTION_HOLD_MS = 30_000;
+const MOTION_HOLD_MS = 10_000;
 interface MotionHold {
   deadline?: number;
   owner?: symbol;
@@ -33,13 +33,13 @@ export const MOTION_ADAPTER = {
   })),
   coverage: MOTION_EVENT_REQUIREMENTS.map(({ capability, eventName }) => ({
     id: `${capability}.${eventName}.event`,
-    hapFit: 'Motion Sensor MotionDetected with one retriggerable trailing 30-second hold',
+    hapFit: 'Motion Sensor MotionDetected with one retriggerable trailing 10-second hold',
     identityEffect: 'Primary-purpose service uses stable semantic key motion.sensor',
     diagnostics: 'Admitted semantic event pulses require no fabricated durable device state',
     verification: [
       {
         file: 'test/contracts/motion-adapter.test.ts',
-        behavior: 'holds motion for 30 seconds after the final admitted detection event',
+        behavior: 'holds motion for 10 seconds after the final admitted detection event',
       },
     ],
   })),

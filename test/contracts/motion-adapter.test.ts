@@ -15,7 +15,7 @@ function accessory(): PlatformAccessory {
 describe('motion event adapter', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('holds motion for 30 seconds after the final admitted detection event', async () => {
+  it('holds motion for 10 seconds after the final admitted detection event', async () => {
     vi.useFakeTimers();
     const target = accessory();
     const adapter = MOTION_ADAPTER.attach({
@@ -38,14 +38,14 @@ describe('motion event adapter', () => {
     });
     expect(state.value).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(6_000);
     adapter.event?.({ eventName: 'personDetected' } as AnyDeviceEvent);
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(9_999);
     expect(state.value).toBe(true);
 
     await vi.advanceTimersByTimeAsync(1);
     expect(state.value).toBe(false);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(changes.filter((value) => value === false)).toHaveLength(1);
   });
 
@@ -94,7 +94,7 @@ describe('motion event adapter', () => {
       .getCharacteristic(Characteristic.MotionDetected);
 
     adapter.event?.({ eventName: 'motion' } as AnyDeviceEvent);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(3_000);
     const replacement = MOTION_ADAPTER.attach({
       device: {} as never,
       evidence: ALL_MOTION_EVIDENCE,
@@ -104,7 +104,7 @@ describe('motion event adapter', () => {
       observed: vi.fn(),
     });
     adapter.detach?.();
-    await vi.advanceTimersByTimeAsync(19_999);
+    await vi.advanceTimersByTimeAsync(6_999);
 
     expect(state.value).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
