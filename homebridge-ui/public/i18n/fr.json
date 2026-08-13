@@ -35,7 +35,7 @@
   "dashboardOwnerConflictTitle": "Connexion au compte déjà utilisée",
   "dashboardPageTitle": "Vos appareils Eufy",
   "dashboardReadyBadge": "Prêt",
-  "dashboardReadySummary": "Ces appareils proviennent de la dernière découverte complète. L’ouverture de ce tableau de bord n’a pas reconnecté Eufy.",
+  "dashboardReadySummary": "Ces appareils proviennent de la dernière découverte complète.",
   "dashboardReadyTitle": "Appareils découverts",
   "dashboardStaleBadge": "Obsolète",
   "dashboardStaleSummary": "L’instantané enregistré n’est plus actuel. Redémarrez Homebridge pour actualiser son état.",

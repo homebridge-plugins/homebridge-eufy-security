@@ -35,7 +35,7 @@
   "dashboardOwnerConflictTitle": "Account connection already in use",
   "dashboardPageTitle": "Your Eufy devices",
   "dashboardReadyBadge": "Ready",
-  "dashboardReadySummary": "These devices came from the latest complete discovery. Opening this dashboard did not reconnect to Eufy.",
+  "dashboardReadySummary": "These devices came from the latest complete discovery.",
   "dashboardReadyTitle": "Discovered devices",
   "dashboardStaleBadge": "Stale",
   "dashboardStaleSummary": "The saved device snapshot is no longer current. Restart Homebridge to refresh its status.",

@@ -556,7 +556,10 @@ describe('packed plugin', () => {
           {
             platform: 'HomebridgeEufy',
             username: 'guest@example.invalid',
-            entityPreferences: { 'synthetic-absent': { audio: false } },
+            entityPreferences: {
+              'synthetic-absent': { audio: false },
+              'synthetic-contact': { represented: false },
+            },
           },
         ],
         catalogs,
@@ -592,6 +595,30 @@ describe('packed plugin', () => {
               preferences: ['represented'],
             },
             {
+              serial: 'synthetic-back-contact',
+              name: 'Back contact',
+              modelName: 'Synthetic contact sensor',
+              category: 'security',
+              deviceClass: 'sensor',
+              recognized: true,
+              represented: true,
+              controllable: false,
+              diagnosticOnly: false,
+              preferences: ['represented'],
+            },
+            {
+              serial: 'synthetic-camera',
+              name: 'Entry camera',
+              modelName: 'Synthetic camera',
+              category: 'security',
+              deviceClass: 'camera',
+              recognized: true,
+              represented: true,
+              controllable: false,
+              diagnosticOnly: false,
+              preferences: ['represented'],
+            },
+            {
               serial: 'synthetic-vacuum',
               name: 'Floor cleaner',
               modelName: 'Synthetic vacuum',
@@ -612,7 +639,14 @@ describe('packed plugin', () => {
         setupContent: { hidden: true },
       });
       expect(dashboardUi.deviceGroups.innerHTML).toContain('Front contact');
+      expect(dashboardUi.deviceGroups.innerHTML).toContain('device-tile-disabled');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.png');
+      expect(dashboardUi.deviceGroups.innerHTML.indexOf('Back contact')).toBeLessThan(
+        dashboardUi.deviceGroups.innerHTML.indexOf('Front contact'),
+      );
+      expect(dashboardUi.deviceGroups.innerHTML.indexOf('Entry camera')).toBeLessThan(
+        dashboardUi.deviceGroups.innerHTML.indexOf('Back contact'),
+      );
       expect(dashboardUi.deviceGroups.innerHTML.indexOf('Front contact')).toBeLessThan(
         dashboardUi.deviceGroups.innerHTML.indexOf('Unsupported sensor'),
       );
@@ -621,17 +655,16 @@ describe('packed plugin', () => {
         dashboardUi.deviceGroups.innerHTML.indexOf('Floor cleaner'),
       );
       expect(dashboardUi.deviceGroups.innerHTML).toContain(catalogs['i18n/en.json'].diagnosticOnly);
-      expect(dashboardUi.deviceGroups.innerHTML.match(/<details class="device-tile"/g)).toHaveLength(1);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/<details class="device-tile/g)).toHaveLength(3);
       expect(dashboardUi.deviceGroups.innerHTML.match(/<article class="device-tile"/g)).toHaveLength(2);
       await dashboardUi.deviceGroups.dispatch('change', {
         target: {
-          checked: false,
+          checked: true,
           dataset: { preference: 'represented', serial: 'synthetic-contact' },
         },
       });
       expect(dashboardUi.updatedConfig?.[0].entityPreferences).toEqual({
         'synthetic-absent': { audio: false },
-        'synthetic-contact': { represented: false },
       });
       expect(dashboardUi.restartGuidance.hidden).toBe(false);
 

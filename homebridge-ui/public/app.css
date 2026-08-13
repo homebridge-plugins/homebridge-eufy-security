@@ -219,6 +219,25 @@ details.device-tile > .device-summary {
   pointer-events: none;
 }
 
+.device-tile-disabled .device-summary::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 11px,
+    rgb(255 255 255 / 7%) 11px,
+    rgb(255 255 255 / 7%) 18px
+  );
+  pointer-events: none;
+}
+
+.device-tile-disabled .device-art img[data-device-artwork] {
+  filter: brightness(0.48) grayscale(0.65) contrast(1.05);
+}
+
 .device-art {
   position: absolute;
   z-index: 0;
@@ -273,7 +292,8 @@ details.device-tile > .device-summary {
 .device-copy h3 {
   overflow: hidden;
   margin: 1px 0 2px;
-  font-size: 14px;
+  font-size: 17px;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -282,7 +302,8 @@ details.device-tile > .device-summary {
   overflow: hidden;
   margin: 0;
   color: #d6deea;
-  font-size: 11px;
+  font-size: 13px;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -396,12 +417,45 @@ details.device-tile > .device-summary {
 }
 
 .preference-grid .toggle {
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
+  cursor: pointer;
 }
 
-.preference-grid input {
+.preference-grid .toggle input {
+  appearance: none;
+  position: relative;
+  width: 36px;
   min-height: 20px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 28%, var(--panel));
+  padding: 0;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.preference-grid .toggle input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  transition: transform 140ms ease;
+}
+
+.preference-grid .toggle input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.preference-grid .toggle input:checked::before {
+  transform: translateX(16px);
 }
 
 select {
