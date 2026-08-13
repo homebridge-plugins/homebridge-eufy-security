@@ -70,6 +70,8 @@ async function renderUi(
   const requests: Array<{ path: string; body: unknown }> = [];
   let updatedConfig: Array<Record<string, unknown>> | undefined;
   let saves = 0;
+  let saveButtonDisables = 0;
+  let saveButtonEnables = 0;
   const translatedNodes = translationKeys.map((key) => ({ dataset: { i18n: key }, textContent: '__untranslated__' }));
   const translatedLabels = ['accountConnectionLabel', 'setupSequenceLabel'].map((key) => ({
     attributes: { 'aria-label': '__untranslated__' },
@@ -131,6 +133,12 @@ async function renderUi(
         }
       },
       getPluginConfig: async () => pluginConfig,
+      disableSaveButton: () => {
+        saveButtonDisables++;
+      },
+      enableSaveButton: () => {
+        saveButtonEnables++;
+      },
       i18nCurrentLang: async () => language,
       request: async (path: string, body: unknown) => {
         requests.push({ path, body });
@@ -180,6 +188,12 @@ async function renderUi(
     masthead,
     get saves() {
       return saves;
+    },
+    get saveButtonDisables() {
+      return saveButtonDisables;
+    },
+    get saveButtonEnables() {
+      return saveButtonEnables;
     },
     get updatedConfig() {
       return updatedConfig;
@@ -410,6 +424,8 @@ describe('packed plugin', () => {
         continueButton: { disabled: true },
         firstSetup: { hidden: false },
         setupContent: { hidden: true },
+        saveButtonDisables: 1,
+        saveButtonEnables: 0,
       });
       await firstSetupUi.continueButton.dispatch('click');
       expect(firstSetupUi).toMatchObject({ firstSetup: { hidden: false }, setupContent: { hidden: true } });
@@ -668,6 +684,8 @@ describe('packed plugin', () => {
         'synthetic-absent': { audio: false },
       });
       expect(dashboardUi.restartGuidance.hidden).toBe(false);
+      expect(dashboardUi.saveButtonEnables).toBe(1);
+      expect(dashboardUi.saveButtonDisables).toBe(2);
 
       const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
         status: 'two-factor',

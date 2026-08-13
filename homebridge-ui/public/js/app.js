@@ -108,10 +108,12 @@ function configuredBlock() {
 }
 
 async function saveConfig(block) {
+  homebridge.enableSaveButton();
   pluginConfig = pluginConfig.map((candidate) => (candidate.platform === 'HomebridgeEufy' ? block : candidate));
   if (!pluginConfig.includes(block)) pluginConfig.push(block);
   await homebridge.updatePluginConfig(pluginConfig);
   await homebridge.savePluginConfig();
+  homebridge.disableSaveButton();
 }
 
 dashboardView.bindPreferences(dashboardElements, configuredBlock, saveConfig, () => messages);
@@ -137,10 +139,12 @@ legacyAcknowledge.addEventListener('click', async () => {
 });
 
 async function saveAuthenticatedConfig() {
+  homebridge.enableSaveButton();
   try {
     await homebridge.updatePluginConfig([pendingConfig]);
     await homebridge.savePluginConfig();
     pluginConfig = [pendingConfig];
+    homebridge.disableSaveButton();
   } catch {
   } finally {
     passwordInput.value = '';
@@ -234,6 +238,7 @@ window.addEventListener('pagehide', () => {
 });
 
 homebridge.addEventListener('ready', async () => {
+  homebridge.disableSaveButton();
   shell.dataset.theme = await homebridge.userCurrentLightingMode();
   const language = await homebridge.i18nCurrentLang();
   pluginConfig = await homebridge.getPluginConfig();
