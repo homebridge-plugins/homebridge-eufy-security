@@ -544,7 +544,6 @@ h2 {
 }
 
 .preference-grid .preference-changed {
-  border-left: 2px solid #d99a21;
   border-radius: 4px;
   background: color-mix(in srgb, #d99a21 10%, transparent);
   padding: 3px 5px;
