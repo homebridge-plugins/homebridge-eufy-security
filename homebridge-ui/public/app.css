@@ -9,6 +9,16 @@
   --panel: #ffffff;
 }
 
+html,
+body {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+}
+
 * {
   box-sizing: border-box;
 }
