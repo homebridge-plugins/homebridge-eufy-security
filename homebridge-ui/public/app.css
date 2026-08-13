@@ -292,34 +292,37 @@ h2 {
 }
 
 .device-card-front {
-  z-index: 1;
   opacity: 1;
   transform: rotateY(0deg);
-  transition: opacity 100ms linear 200ms;
+  transition: opacity 0s linear 210ms;
 }
 
 .device-card-back {
-  z-index: 0;
   display: flex;
   align-items: center;
   background: var(--tile-bg);
   opacity: 0;
   pointer-events: none;
   transform: rotateY(180deg);
-  transition: opacity 100ms linear 200ms;
+  transition: opacity 0s linear 210ms;
   cursor: pointer;
 }
 
 .device-tile-flipped .device-card-front {
-  z-index: 0;
   opacity: 0;
   pointer-events: none;
 }
 
 .device-tile-flipped .device-card-back {
-  z-index: 1;
   opacity: 1;
   pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-card-front,
+  .device-card-back {
+    transition: none;
+  }
 }
 
 .device-summary::after {
