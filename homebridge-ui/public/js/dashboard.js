@@ -44,17 +44,17 @@
             const artwork = device.artwork
               ? `<img src="${escapeHtml(device.artwork)}" alt="" loading="lazy" data-device-artwork>`
               : '';
-            const controls = device.preferences.length
-              ? device.preferences.map((key) => preferenceControl(device, key, preference, messages)).join('')
-              : `<p>${escapeHtml(messages.diagnosticOnly)}</p>`;
-            return `<details class="device-tile" data-category="${category}">
-              <summary class="device-summary">
-                <div class="device-art" aria-hidden="true"><img class="device-class-icon" src="assets/icons/inventory.svg" alt=""><span>${escapeHtml(device.deviceClass)}</span>${artwork}</div>
-                <div class="device-copy"><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(device.modelName)}</p></div>
-                <div class="device-badges">${badges.map(({ icon, label }) => `<span role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>
-              </summary>
-              <div class="preference-panel"><strong><img src="assets/icons/settings.svg" alt="">${escapeHtml(messages.preferences)}</strong><div class="preference-grid">${controls}</div></div>
-            </details>`;
+            const tile = `
+              <div class="device-art" aria-hidden="true"><img class="device-class-icon" src="assets/icons/inventory.svg" alt=""><span>${escapeHtml(device.deviceClass)}</span>${artwork}</div>
+              <div class="device-copy"><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(device.modelName)}</p></div>
+              <div class="device-badges">${badges.map(({ icon, label }) => `<span role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>`;
+            if (device.diagnosticOnly) {
+              return `<article class="device-tile" data-category="${category}"><div class="device-summary">${tile}</div></article>`;
+            }
+            const controls = device.preferences
+              .map((key) => preferenceControl(device, key, preference, messages))
+              .join('');
+            return `<details class="device-tile" data-category="${category}"><summary class="device-summary">${tile}</summary><div class="preference-panel"><strong><img src="assets/icons/settings.svg" alt="">${escapeHtml(messages.preferences)}</strong><div class="preference-grid">${controls}</div></div></details>`;
           })
           .join('');
         const categoryKey = `category${category[0].toUpperCase()}${category.slice(1)}`;
@@ -84,6 +84,15 @@
   }
 
   function bindPreferences(elements, getConfig, saveConfig, getMessages) {
+    elements.groups.addEventListener(
+      'load',
+      (event) => {
+        if (event.target?.dataset?.deviceArtwork !== undefined) {
+          event.target.parentElement.dataset.artworkLoaded = '';
+        }
+      },
+      true,
+    );
     elements.groups.addEventListener(
       'error',
       (event) => {

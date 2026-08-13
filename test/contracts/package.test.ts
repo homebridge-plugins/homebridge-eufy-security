@@ -603,6 +603,8 @@ describe('packed plugin', () => {
       expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.png');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('Floor cleaner');
       expect(dashboardUi.deviceGroups.innerHTML).toContain(catalogs['i18n/en.json'].diagnosticOnly);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/<details class="device-tile"/g)).toHaveLength(1);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/<article class="device-tile"/g)).toHaveLength(1);
       await dashboardUi.deviceGroups.dispatch('change', {
         target: {
           checked: false,

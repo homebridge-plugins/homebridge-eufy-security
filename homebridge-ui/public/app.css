@@ -185,11 +185,18 @@ h2 {
   gap: 8px;
   overflow: hidden;
   padding: 14px;
-  cursor: pointer;
   list-style: none;
 }
 
-.device-summary::-webkit-details-marker {
+details.device-tile > .device-summary {
+  cursor: pointer;
+}
+
+.device-tile > summary {
+  list-style: none;
+}
+
+.device-tile > summary::-webkit-details-marker {
   display: none;
 }
 
@@ -219,7 +226,6 @@ h2 {
   inset: 22px;
   width: calc(100% - 44px);
   height: calc(100% - 44px);
-  background: #17202c;
   object-fit: contain;
   opacity: 1;
   filter: brightness(0.58) saturate(0.85) contrast(1.05);
@@ -241,6 +247,11 @@ h2 {
   opacity: 0.75;
   text-overflow: ellipsis;
   text-transform: uppercase;
+}
+
+.device-art[data-artwork-loaded] .device-class-icon,
+.device-art[data-artwork-loaded] span {
+  opacity: 0;
 }
 
 .device-copy {
