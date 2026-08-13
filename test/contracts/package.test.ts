@@ -416,6 +416,7 @@ describe('packed plugin', () => {
       expect(stylesheet).toContain('--accent: #00bfc4');
       expect(stylesheet).toContain('.device-tile-changed');
       expect(stylesheet).toContain('.preference-changed');
+      expect(stylesheet).toContain('.device-card-settings::after');
       expect(darkTheme).toContain('--ink: #edf1f7');
       expect(darkTheme).not.toContain('var(--bs-');
 

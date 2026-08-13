@@ -88,7 +88,7 @@
               .map((key) => preferenceControl(device, key, preference, messages))
               .join('');
             const disabledClass = rank === 1 ? ' device-tile-disabled' : '';
-            return `<article class="device-tile device-tile-flippable${disabledClass}" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><div class="preference-panel"><div class="preference-grid">${controls}</div></div></div></div></article>`;
+            return `<article class="device-tile device-tile-flippable${disabledClass}" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back device-card-settings"><div class="preference-panel"><div class="preference-grid">${controls}</div></div></div></div></article>`;
           })
           .join('');
         const categoryKey = `category${category[0].toUpperCase()}${category.slice(1)}`;
