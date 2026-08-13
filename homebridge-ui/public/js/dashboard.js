@@ -69,7 +69,7 @@
               device.controllable && preference.represented
                 ? { icon: 'bolt', label: messages.controllable }
                 : undefined,
-              device.diagnosticOnly ? { icon: 'info', label: messages.diagnosticOnly } : undefined,
+              device.diagnosticOnly ? { icon: 'troubleshoot', label: messages.diagnosticOnly } : undefined,
             ].filter(Boolean);
             const artwork = device.artwork
               ? `<img src="${escapeHtml(device.artwork)}" alt="" loading="lazy" data-device-artwork>`
@@ -79,7 +79,7 @@
               <div class="device-copy"><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(device.modelName)}</p></div>
               <div class="device-badges">${badges.map(({ icon, label }) => `<span class="device-badge device-badge-${icon}" role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>`;
             if (device.diagnosticOnly) {
-              return `<article class="device-tile device-tile-flippable" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><div class="diagnostic-panel"><img src="assets/icons/info.svg" alt=""><strong>${escapeHtml(messages.diagnosticOnly)}</strong><p>${escapeHtml(messages.diagnosticDescription)}</p></div></div></div></article>`;
+              return `<article class="device-tile device-tile-flippable" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><div class="diagnostic-panel"><img src="assets/icons/troubleshoot.svg" alt=""><strong>${escapeHtml(messages.diagnosticOnly)}</strong><p>${escapeHtml(messages.diagnosticDescription)}</p></div></div></div></article>`;
             }
             const controls = device.preferences
               .map((key) => preferenceControl(device, key, preference, messages))

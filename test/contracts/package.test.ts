@@ -289,6 +289,7 @@ describe('packed plugin', () => {
         'homebridge-ui/public/assets/icons/bolt.svg',
         'homebridge-ui/public/assets/icons/info.svg',
         'homebridge-ui/public/assets/icons/inventory.svg',
+        'homebridge-ui/public/assets/icons/troubleshoot.svg',
         'homebridge-ui/public/assets/icons/warning.svg',
         'homebridge-ui/public/assets/logo-dark.svg',
         'homebridge-ui/public/assets/logo.svg',

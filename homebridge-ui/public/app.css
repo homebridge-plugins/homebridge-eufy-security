@@ -451,7 +451,7 @@ h2 {
   filter: var(--tile-icon-filter);
 }
 
-.device-badges .device-badge-info {
+.device-badges .device-badge-troubleshoot {
   width: 36px;
   height: 36px;
   border: 0;
@@ -459,7 +459,7 @@ h2 {
   backdrop-filter: none;
 }
 
-.device-badges .device-badge-info img {
+.device-badges .device-badge-troubleshoot img {
   width: 29px;
   height: 29px;
 }
