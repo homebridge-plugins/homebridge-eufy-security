@@ -127,9 +127,19 @@ h2 {
 
 .dashboard-status {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
+}
+
+.dashboard-status > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.dashboard-status .status-icon {
+  flex: 0 0 auto;
 }
 
 .dashboard-authenticate {
@@ -675,8 +685,7 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .legacy-notice,
-  .dashboard-status {
+  .legacy-notice {
     display: grid;
   }
 

@@ -26,7 +26,9 @@
     const preferences = config.entityPreferences ?? {};
     deviceGroups.innerHTML = ['security', 'life', 'clean']
       .map((category) => {
-        const categoryDevices = devices.filter((device) => device.category === category);
+        const categoryDevices = devices
+          .filter((device) => device.category === category)
+          .sort((left, right) => Number(left.diagnosticOnly) - Number(right.diagnosticOnly));
         if (categoryDevices.length === 0) return '';
         const tiles = categoryDevices
           .map((device) => {

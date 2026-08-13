@@ -567,6 +567,18 @@ describe('packed plugin', () => {
           state: 'degraded',
           devices: [
             {
+              serial: 'synthetic-diagnostic',
+              name: 'Unsupported sensor',
+              modelName: 'Synthetic diagnostic sensor',
+              category: 'security',
+              deviceClass: 'sensor',
+              recognized: true,
+              represented: false,
+              controllable: false,
+              diagnosticOnly: true,
+              preferences: [],
+            },
+            {
               serial: 'synthetic-contact',
               name: 'Front contact',
               modelName: 'Synthetic contact sensor',
@@ -601,10 +613,16 @@ describe('packed plugin', () => {
       });
       expect(dashboardUi.deviceGroups.innerHTML).toContain('Front contact');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.png');
+      expect(dashboardUi.deviceGroups.innerHTML.indexOf('Front contact')).toBeLessThan(
+        dashboardUi.deviceGroups.innerHTML.indexOf('Unsupported sensor'),
+      );
       expect(dashboardUi.deviceGroups.innerHTML).toContain('Floor cleaner');
+      expect(dashboardUi.deviceGroups.innerHTML.indexOf('Front contact')).toBeLessThan(
+        dashboardUi.deviceGroups.innerHTML.indexOf('Floor cleaner'),
+      );
       expect(dashboardUi.deviceGroups.innerHTML).toContain(catalogs['i18n/en.json'].diagnosticOnly);
       expect(dashboardUi.deviceGroups.innerHTML.match(/<details class="device-tile"/g)).toHaveLength(1);
-      expect(dashboardUi.deviceGroups.innerHTML.match(/<article class="device-tile"/g)).toHaveLength(1);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/<article class="device-tile"/g)).toHaveLength(2);
       await dashboardUi.deviceGroups.dispatch('change', {
         target: {
           checked: false,
