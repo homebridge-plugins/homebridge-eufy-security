@@ -7,6 +7,18 @@
   --muted: var(--bs-secondary-color, #667085);
   --line: var(--bs-border-color, #d9dfeb);
   --panel: #ffffff;
+  --tile-bg: #edf2f7;
+  --tile-ink: #17202c;
+  --tile-muted: #475569;
+  --tile-gradient: rgb(237 242 247 / 94%);
+  --tile-stripe: rgb(23 32 44 / 7%);
+  --tile-badge-bg: rgb(255 255 255 / 78%);
+  --tile-badge-border: rgb(23 32 44 / 28%);
+  --tile-image-filter: brightness(0.92) saturate(0.85) contrast(1.05);
+  --tile-disabled-filter: brightness(0.82) grayscale(0.65) contrast(1.05);
+  --tile-icon-filter: none;
+  --tile-tooltip-bg: #ffffff;
+  --tile-tooltip-ink: #17202c;
 }
 
 html,
@@ -203,7 +215,7 @@ h2 {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 13px;
-  background: #17202c;
+  background: var(--tile-bg);
 }
 
 .device-tile[open] {
@@ -240,7 +252,7 @@ details.device-tile > .device-summary {
   position: absolute;
   z-index: 1;
   inset: 0;
-  background: linear-gradient(to bottom, transparent 40%, rgb(8 14 24 / 90%) 100%);
+  background: linear-gradient(to bottom, transparent 40%, var(--tile-gradient) 100%);
   pointer-events: none;
 }
 
@@ -253,14 +265,14 @@ details.device-tile > .device-summary {
     -45deg,
     transparent 0,
     transparent 11px,
-    rgb(255 255 255 / 7%) 11px,
-    rgb(255 255 255 / 7%) 18px
+    var(--tile-stripe) 11px,
+    var(--tile-stripe) 18px
   );
   pointer-events: none;
 }
 
 .device-tile-disabled .device-art img[data-device-artwork] {
-  filter: brightness(0.48) grayscale(0.65) contrast(1.05);
+  filter: var(--tile-disabled-filter);
 }
 
 .device-art {
@@ -270,8 +282,8 @@ details.device-tile > .device-summary {
   display: grid;
   grid-template-rows: 1fr auto;
   place-items: center;
-  background: #17202c;
-  color: #f4f7fb;
+  background: var(--tile-bg);
+  color: var(--tile-ink);
   font-weight: 800;
 }
 
@@ -282,7 +294,7 @@ details.device-tile > .device-summary {
   height: calc(100% - 44px);
   object-fit: contain;
   opacity: 1;
-  filter: brightness(0.58) saturate(0.85) contrast(1.05);
+  filter: var(--tile-image-filter);
 }
 
 .device-art .device-class-icon {
@@ -311,7 +323,7 @@ details.device-tile > .device-summary {
 .device-copy {
   z-index: 2;
   min-width: 0;
-  color: #f4f7fb;
+  color: var(--tile-ink);
 }
 
 .device-copy h3 {
@@ -326,7 +338,7 @@ details.device-tile > .device-summary {
 .device-copy p {
   overflow: hidden;
   margin: 0;
-  color: #d6deea;
+  color: var(--tile-muted);
   font-size: 13px;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -349,16 +361,16 @@ details.device-tile > .device-summary {
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgb(255 255 255 / 36%);
+  border: 1px solid var(--tile-badge-border);
   border-radius: 999px;
-  background: rgb(8 14 24 / 72%);
+  background: var(--tile-badge-bg);
   backdrop-filter: blur(5px);
 }
 
 .device-badges img {
   width: 17px;
   height: 17px;
-  filter: invert(1);
+  filter: var(--tile-icon-filter);
 }
 
 .device-badges .device-badge-info {
@@ -383,8 +395,8 @@ details.device-tile > .device-summary {
   width: max-content;
   max-width: 170px;
   border-radius: 6px;
-  background: #080e18;
-  color: #f4f7fb;
+  background: var(--tile-tooltip-bg);
+  color: var(--tile-tooltip-ink);
   padding: 5px 8px;
   font-size: 10px;
   font-weight: 650;
@@ -807,6 +819,18 @@ button:disabled {
   --muted: #aab3c2;
   --line: #465064;
   --panel: #262d39;
+  --tile-bg: #17202c;
+  --tile-ink: #f4f7fb;
+  --tile-muted: #d6deea;
+  --tile-gradient: rgb(8 14 24 / 90%);
+  --tile-stripe: rgb(255 255 255 / 7%);
+  --tile-badge-bg: rgb(8 14 24 / 72%);
+  --tile-badge-border: rgb(255 255 255 / 36%);
+  --tile-image-filter: brightness(0.58) saturate(0.85) contrast(1.05);
+  --tile-disabled-filter: brightness(0.48) grayscale(0.65) contrast(1.05);
+  --tile-icon-filter: invert(1);
+  --tile-tooltip-bg: #080e18;
+  --tile-tooltip-ink: #f4f7fb;
 }
 
 .shell[data-theme="dark"] .handoff p {
