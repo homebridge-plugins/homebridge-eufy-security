@@ -775,11 +775,11 @@ button:disabled {
   }
 
   .device-art img[data-device-artwork] {
-    inset: 0 22px;
-    width: calc(100% - 44px);
+    inset: 0 4% 0 auto;
+    width: 76%;
     height: 100%;
-    object-fit: cover;
-    object-position: center;
+    object-fit: contain;
+    object-position: center right;
   }
 }
 
