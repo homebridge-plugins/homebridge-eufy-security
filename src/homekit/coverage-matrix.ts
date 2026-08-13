@@ -44,7 +44,7 @@ const COVERAGE_BY_ROW = new Map<string, { adapter: string; coverage: AdapterCove
   ),
 );
 
-const REVIEWED_SDK_SURFACE_SHA256 = '3db91a1edd3a1f2cdd3d63c6d85e59b5cf9d0293d68a151d0c51ab0e31b3d0ee';
+const REVIEWED_SDK_SURFACE_SHA256 = '3f9d85aef7ccf6ea0e5aa354d8b8a7b02a011f8bd2fb5086194a6f81bc9af06e';
 
 function stableContractValue(value: unknown, ancestors = new WeakSet<object>()): unknown {
   if (typeof value === 'function') {
