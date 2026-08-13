@@ -23,12 +23,17 @@ body {
 
 .shell {
   width: min(100%, 720px);
-  height: auto;
-  max-height: none;
+  height: auto !important;
+  max-height: none !important;
   margin: 0 auto;
-  overflow: visible;
+  overflow: visible !important;
+  scrollbar-width: none;
   padding: 4px 0 18px;
   color: var(--ink);
+}
+
+.shell::-webkit-scrollbar {
+  display: none;
 }
 
 .masthead {
