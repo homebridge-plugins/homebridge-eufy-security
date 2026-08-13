@@ -145,7 +145,6 @@
               .forEach((entry) => grid.appendChild(entry));
           }
         }
-        elements.restart.hidden = false;
       } catch {
         elements.summary.textContent = getMessages().preferenceSaveFailed;
       }

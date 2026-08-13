@@ -61,7 +61,6 @@ async function renderUi(
   const dashboardSummary = { textContent: '' };
   const dashboardAuthenticate = interactiveElement({ hidden: true });
   const deviceGroups = interactiveElement({ innerHTML: '' });
-  const restartGuidance = { hidden: true };
   const pageTitle = { textContent: '' };
   const legacyNotice = { hidden: true };
   const legacySettings = { textContent: '' };
@@ -110,7 +109,6 @@ async function renderUi(
           '[data-dashboard-summary]': dashboardSummary,
           '[data-dashboard-authenticate]': dashboardAuthenticate,
           '[data-device-groups]': deviceGroups,
-          '[data-restart-guidance]': restartGuidance,
           '[data-page-title]': pageTitle,
           '[data-legacy-notice]': legacyNotice,
           '[data-legacy-settings]': legacySettings,
@@ -181,7 +179,6 @@ async function renderUi(
     legacyAcknowledge,
     legacyNotice,
     legacySettings,
-    restartGuidance,
     requests,
     setupContent,
     shell,
@@ -292,7 +289,6 @@ describe('packed plugin', () => {
         'homebridge-ui/public/assets/icons/bolt.svg',
         'homebridge-ui/public/assets/icons/info.svg',
         'homebridge-ui/public/assets/icons/inventory.svg',
-        'homebridge-ui/public/assets/icons/refresh.svg',
         'homebridge-ui/public/assets/icons/warning.svg',
         'homebridge-ui/public/assets/logo-dark.svg',
         'homebridge-ui/public/assets/logo.svg',
@@ -319,7 +315,6 @@ describe('packed plugin', () => {
       expect(document).toContain('src="assets/logo.svg"');
       expect(document).toContain('src="assets/logo-dark.svg"');
       expect(document).toContain('src="assets/icons/inventory.svg"');
-      expect(document).toContain('src="assets/icons/refresh.svg"');
       expect(document).toContain('src="assets/icons/warning.svg"');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
@@ -356,7 +351,6 @@ describe('packed plugin', () => {
           'legacyEyebrow',
           'legacySummary',
           'legacyTitle',
-          'restartGuidance',
           'sessionDetails',
           'setupStatusEyebrow',
           'shareLink',
@@ -683,9 +677,9 @@ describe('packed plugin', () => {
       expect(dashboardUi.updatedConfig?.[0].entityPreferences).toEqual({
         'synthetic-absent': { audio: false },
       });
-      expect(dashboardUi.restartGuidance.hidden).toBe(false);
       expect(dashboardUi.saveButtonEnables).toBe(1);
-      expect(dashboardUi.saveButtonDisables).toBe(2);
+      expect(dashboardUi.saveButtonDisables).toBe(1);
+      expect(dashboardUi.saves).toBe(0);
 
       const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
         status: 'two-factor',

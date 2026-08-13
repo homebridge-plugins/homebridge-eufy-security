@@ -57,7 +57,6 @@
   "preferenceRepresented": "Represent in HomeKit",
   "preferenceSaveFailed": "The preference could not be saved. Try again.",
   "preferenceSnapshotMode": "Snapshot mode",
-  "restartGuidance": "Restart Homebridge to apply representation or media preference changes.",
   "sessionDetails": "Sign-in, captcha, and verification will run here only after the plugin has stopped its existing Eufy connection. Your sign-in details stay within this setup flow.",
   "setupStatusEyebrow": "Setup status",
   "setupSequenceLabel": "Setup sequence",

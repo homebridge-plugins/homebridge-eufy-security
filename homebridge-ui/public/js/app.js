@@ -22,7 +22,6 @@ const dashboardBadge = document.querySelector('[data-dashboard-badge]');
 const dashboardSummary = document.querySelector('[data-dashboard-summary]');
 const dashboardAuthenticate = document.querySelector('[data-dashboard-authenticate]');
 const deviceGroups = document.querySelector('[data-device-groups]');
-const restartGuidance = document.querySelector('[data-restart-guidance]');
 const pageTitle = document.querySelector('[data-page-title]');
 const legacyNotice = document.querySelector('[data-legacy-notice]');
 const legacySettings = document.querySelector('[data-legacy-settings]');
@@ -43,7 +42,6 @@ const dashboardElements = {
   summary: dashboardSummary,
   authenticate: dashboardAuthenticate,
   groups: deviceGroups,
-  restart: restartGuidance,
   setup: setupContent,
   pageTitle,
   masthead,
@@ -107,16 +105,14 @@ function configuredBlock() {
   return pluginConfig.find((block) => block.platform === 'HomebridgeEufy');
 }
 
-async function saveConfig(block) {
-  homebridge.enableSaveButton();
+async function updateConfig(block) {
   pluginConfig = pluginConfig.map((candidate) => (candidate.platform === 'HomebridgeEufy' ? block : candidate));
   if (!pluginConfig.includes(block)) pluginConfig.push(block);
   await homebridge.updatePluginConfig(pluginConfig);
-  await homebridge.savePluginConfig();
-  homebridge.disableSaveButton();
+  homebridge.enableSaveButton();
 }
 
-dashboardView.bindPreferences(dashboardElements, configuredBlock, saveConfig, () => messages);
+dashboardView.bindPreferences(dashboardElements, configuredBlock, updateConfig, () => messages);
 
 dashboardAuthenticate.addEventListener('click', () => {
   dashboard.hidden = true;
@@ -130,7 +126,7 @@ legacyAcknowledge.addEventListener('click', async () => {
   const existing = configuredBlock();
   if (existing) {
     try {
-      await saveConfig({ ...existing, discardedV4Settings: legacyNames, discardedV4Acknowledged: true });
+      await updateConfig({ ...existing, discardedV4Settings: legacyNames, discardedV4Acknowledged: true });
     } catch {
       return;
     }
