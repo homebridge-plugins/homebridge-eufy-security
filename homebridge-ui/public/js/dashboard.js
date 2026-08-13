@@ -30,11 +30,15 @@
   function markPendingPreference(control, key, value) {
     if (!control?.classList || control.dataset.original === undefined) return;
     const current = key === 'snapshotMode' ? String(value) : String(Boolean(value));
-    control.classList.toggle('preference-control-changed', current !== control.dataset.original);
-    control.closest('[data-setting]')?.classList.toggle(
-      'preference-changed',
-      control.classList.contains('preference-control-changed'),
-    );
+    const setting = control.closest('[data-setting]');
+    const changed = current !== control.dataset.original;
+    if (key === 'snapshotMode') {
+      setting.querySelectorAll('[data-preference="snapshotMode"]').forEach((entry) => {
+        entry.classList.remove('preference-control-changed');
+      });
+    }
+    control.classList.toggle('preference-control-changed', changed);
+    setting?.classList.toggle('preference-changed', changed);
     const tile = control.closest('.device-tile');
     tile?.classList.toggle('device-tile-changed', Boolean(tile.querySelector('.preference-control-changed')));
   }
