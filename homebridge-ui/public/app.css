@@ -758,6 +758,19 @@ button:disabled {
   .device-grid {
     grid-template-columns: 1fr;
   }
+
+  .device-summary {
+    aspect-ratio: 2 / 1;
+    min-height: 150px;
+  }
+
+  .device-art img[data-device-artwork] {
+    inset: 14px 22px;
+    width: calc(100% - 44px);
+    height: calc(100% - 28px);
+    object-fit: cover;
+    object-position: center top;
+  }
 }
 
 .shell[data-theme="dark"] {
