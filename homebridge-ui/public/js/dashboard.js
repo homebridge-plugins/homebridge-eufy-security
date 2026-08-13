@@ -47,7 +47,7 @@
             const tile = `
               <div class="device-art" aria-hidden="true"><img class="device-class-icon" src="assets/icons/inventory.svg" alt=""><span>${escapeHtml(device.deviceClass)}</span>${artwork}</div>
               <div class="device-copy"><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(device.modelName)}</p></div>
-              <div class="device-badges">${badges.map(({ icon, label }) => `<span role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>`;
+                <div class="device-badges">${badges.map(({ icon, label }) => `<span class="device-badge device-badge-${icon}" role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>`;
             if (device.diagnosticOnly) {
               return `<article class="device-tile" data-category="${category}"><div class="device-summary">${tile}</div></article>`;
             }

@@ -305,6 +305,19 @@ details.device-tile > .device-summary {
   filter: invert(1);
 }
 
+.device-badges .device-badge-info {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.device-badges .device-badge-info img {
+  width: 29px;
+  height: 29px;
+}
+
 .device-badges span::after {
   content: attr(data-tooltip);
   position: absolute;
