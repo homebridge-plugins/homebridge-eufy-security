@@ -544,10 +544,10 @@ h2 {
 }
 
 .preference-grid .preference-changed {
-  border-left: 3px solid #d99a21;
-  border-radius: 5px;
+  border-left: 2px solid #d99a21;
+  border-radius: 4px;
   background: color-mix(in srgb, #d99a21 10%, transparent);
-  padding: 7px 8px;
+  padding: 3px 5px;
 }
 
 .setting-label {
