@@ -55,17 +55,19 @@ export function indexDeviceMemberEvidence(manifest: DeviceManifest): ReadonlyMap
   return evidence;
 }
 
-/** Requires every declared semantic member and every declared contract field to match exactly. */
+/** Matches every required member plus at least one alternative when alternatives are declared. */
 export function satisfiesMemberRequirements(
   evidence: ReadonlyMap<string, DeviceMemberEvidence>,
   requirements: readonly DeviceMemberRequirement[],
+  alternatives: readonly DeviceMemberRequirement[] = [],
 ): boolean {
-  return requirements.every((requirement) => {
+  const matches = (requirement: DeviceMemberRequirement): boolean => {
     const installed = evidence.get(requirement.id);
     return (
       installed?.kind === requirement.kind &&
       (requirement.type === undefined || installed.type === requirement.type) &&
       (requirement.writable === undefined || installed.writable === requirement.writable)
     );
-  });
+  };
+  return requirements.every(matches) && (alternatives.length === 0 || alternatives.some(matches));
 }

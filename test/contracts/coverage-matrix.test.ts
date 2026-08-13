@@ -78,8 +78,9 @@ describe('SDK/HAP coverage matrix', () => {
     for (const adapter of Object.values(ADAPTER_REGISTRY)) {
       const coverage = new Set(adapter.coverage.map(({ id }) => id));
       expect(adapter.requires.every(({ id }) => coverage.has(id))).toBe(true);
+      expect(adapter.requiresAny?.every(({ id }) => coverage.has(id)) ?? true).toBe(true);
       if (adapter.role === 'primary-purpose') {
-        expect(adapter.requires.length).toBeGreaterThan(0);
+        expect(adapter.requires.length + (adapter.requiresAny?.length ?? 0)).toBeGreaterThan(0);
       }
     }
 

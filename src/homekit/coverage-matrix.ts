@@ -128,21 +128,6 @@ defer(
 );
 defer(['camera.talkback.momentary-action'], '#1001', 'requires isolated return-audio adaptation');
 defer(
-  [
-    'motion.motion.event',
-    'motion.cryingDetected.event',
-    'motion.soundDetected.event',
-    'motion.vehicleDetected.event',
-    'motion.dogDetected.event',
-    'person_detection.personDetected.event',
-    'person_detection.strangerDetected.event',
-    'doorbell.doorbellPress.event',
-    'doorbell.petDetection.event',
-  ],
-  '#993',
-  'requires retriggerable motion holds and stateless doorbell events',
-);
-defer(
   ['arming.mode.read', 'arming.mode.persistent-operation', 'arming.armingModeChanged.event', 'arming.alarm.event'],
   '#991',
   'requires explicit arming-mode and alarm fault policy',

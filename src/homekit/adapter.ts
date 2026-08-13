@@ -1,7 +1,7 @@
 import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
 import type { Characteristic, HapStatusError, PlatformAccessory, Service } from 'homebridge';
 
-import type { DeviceMemberRequirement } from '../device/member-evidence.js';
+import type { DeviceMemberEvidence, DeviceMemberRequirement } from '../device/member-evidence.js';
 
 /** The HAP definitions required by any self-hosted capability adapter. */
 export interface HomeKitDefinitions {
@@ -29,6 +29,7 @@ export interface AdapterEventTrace {
 /** Dependencies supplied by the reconciler when an adapter attaches to one accessory container. */
 export interface AdapterAttachmentContext {
   readonly device: Device;
+  readonly evidence: ReadonlyMap<string, DeviceMemberEvidence>;
   readonly accessory: PlatformAccessory;
   readonly hap: HomeKitDefinitions;
   diagnose(diagnostic: AdapterDiagnostic): void;
@@ -38,6 +39,7 @@ export interface AdapterAttachmentContext {
 /** Successful attachment state, optionally retaining typed SDK event behavior. */
 export interface AttachedAdapter {
   event?(event: AnyDeviceEvent): AdapterEventTrace | undefined;
+  detach?(): void;
 }
 
 /** HomeKit policy and executable evidence owned by one represented SDK member. */
@@ -54,6 +56,7 @@ export interface HomeKitAdapter {
   readonly key: string;
   readonly role: 'primary-purpose' | 'supplemental';
   readonly requires: readonly DeviceMemberRequirement[];
+  readonly requiresAny?: readonly DeviceMemberRequirement[];
   readonly coverage: readonly AdapterCoverage[];
   attach(context: AdapterAttachmentContext): AttachedAdapter | undefined;
 }

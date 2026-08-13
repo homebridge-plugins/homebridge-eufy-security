@@ -32,7 +32,14 @@ function attach(
   target: PlatformAccessory,
   diagnose: (diagnostic: ContactDiagnostic) => void = vi.fn(),
 ) {
-  return CONTACT_ADAPTER.attach({ device: device as never, accessory: target, hap: HAP, diagnose, observed: vi.fn() });
+  return CONTACT_ADAPTER.attach({
+    device: device as never,
+    evidence: new Map(),
+    accessory: target,
+    hap: HAP,
+    diagnose,
+    observed: vi.fn(),
+  });
 }
 
 describe('contact capability adapter', () => {

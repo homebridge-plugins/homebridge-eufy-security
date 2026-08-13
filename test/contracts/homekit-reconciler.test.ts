@@ -55,6 +55,32 @@ function identityOnlyManifest(serial: string): DeviceManifest {
   };
 }
 
+function eventManifest(
+  serial: string,
+  capability: 'motion' | 'person_detection' | 'doorbell',
+  events: string[],
+): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic event source',
+    modelName: 'Synthetic event device',
+    codec: 'unknown',
+    source: 'security',
+    bound: true,
+    capabilities: [capability],
+    details: [
+      {
+        capability,
+        accessor: capability,
+        reads: [],
+        actions: [],
+        undescribedActions: [],
+        events,
+      },
+    ],
+  };
+}
+
 function snapshot(...devices: DeviceManifest[]): CompleteDeviceSnapshot {
   return { version: 1, complete: true, devices };
 }
@@ -224,6 +250,27 @@ describe('HomeKit registry reconciliation', () => {
     expect(diagnostics.filter(({ code }) => code === 'recognized-device-not-represented')).toEqual([]);
   });
 
+  it.each([
+    ['person_detection', ['personDetected'], Service.MotionSensor, 'motion.sensor'],
+    ['doorbell', ['doorbellPress'], Service.Doorbell, 'doorbell.press'],
+  ] as const)(
+    'admits one evidenced %s event without requiring unrelated events',
+    (capability, events, service, key) => {
+      const source = new RegistrySource();
+      const recording = recordingApi();
+      new HomeKitReconciler(source, recording.api, vi.fn()).start();
+      const serial = `synthetic-${capability}`;
+
+      source.publish(
+        registryView(1, new Map([[serial, {} as Device]]), snapshot(eventManifest(serial, capability, [...events]))),
+      );
+
+      expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+      const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+      expect(accessory.getServiceById(service, key)).toBeDefined();
+    },
+  );
+
   it('keeps devices without primary-purpose members dashboard-only with redacted diagnostics', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
@@ -367,5 +414,75 @@ describe('HomeKit registry reconciliation', () => {
         affectedDeviceCount: 0,
       }),
     );
+  });
+
+  it('reattaches event adapters when restarted against the retained registry publication', () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const serial = 'synthetic-restarted-contact';
+    const reconciler = new HomeKitReconciler(source, recording.api, vi.fn());
+    reconciler.start();
+    source.publish(registryView(1, new Map([[serial, contactDevice(false)]]), snapshot(contactManifest(serial))));
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const state = accessory
+      .getServiceById(Service.ContactSensor, 'contact.sensor')!
+      .getCharacteristic(Characteristic.ContactSensorState);
+
+    reconciler.stop();
+    reconciler.start();
+    source.publishEvent({ eventName: 'contactState', deviceSn: serial, open: true });
+
+    expect(state.value).toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
+  });
+
+  it.each([
+    ['active', 0],
+    ['expired', 30_000],
+  ] as const)('removes an %s motion hold when complete evidence withdraws motion', (_state, elapsedMs) => {
+    vi.useFakeTimers();
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const serial = 'synthetic-withdrawn-motion';
+    const doorbell = eventManifest(serial, 'doorbell', ['doorbellPress']);
+    const withMotion = structuredClone(doorbell);
+    withMotion.capabilities.push('person_detection');
+    withMotion.details.push(eventManifest(serial, 'person_detection', ['personDetected']).details[0]!);
+    const reconciler = new HomeKitReconciler(source, recording.api, vi.fn());
+    reconciler.start();
+    source.publish(registryView(1, new Map([[serial, {} as Device]]), snapshot(withMotion)));
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const state = accessory
+      .getServiceById(Service.MotionSensor, 'motion.sensor')!
+      .getCharacteristic(Characteristic.MotionDetected);
+    source.publishEvent({ eventName: 'personDetected', deviceSn: serial });
+    expect(state.value).toBe(true);
+    vi.advanceTimersByTime(elapsedMs);
+
+    source.publish(registryView(2, new Map([[serial, {} as Device]]), snapshot(doorbell)));
+
+    expect(state.value).toBe(false);
+    expect(accessory.getServiceById(Service.MotionSensor, 'motion.sensor')).toBeUndefined();
+    reconciler.stop();
+    vi.useRealTimers();
+  });
+
+  it('removes the doorbell service when complete evidence withdraws presses', () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const serial = 'synthetic-withdrawn-doorbell';
+    const motion = eventManifest(serial, 'person_detection', ['personDetected']);
+    const withDoorbell = structuredClone(motion);
+    withDoorbell.capabilities.push('doorbell');
+    withDoorbell.details.push(eventManifest(serial, 'doorbell', ['doorbellPress']).details[0]!);
+    const reconciler = new HomeKitReconciler(source, recording.api, vi.fn());
+    reconciler.start();
+    source.publish(registryView(1, new Map([[serial, {} as Device]]), snapshot(withDoorbell)));
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    expect(accessory.getServiceById(Service.Doorbell, 'doorbell.press')).toBeDefined();
+
+    source.publish(registryView(2, new Map([[serial, {} as Device]]), snapshot(motion)));
+
+    expect(accessory.getServiceById(Service.Doorbell, 'doorbell.press')).toBeUndefined();
+    reconciler.stop();
   });
 });

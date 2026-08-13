@@ -54,4 +54,22 @@ describe('device member evidence', () => {
       'device manifest contains an unsupported action form: future-form',
     );
   });
+
+  it('requires every fixed member and at least one declared alternative', () => {
+    const evidence = indexDeviceMemberEvidence(manifest([contactDetail()]));
+    const required = [{ id: 'contact.open.read', kind: 'read' as const }];
+
+    expect(
+      satisfiesMemberRequirements(evidence, required, [
+        { id: 'motion.motion.event', kind: 'event' },
+        { id: 'contact.contactState.event', kind: 'event' },
+      ]),
+    ).toBe(true);
+    expect(
+      satisfiesMemberRequirements(evidence, required, [
+        { id: 'motion.motion.event', kind: 'event' },
+        { id: 'doorbell.doorbellPress.event', kind: 'event' },
+      ]),
+    ).toBe(false);
+  });
 });

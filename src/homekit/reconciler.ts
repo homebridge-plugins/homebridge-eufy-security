@@ -116,6 +116,10 @@ export class HomeKitReconciler {
     this.unsubscribeEvents?.();
     this.unsubscribeRegistry = undefined;
     this.unsubscribeEvents = undefined;
+    for (const serial of this.attachedAdapters.keys()) {
+      this.detachAdapters(serial);
+    }
+    this.lastPublication = undefined;
   }
 
   private reconcile(view: HomeKitRegistryView): void {
@@ -131,10 +135,15 @@ export class HomeKitReconciler {
 
     const nextRepresented = new Set<string>();
     for (const [serial, device] of view.registry) {
+      const previousHandles = this.attachedAdapters.get(serial);
       const manifest = manifests.get(serial)!;
       const evidence = indexDeviceMemberEvidence(manifest);
       const admittedAdapters = Object.entries(ADAPTER_REGISTRY).filter(([, adapter]) =>
-        satisfiesMemberRequirements(evidence, adapter.requires),
+        satisfiesMemberRequirements(
+          evidence,
+          adapter.requires,
+          'requiresAny' in adapter ? adapter.requiresAny : undefined,
+        ),
       );
       const admittedKeys = new Set(admittedAdapters.map(([key]) => key));
       for (const previousKey of this.activeAdapters.get(serial) ?? []) {
@@ -145,6 +154,7 @@ export class HomeKitReconciler {
       this.activeAdapters.set(serial, admittedKeys);
       const admittedPrimaryAdapters = admittedAdapters.filter(([, adapter]) => adapter.role === 'primary-purpose');
       if (admittedPrimaryAdapters.length === 0) {
+        this.detachHandles(previousHandles);
         this.attachedAdapters.delete(serial);
         this.setRepresentationDiagnostic(serial, 'no-primary-purpose-member');
         continue;
@@ -157,6 +167,7 @@ export class HomeKitReconciler {
       const attach = (key: string, adapter: (typeof ADAPTER_REGISTRY)[keyof typeof ADAPTER_REGISTRY]): boolean => {
         const handle = adapter.attach({
           device,
+          evidence,
           accessory,
           hap: this.store.hap,
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
@@ -172,6 +183,7 @@ export class HomeKitReconciler {
         primaryAttached = attach(key, adapter) || primaryAttached;
       }
       if (!primaryAttached) {
+        this.detachHandles(previousHandles);
         this.attachedAdapters.set(serial, handles);
         this.setRepresentationDiagnostic(serial, 'primary-adapter-unavailable');
         continue;
@@ -184,6 +196,7 @@ export class HomeKitReconciler {
           attach(key, adapter);
         }
       }
+      this.detachHandles(previousHandles);
       this.attachedAdapters.set(serial, handles);
       this.accessories.set(uuid, accessory);
       nextRepresented.add(serial);
@@ -205,7 +218,7 @@ export class HomeKitReconciler {
         this.store.unregister([accessory]);
         this.accessories.delete(uuid);
       }
-      this.attachedAdapters.delete(serial);
+      this.detachAdapters(serial);
       this.activeAdapters.delete(serial);
       this.clearAdapterDiagnostics(serial);
     }
@@ -223,7 +236,7 @@ export class HomeKitReconciler {
     for (const serial of this.activeAdapters.keys()) {
       if (!manifests.has(serial)) {
         this.activeAdapters.delete(serial);
-        this.attachedAdapters.delete(serial);
+        this.detachAdapters(serial);
       }
     }
     this.representedSerials.clear();
@@ -242,6 +255,21 @@ export class HomeKitReconciler {
       if (result) {
         this.trace?.({ adapter, ...result });
       }
+    }
+  }
+
+  private detachAdapters(serial: string): void {
+    const handles = this.attachedAdapters.get(serial);
+    this.detachHandles(handles);
+    this.attachedAdapters.delete(serial);
+  }
+
+  private detachHandles(handles: ReadonlyMap<string, AttachedAdapter> | undefined): void {
+    if (!handles) {
+      return;
+    }
+    for (const handle of handles.values()) {
+      handle.detach?.();
     }
   }
 
