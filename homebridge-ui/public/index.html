@@ -8,9 +8,20 @@
     </span>
     <div>
       <p class="eyebrow" data-i18n="brand"></p>
-      <h1 data-i18n="pageTitle"></h1>
+      <h1 data-i18n="pageTitle" data-page-title></h1>
     </div>
   </header>
+
+  <aside class="legacy-notice" data-legacy-notice hidden aria-labelledby="legacy-notice-title">
+    <img class="notice-icon" src="assets/icons/warning.svg" alt="" />
+    <div>
+      <p class="eyebrow" data-i18n="legacyEyebrow"></p>
+      <h2 id="legacy-notice-title" data-i18n="legacyTitle"></h2>
+      <p data-i18n="legacySummary"></p>
+      <p class="legacy-settings" data-legacy-settings></p>
+    </div>
+    <button type="button" data-legacy-acknowledge data-i18n="acknowledge"></button>
+  </aside>
 
   <aside class="first-setup" data-first-setup hidden aria-labelledby="first-setup-title">
     <p class="eyebrow" data-i18n="firstSetupEyebrow"></p>
@@ -34,6 +45,24 @@
       <button type="button" data-first-setup-continue disabled data-i18n="firstSetupContinue"></button>
     </div>
   </aside>
+
+  <section class="dashboard" data-dashboard hidden aria-labelledby="dashboard-title">
+    <div class="dashboard-status" data-dashboard-state>
+      <img class="status-icon" src="assets/icons/inventory.svg" alt="" />
+      <div>
+        <p class="eyebrow" data-i18n="devicesEyebrow"></p>
+        <h2 id="dashboard-title" data-dashboard-title></h2>
+      </div>
+      <span class="status" data-dashboard-badge></span>
+      <button type="button" class="dashboard-authenticate" data-dashboard-authenticate hidden data-i18n="authenticate"></button>
+    </div>
+    <p class="summary" data-dashboard-summary></p>
+    <div data-device-groups></div>
+    <p class="restart-guidance" data-restart-guidance hidden>
+      <img src="assets/icons/refresh.svg" alt="" />
+      <span data-i18n="restartGuidance"></span>
+    </p>
+  </section>
 
   <section
     class="panel"
@@ -106,4 +135,6 @@
   <p class="footnote" data-i18n="footnote"></p>
 </main>
 
-<script src="app.js"></script>
+<script src="js/dashboard.js"></script>
+<script src="js/legacy-settings.js"></script>
+<script src="js/app.js"></script>

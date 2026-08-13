@@ -29,6 +29,8 @@ export interface EufyConfig {
   pollingIntervalMinutes: number;
   ffmpegPath: string | undefined;
   entityPreferences: Record<string, EntityPreference>;
+  discardedV4Settings: string[];
+  discardedV4Acknowledged: boolean;
 }
 
 const ENTITY_PREFERENCE_KEYS = new Set<keyof EntityPreference>(['represented', 'audio', 'snapshotMode']);
@@ -82,6 +84,19 @@ function parseEntityPreferences(value: unknown): Record<string, EntityPreference
   );
 }
 
+function parseDiscardedV4Settings(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== 'string' || !entry.match(/^[A-Za-z][A-Za-z0-9]{0,63}$/))
+  ) {
+    throw new TypeError('discardedV4Settings must contain bounded setting names');
+  }
+  return [...new Set(value)].sort();
+}
+
 /** Validates a Homebridge block and resolves the fresh V5 defaults. */
 export function parseConfig(value: unknown): EufyConfig {
   if (!isRecord(value)) {
@@ -120,6 +135,8 @@ export function parseConfig(value: unknown): EufyConfig {
     pollingIntervalMinutes: pollingIntervalMinutes as number,
     ffmpegPath: configuredFfmpegPath ?? bundledFfmpegPath,
     entityPreferences: parseEntityPreferences(value.entityPreferences),
+    discardedV4Settings: parseDiscardedV4Settings(value.discardedV4Settings),
+    discardedV4Acknowledged: value.discardedV4Acknowledged === true,
   };
 }
 
@@ -136,6 +153,8 @@ export function serializeConfig(config: EufyConfig): Record<string, unknown> {
     entityPreferences: Object.fromEntries(
       Object.entries(config.entityPreferences).map(([serial, preference]) => [serial, { ...preference }]),
     ),
+    ...(config.discardedV4Settings.length > 0 ? { discardedV4Settings: [...config.discardedV4Settings] } : {}),
+    ...(config.discardedV4Acknowledged ? { discardedV4Acknowledged: true } : {}),
   };
 }
 

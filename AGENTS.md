@@ -50,7 +50,8 @@ or dependency edge requires updating this section and the architecture contract 
   and HKSV adaptation without importing runtime or HomeKit implementations.
 - `homekit/` may import device. It defines the media interfaces it consumes and never imports account,
   runtime, UI, or concrete media implementations.
-- `platform.ts` and `ui/server.ts` are composition roots. They construct and connect modules but do not
+- `platform.ts` and `ui/server.ts` are composition roots. The `ui/` dashboard projection may consume
+  HomeKit admission policy so the browser does not recreate a second capability model. They construct and connect modules but do not
   absorb their behavior. `index.ts` only registers the platform.
 
 Only `runtime/sdk-client.ts` and `ui/server.ts` may create a concrete SDK client. HomeKit adapters may

@@ -8,16 +8,21 @@ V5 registers only `HomebridgeEufy`. A V4 configuration block using `EufySecurity
 migrated; create a fresh V5 block through the custom UI.
 :::
 
-| Key | Type | Default | Purpose |
-|---|---|---|---|
-| `platform` | string | `HomebridgeEufy` | Homebridge V5 platform alias |
-| `username` | string | — | Dedicated account email |
-| `password` | string | — | Dedicated account password |
-| `country` | two-letter string | `US` | Account country/region |
-| `trustedDeviceName` | string | `Homebridge Eufy` | Name shown in eufy trusted devices |
-| `pollingIntervalMinutes` | integer | `10` | SDK cloud inventory polling interval |
-| `ffmpegPath` | string | bundled binary | Optional FFmpeg override |
-| `entityPreferences` | object | `{}` | Sparse serial-keyed preferences |
+| Key                      | Type              | Default           | Purpose                              |
+| ------------------------ | ----------------- | ----------------- | ------------------------------------ |
+| `platform`               | string            | `HomebridgeEufy`  | Homebridge V5 platform alias         |
+| `username`               | string            | —                 | Dedicated account email              |
+| `password`               | string            | —                 | Dedicated account password           |
+| `country`                | two-letter string | `US`              | Account country/region               |
+| `trustedDeviceName`      | string            | `Homebridge Eufy` | Name shown in eufy trusted devices   |
+| `pollingIntervalMinutes` | integer           | `10`              | SDK cloud inventory polling interval |
+| `ffmpegPath`             | string            | bundled binary    | Optional FFmpeg override             |
+| `entityPreferences`      | object            | `{}`              | Sparse serial-keyed preferences      |
 
 Entity preferences support `represented`, `audio`, and `snapshotMode`. Snapshot mode is one of `Cloud`,
 `Live`, or `Refresh`. Configuration cannot manufacture a capability the SDK did not report.
+
+When the custom UI finds effectful V4-only values, it stores only their setting names in
+`discardedV4Settings`. It never copies or executes their values. `discardedV4Acknowledged` records the
+user's acknowledgement and suppresses the migration summary and startup warning. These two internal
+notice fields are managed by the custom UI rather than exposed as device preferences.

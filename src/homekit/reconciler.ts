@@ -2,9 +2,9 @@ import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
 import type { PlatformAccessory } from 'homebridge';
 
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
-import { indexDeviceMemberEvidence, satisfiesMemberRequirements } from '../device/member-evidence.js';
+import { indexDeviceMemberEvidence } from '../device/member-evidence.js';
 import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
-import { ADAPTER_REGISTRY } from './adapters/registry.js';
+import { admittedHomeKitAdapters } from './representation.js';
 
 /** One complete canonical registry and snapshot published from the same discovery pass. */
 export interface HomeKitRegistryView {
@@ -54,6 +54,8 @@ export interface HomeKitEventTrace {
 
 export type HomeKitEventTraceSink = (trace: HomeKitEventTrace) => void;
 
+export type HomeKitEntityPreferences = Readonly<Record<string, { represented?: boolean }>>;
+
 interface AccessoryContext {
   homebridgeEufy?: {
     version: 1;
@@ -88,6 +90,7 @@ export class HomeKitReconciler {
     private readonly diagnose: HomeKitDiagnosticSink,
     cachedAccessories: readonly PlatformAccessory[] = [],
     private readonly trace?: HomeKitEventTraceSink,
+    private readonly entityPreferences: HomeKitEntityPreferences = {},
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -138,13 +141,7 @@ export class HomeKitReconciler {
       const previousHandles = this.attachedAdapters.get(serial);
       const manifest = manifests.get(serial)!;
       const evidence = indexDeviceMemberEvidence(manifest);
-      const admittedAdapters = Object.entries(ADAPTER_REGISTRY).filter(([, adapter]) =>
-        satisfiesMemberRequirements(
-          evidence,
-          adapter.requires,
-          'requiresAny' in adapter ? adapter.requiresAny : undefined,
-        ),
-      );
+      const admittedAdapters = admittedHomeKitAdapters(manifest);
       const admittedKeys = new Set(admittedAdapters.map(([key]) => key));
       for (const previousKey of this.activeAdapters.get(serial) ?? []) {
         if (!admittedKeys.has(previousKey)) {
@@ -152,6 +149,12 @@ export class HomeKitReconciler {
         }
       }
       this.activeAdapters.set(serial, admittedKeys);
+      if (this.entityPreferences[serial]?.represented === false) {
+        this.detachHandles(previousHandles);
+        this.attachedAdapters.delete(serial);
+        this.clearRepresentationDiagnostic(serial);
+        continue;
+      }
       const admittedPrimaryAdapters = admittedAdapters.filter(([, adapter]) => adapter.role === 'primary-purpose');
       if (admittedPrimaryAdapters.length === 0) {
         this.detachHandles(previousHandles);
@@ -164,7 +167,7 @@ export class HomeKitReconciler {
       const existing = this.accessories.get(uuid);
       const accessory = existing ?? this.store.createAccessory(manifest.name, uuid);
       const handles = new Map<string, AttachedAdapter>();
-      const attach = (key: string, adapter: (typeof ADAPTER_REGISTRY)[keyof typeof ADAPTER_REGISTRY]): boolean => {
+      const attach = (key: string, adapter: (typeof admittedAdapters)[number][1]): boolean => {
         const handle = adapter.attach({
           device,
           evidence,

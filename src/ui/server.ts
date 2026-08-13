@@ -15,6 +15,7 @@ import { parseConfig } from '../configuration.js';
 import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
 import { RuntimeTracker } from '../runtime/tracker.js';
 import { resolveStorageRoot } from '../storage.js';
+import { readDashboard } from './dashboard.js';
 
 const AUTHENTICATION_FLOW_TIMEOUT_MS = 5 * 60_000;
 const AUTHENTICATION_CLEANUP_TIMEOUT_MS = 10_000;
@@ -89,6 +90,30 @@ function parseAnswer(value: unknown, key: 'answer' | 'code'): string {
   return answer;
 }
 
+function parseRepresentationPreferences(value: unknown): Record<string, boolean> {
+  if (value === undefined) {
+    return {};
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RequestError('Invalid dashboard request', { status: 400 });
+  }
+  const preferences = (value as Record<string, unknown>).representationPreferences;
+  if (preferences === undefined) {
+    return {};
+  }
+  if (
+    typeof preferences !== 'object' ||
+    preferences === null ||
+    Array.isArray(preferences) ||
+    Object.entries(preferences).some(
+      ([serial, represented]) => serial.length === 0 || serial.length > 128 || typeof represented !== 'boolean',
+    )
+  ) {
+    throw new RequestError('Invalid dashboard request', { status: 400 });
+  }
+  return { ...(preferences as Record<string, boolean>) };
+}
+
 /** Creates the production SDK client without enabling realtime ownership. */
 export const createTemporaryAuthenticationClient: TemporaryAuthenticationClientFactory = (options) =>
   temporaryClient(
@@ -139,6 +164,9 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
     this.onRequest('/auth/captcha', (payload) => this.continueCaptcha(payload));
     this.onRequest('/auth/two-factor', (payload) => this.continueTwoFactor(payload));
     this.onRequest('/auth/close', () => this.closeAuthentication());
+    this.onRequest('/dashboard', (payload) =>
+      readDashboard(this.runtimeTracker, Date.now, parseRepresentationPreferences(payload)),
+    );
     this.installCleanupHandlers();
     this.ready();
   }

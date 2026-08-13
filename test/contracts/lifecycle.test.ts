@@ -52,6 +52,36 @@ describe('platform lifecycle', () => {
     );
   });
 
+  it('warns once per startup while discarded V4 settings await acknowledgement', () => {
+    const warn = vi.fn();
+    const Platform = createEufyPlatform(() => ({ start: vi.fn(), stop: vi.fn() }));
+
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn },
+      {
+        platform: 'HomebridgeEufy',
+        discardedV4Settings: ['cameras', 'ignoreDevices'],
+      },
+      { on: vi.fn() },
+    );
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'Discarded V4 settings need acknowledgement in the Homebridge Eufy dashboard',
+    );
+
+    const acknowledgedWarn = vi.fn();
+    new Platform(
+      { error: vi.fn(), info: vi.fn(), warn: acknowledgedWarn },
+      {
+        platform: 'HomebridgeEufy',
+        discardedV4Settings: ['cameras'],
+        discardedV4Acknowledged: true,
+      },
+      { on: vi.fn() },
+    );
+    expect(acknowledgedWarn).not.toHaveBeenCalled();
+  });
+
   it('starts its SDK client after Homebridge finishes launching', async () => {
     const client: SdkClient = {
       start: vi.fn().mockResolvedValue(undefined),

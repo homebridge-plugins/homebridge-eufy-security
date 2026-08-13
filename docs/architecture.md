@@ -55,7 +55,7 @@ src/
   homekit/       coverage matrix, reconciler, explicit capability and bundle adapters
   media/         FFmpeg, live sessions, recording, talkback, and snapshot adaptation
   runtime/       long-lived owner, SDK adapter, canonical registry, status tracker
-  ui/            Homebridge custom UI composition root
+  ui/            snapshot dashboard projection and Homebridge custom UI composition root
   configuration.ts
   platform.ts    Homebridge runtime composition root
   settings.ts
@@ -65,16 +65,16 @@ src/
 
 Dependencies follow these directions:
 
-| Source | Allowed internal dependencies |
-| --- | --- |
-| `device/` | None |
-| `account/` | configuration, device |
-| `runtime/` | account, configuration, device |
-| `media/` | configuration, device |
-| `homekit/` | device |
-| `ui/server.ts` | account, configuration, device, persisted runtime views, storage |
-| `platform.ts` | configuration, runtime, HomeKit, media, storage |
-| `index.ts` | platform and settings |
+| Source        | Allowed internal dependencies                                                              |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| `device/`     | None                                                                                       |
+| `account/`    | configuration, device                                                                      |
+| `runtime/`    | account, configuration, device                                                             |
+| `media/`      | configuration, device                                                                      |
+| `homekit/`    | device                                                                                     |
+| `ui/`         | account, configuration, device, HomeKit admission policy, persisted runtime views, storage |
+| `platform.ts` | configuration, runtime, HomeKit, media, storage                                            |
+| `index.ts`    | platform and settings                                                                      |
 
 V5 state lives under `homebridge-eufy` in the Homebridge storage directory. `storage.ts` atomically
 adopts the earlier `eufy-security` V5 directory only when no live SDK owner holds it. If both roots
@@ -101,7 +101,14 @@ connect them, but they contain no domain behavior.
 The runtime composition root connects account persistence, ownership, the long-lived SDK adapter,
 registry publication, HomeKit reconciliation, and eventually media adapters. The UI composition root
 connects the temporary authentication owner to account stores and reads allowlisted persisted runtime
-views. It never reconstructs the SDK capability model.
+views. Its dashboard projection consumes the same closed HomeKit adapter registry used by reconciliation,
+so the browser receives recognized, represented, and controllable summaries without reconstructing the
+SDK capability model.
+
+Device-tile product artwork is synchronized from the SDK documentation gallery by
+`scripts/sync-device-artwork.mjs`. The packed UI ships that local copy and never fetches product images
+at runtime. Exact model images use the SDK gallery's product-line and model-code names; an unavailable
+image reveals the tile's local category fallback.
 
 Only `runtime/sdk-client.ts` and `ui/server.ts` may construct a concrete SDK client. Other modules may
 consume public typed SDK capabilities relevant to their policy, but may not import SDK transports,

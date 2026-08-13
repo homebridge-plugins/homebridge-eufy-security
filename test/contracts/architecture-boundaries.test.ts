@@ -18,7 +18,7 @@ const allowedDependencies: Readonly<Record<string, ReadonlySet<string>>> = {
   runtime: new Set(['account', 'configuration', 'device', 'runtime']),
   settings: new Set(),
   storage: new Set(['account']),
-  ui: new Set(['account', 'configuration', 'device', 'runtime', 'storage', 'ui']),
+  ui: new Set(['account', 'configuration', 'device', 'homekit', 'runtime', 'storage', 'ui']),
   version: new Set(),
 };
 

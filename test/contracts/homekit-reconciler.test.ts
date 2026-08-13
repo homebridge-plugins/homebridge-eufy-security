@@ -380,6 +380,20 @@ describe('HomeKit registry reconciliation', () => {
     });
   });
 
+  it('keeps an admitted device dashboard-only when its representation preference is disabled', () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const serial = 'synthetic-disabled-representation';
+    new HomeKitReconciler(source, recording.api, vi.fn(), [], undefined, {
+      [serial]: { represented: false },
+    }).start();
+
+    source.publish(registryView(1, new Map([[serial, contactDevice(false)]]), snapshot(contactManifest(serial))));
+
+    expect(recording.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(recording.uuidInputs).toEqual([]);
+  });
+
   it.each([
     ['person_detection', ['personDetected'], Service.MotionSensor, 'motion.sensor'],
     ['doorbell', ['doorbellPress'], Service.Doorbell, 'doorbell.press'],

@@ -23,6 +23,7 @@ async function renderUi(
     image: 'data:image/png;base64,c3ludGhldGlj',
     retry: false,
   },
+  dashboardSnapshot: Record<string, unknown> = { state: 'ready', devices: [] },
 ) {
   function interactiveElement<T extends object>(state: T) {
     const listeners: Record<string, Array<(event?: { preventDefault(): void }) => void | Promise<void>>> = {};
@@ -30,8 +31,8 @@ async function renderUi(
       addEventListener(event: string, listener: (event?: { preventDefault(): void }) => void | Promise<void>) {
         (listeners[event] ??= []).push(listener);
       },
-      async dispatch(event: string) {
-        await Promise.all(listeners[event]?.map((listener) => listener({ preventDefault() {} })) ?? []);
+      async dispatch(event: string, detail: Record<string, unknown> = {}) {
+        await Promise.all(listeners[event]?.map((listener) => listener({ preventDefault() {}, ...detail })) ?? []);
       },
     });
   }
@@ -53,6 +54,17 @@ async function renderUi(
   const authStatus = { textContent: '' };
   const authSubmit = { disabled: false };
   const challengeSubmit = { disabled: false };
+  const dashboard = { hidden: true, dataset: {} as Record<string, string> };
+  const dashboardTitle = { textContent: '' };
+  const dashboardBadge = { textContent: '' };
+  const dashboardSummary = { textContent: '' };
+  const dashboardAuthenticate = interactiveElement({ hidden: true });
+  const deviceGroups = interactiveElement({ innerHTML: '' });
+  const restartGuidance = { hidden: true };
+  const pageTitle = { textContent: '' };
+  const legacyNotice = { hidden: true };
+  const legacySettings = { textContent: '' };
+  const legacyAcknowledge = interactiveElement({});
   const browserWindow = interactiveElement({});
   const requests: Array<{ path: string; body: unknown }> = [];
   let updatedConfig: Array<Record<string, unknown>> | undefined;
@@ -88,6 +100,17 @@ async function renderUi(
           '[data-auth-status]': authStatus,
           '[data-auth-submit]': authSubmit,
           '[data-challenge-submit]': challengeSubmit,
+          '[data-dashboard]': dashboard,
+          '[data-dashboard-title]': dashboardTitle,
+          '[data-dashboard-badge]': dashboardBadge,
+          '[data-dashboard-summary]': dashboardSummary,
+          '[data-dashboard-authenticate]': dashboardAuthenticate,
+          '[data-device-groups]': deviceGroups,
+          '[data-restart-guidance]': restartGuidance,
+          '[data-page-title]': pageTitle,
+          '[data-legacy-notice]': legacyNotice,
+          '[data-legacy-settings]': legacySettings,
+          '[data-legacy-acknowledge]': legacyAcknowledge,
         }[selector];
       },
       querySelectorAll(selector: string) {
@@ -109,7 +132,9 @@ async function renderUi(
       i18nCurrentLang: async () => language,
       request: async (path: string, body: unknown) => {
         requests.push({ path, body });
-        return path === '/auth/start' ? authenticationStart : { status: 'restart-required' };
+        if (path === '/auth/start') return authenticationStart;
+        if (path === '/dashboard') return dashboardSnapshot;
+        return { status: 'restart-required' };
       },
       savePluginConfig: async () => {
         saves++;
@@ -137,6 +162,16 @@ async function renderUi(
     continueButton,
     country,
     password,
+    dashboard,
+    dashboardBadge,
+    dashboardSummary,
+    dashboardAuthenticate,
+    dashboardTitle,
+    deviceGroups,
+    legacyAcknowledge,
+    legacyNotice,
+    legacySettings,
+    restartGuidance,
     requests,
     setupContent,
     shell,
@@ -200,7 +235,9 @@ describe('packed plugin', () => {
         customUi?: boolean;
       };
       const document = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'index.html'), 'utf8');
-      const script = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'app.js'), 'utf8');
+      const script = ['dashboard.js', 'legacy-settings.js', 'app.js']
+        .map((file) => readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'js', file), 'utf8'))
+        .join('\n');
       const server = readFileSync(join(packageDirectory, 'homebridge-ui', 'server.js'), 'utf8');
       const stylesheet = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'app.css'), 'utf8');
       const catalogs = Object.fromEntries(
@@ -216,7 +253,9 @@ describe('packed plugin', () => {
       );
       const darkTheme = stylesheet.match(/\.shell\[data-theme="dark"\] \{(?<declarations>[^}]+)\}/)?.groups
         ?.declarations;
-      const translationKeys = [...document.matchAll(/data-i18n="([^"]+)"/g)].map((match) => match[1]).sort();
+      const translationKeys = [
+        ...new Set([...document.matchAll(/data-i18n="([^"]+)"/g)].map((match) => match[1])),
+      ].sort();
       const translatedLabelKeys = [...document.matchAll(/data-i18n-aria-label="([^"]+)"/g)]
         .map((match) => match[1])
         .sort();
@@ -224,27 +263,49 @@ describe('packed plugin', () => {
         .map((file) => file.path)
         .filter((path) => path.startsWith('homebridge-ui/'))
         .sort();
+      const deviceArtworkFiles = uiFiles.filter((path) => path.startsWith('homebridge-ui/public/assets/devices/'));
+      const uiShellFiles = uiFiles.filter((path) => !path.startsWith('homebridge-ui/public/assets/devices/'));
 
       expect(plugin.default).toBeTypeOf('function');
       expect(packedPackage.name).toBe('@homebridge-plugins/homebridge-eufy-security');
       expect(schema.customUi).toBe(true);
       expect(result.files.map((file) => file.path)).toContain('dist/ui/server.js');
-      expect(uiFiles).toEqual([
+      expect(uiShellFiles).toEqual([
         'homebridge-ui/public/app.css',
-        'homebridge-ui/public/app.js',
+        'homebridge-ui/public/assets/icons/bolt.svg',
+        'homebridge-ui/public/assets/icons/info.svg',
+        'homebridge-ui/public/assets/icons/inventory.svg',
+        'homebridge-ui/public/assets/icons/refresh.svg',
+        'homebridge-ui/public/assets/icons/settings.svg',
+        'homebridge-ui/public/assets/icons/warning.svg',
         'homebridge-ui/public/assets/logo-dark.svg',
         'homebridge-ui/public/assets/logo.svg',
         'homebridge-ui/public/i18n/en.json',
         'homebridge-ui/public/i18n/fr.json',
         'homebridge-ui/public/index.html',
+        'homebridge-ui/public/js/app.js',
+        'homebridge-ui/public/js/dashboard.js',
+        'homebridge-ui/public/js/legacy-settings.js',
         'homebridge-ui/server.js',
       ]);
+      expect(deviceArtworkFiles).toHaveLength(153);
+      expect(
+        deviceArtworkFiles.every((path) =>
+          /^homebridge-ui\/public\/assets\/devices\/(?:clean|life|mower|security)\/[A-Za-z0-9-]+\.png$/.test(path),
+        ),
+      ).toBe(true);
       expect(document).toContain('data-authentication="ready"');
       expect(document).toContain('aria-current="step"');
       expect(document).toContain('href="app.css"');
-      expect(document).toContain('src="app.js"');
+      expect(document).toContain('src="js/app.js"');
+      expect(document).toContain('src="js/dashboard.js"');
+      expect(document).toContain('src="js/legacy-settings.js"');
       expect(document).toContain('src="assets/logo.svg"');
       expect(document).toContain('src="assets/logo-dark.svg"');
+      expect(document).toContain('src="assets/icons/inventory.svg"');
+      expect(document).toContain('src="assets/icons/refresh.svg"');
+      expect(document).toContain('src="assets/icons/warning.svg"');
+      expect(script).toContain('src="assets/icons/settings.svg"');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
       expect(document).toContain('data-first-setup-continue');
@@ -257,6 +318,7 @@ describe('packed plugin', () => {
       expect(translationKeys).toEqual(
         [
           'accountLabel',
+          'acknowledge',
           'authenticate',
           'authReady',
           'authSummary',
@@ -272,9 +334,14 @@ describe('packed plugin', () => {
           'footnote',
           'continueAuthentication',
           'countryLabel',
+          'devicesEyebrow',
           'oneAccountSession',
           'pageTitle',
           'passwordLabel',
+          'legacyEyebrow',
+          'legacySummary',
+          'legacyTitle',
+          'restartGuidance',
           'sessionDetails',
           'setupStatusEyebrow',
           'shareLink',
@@ -294,6 +361,38 @@ describe('packed plugin', () => {
         'authTimedOut',
         'captchaLabel',
         'twoFactorLabel',
+        'categoryClean',
+        'categoryLife',
+        'categorySecurity',
+        'controllable',
+        'dashboardAuthenticationRequiredBadge',
+        'dashboardAuthenticationRequiredSummary',
+        'dashboardAuthenticationRequiredTitle',
+        'dashboardDegradedBadge',
+        'dashboardDegradedSummary',
+        'dashboardDegradedTitle',
+        'dashboardIncompleteBadge',
+        'dashboardIncompleteSummary',
+        'dashboardIncompleteTitle',
+        'dashboardMissingBadge',
+        'dashboardMissingSummary',
+        'dashboardMissingTitle',
+        'dashboardOwnerConflictBadge',
+        'dashboardOwnerConflictSummary',
+        'dashboardOwnerConflictTitle',
+        'dashboardPageTitle',
+        'dashboardReadyBadge',
+        'dashboardReadySummary',
+        'dashboardReadyTitle',
+        'dashboardStaleBadge',
+        'dashboardStaleSummary',
+        'dashboardStaleTitle',
+        'diagnosticOnly',
+        'preferenceAudio',
+        'preferenceRepresented',
+        'preferenceSaveFailed',
+        'preferenceSnapshotMode',
+        'preferences',
       ].sort();
       expect(Object.keys(catalogs['i18n/en.json']).sort()).toEqual(expectedCatalogKeys);
       expect(Object.keys(catalogs['i18n/fr.json']).sort()).toEqual(expectedCatalogKeys);
@@ -328,7 +427,8 @@ describe('packed plugin', () => {
         renderUi(script, [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }], catalogs),
       ).resolves.toMatchObject({
         firstSetup: { hidden: true },
-        setupContent: { hidden: false },
+        setupContent: { hidden: true },
+        dashboard: { hidden: false, dataset: { state: 'ready' } },
         shell: { dataset: { theme: 'dark' } },
       });
 
@@ -431,9 +531,89 @@ describe('packed plugin', () => {
         password: 'replacement-password',
         country: 'GB',
         trustedDeviceName: 'Replacement bridge',
+        discardedV4Settings: [
+          'cameras',
+          'cleanCache',
+          'enableDetailedLogging',
+          'experimentalMode',
+          'ignoreDevices',
+          'ignoreStations',
+          'stations',
+          'syncStationModes',
+          'useEmbeddedPKCS1Support',
+        ],
       };
       expect(migratedUi.requests).toEqual([{ path: '/auth/start', body: { configuration: expectedMigratedConfig } }]);
       expect(migratedUi.updatedConfig).toEqual([expectedMigratedConfig]);
+      expect(migratedUi.legacyNotice.hidden).toBe(false);
+      await migratedUi.legacyAcknowledge.dispatch('click');
+      expect(migratedUi.legacyNotice.hidden).toBe(true);
+      expect(migratedUi.updatedConfig?.[0]).toMatchObject({ discardedV4Acknowledged: true });
+
+      const dashboardUi = await renderUi(
+        script,
+        [
+          {
+            platform: 'HomebridgeEufy',
+            username: 'guest@example.invalid',
+            entityPreferences: { 'synthetic-absent': { audio: false } },
+          },
+        ],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        {
+          state: 'degraded',
+          devices: [
+            {
+              serial: 'synthetic-contact',
+              name: 'Front contact',
+              modelName: 'Synthetic contact sensor',
+              artwork: 'assets/devices/security/security-T8910.png',
+              category: 'security',
+              deviceClass: 'sensor',
+              recognized: true,
+              represented: true,
+              controllable: false,
+              diagnosticOnly: false,
+              preferences: ['represented'],
+            },
+            {
+              serial: 'synthetic-vacuum',
+              name: 'Floor cleaner',
+              modelName: 'Synthetic vacuum',
+              category: 'clean',
+              deviceClass: 'vacuum',
+              recognized: true,
+              represented: false,
+              controllable: false,
+              diagnosticOnly: true,
+              preferences: [],
+            },
+          ],
+        },
+      );
+      expect(dashboardUi).toMatchObject({
+        dashboard: { hidden: false, dataset: { state: 'degraded' } },
+        dashboardBadge: { textContent: catalogs['i18n/en.json'].dashboardDegradedBadge },
+        setupContent: { hidden: true },
+      });
+      expect(dashboardUi.deviceGroups.innerHTML).toContain('Front contact');
+      expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.png');
+      expect(dashboardUi.deviceGroups.innerHTML).toContain('Floor cleaner');
+      expect(dashboardUi.deviceGroups.innerHTML).toContain(catalogs['i18n/en.json'].diagnosticOnly);
+      await dashboardUi.deviceGroups.dispatch('change', {
+        target: {
+          checked: false,
+          dataset: { preference: 'represented', serial: 'synthetic-contact' },
+        },
+      });
+      expect(dashboardUi.updatedConfig?.[0].entityPreferences).toEqual({
+        'synthetic-absent': { audio: false },
+        'synthetic-contact': { represented: false },
+      });
+      expect(dashboardUi.restartGuidance.hidden).toBe(false);
 
       const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
         status: 'two-factor',

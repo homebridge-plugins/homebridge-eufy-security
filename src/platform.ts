@@ -53,6 +53,9 @@ export function createEufyPlatform(
 
     constructor(log: PlatformLogger, config: PlatformConfig, api: PlatformApi) {
       const configuredConfig = parseConfig(config);
+      if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
+        log.warn('Discarded V4 settings need acknowledgement in the Homebridge Eufy dashboard');
+      }
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       this.runtime = new RuntimeOwner(log, configuredConfig, clientFactory, { storageRoot, shutdownTimeoutMs });
       const signals: PlatformSignal[] = ['SIGHUP', 'SIGINT', 'SIGTERM'];
@@ -79,6 +82,7 @@ export function createEufyPlatform(
             (diagnostic) => reportHomeKitDiagnostic(log, diagnostic),
             this.cachedAccessories,
             (trace) => reportHomeKitEvent(log, trace),
+            configuredConfig.entityPreferences,
           );
           this.reconciler.start();
         }

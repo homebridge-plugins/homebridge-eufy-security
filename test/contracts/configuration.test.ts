@@ -107,6 +107,8 @@ describe('V5 configuration', () => {
         },
         'synthetic-sparse-entity': { audio: false },
       },
+      discardedV4Settings: [],
+      discardedV4Acknowledged: false,
     });
     expect(resolveEntityPreference(roundTrip, 'synthetic-sparse-entity')).toEqual({
       represented: true,
@@ -136,6 +138,18 @@ describe('V5 configuration', () => {
       entityPreferences: {
         'synthetic-absent-entity': { represented: false },
       },
+    });
+  });
+
+  it('round trips bounded discarded-setting names and acknowledgement metadata', () => {
+    const config = parseConfig({
+      platform: 'HomebridgeEufy',
+      discardedV4Settings: ['cameras', 'ignoreDevices'],
+      discardedV4Acknowledged: true,
+    });
+    expect(serializeConfig(config)).toMatchObject({
+      discardedV4Settings: ['cameras', 'ignoreDevices'],
+      discardedV4Acknowledged: true,
     });
   });
 
