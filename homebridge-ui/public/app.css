@@ -219,6 +219,7 @@ h2 {
   inset: 22px;
   width: calc(100% - 44px);
   height: calc(100% - 44px);
+  background: #17202c;
   object-fit: contain;
   opacity: 1;
   filter: brightness(0.58) saturate(0.85) contrast(1.05);
