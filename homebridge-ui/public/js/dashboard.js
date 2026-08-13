@@ -14,12 +14,14 @@
       audio: messages.preferenceAudio,
       snapshotMode: messages.preferenceSnapshotMode,
     };
+    const represented = preference.represented;
+    const dependent = key === 'represented' ? '' : ` data-requires-representation${represented ? '' : ' hidden'}`;
     if (key === 'snapshotMode') {
-      return `<label><span>${escapeHtml(labels[key])}</span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}">
+      return `<label${dependent}><span>${escapeHtml(labels[key])}</span><select data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${escapeHtml(preference.snapshotMode)}">
         ${['Cloud', 'Live', 'Refresh'].map((mode) => `<option${preference.snapshotMode === mode ? ' selected' : ''}>${mode}</option>`).join('')}
       </select></label>`;
     }
-    return `<label class="toggle"><input type="checkbox" data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${String(preference[key])}"${preference[key] ? ' checked' : ''}><span>${escapeHtml(labels[key])}</span></label>`;
+    return `<label class="toggle"${dependent}><input type="checkbox" data-preference="${key}" data-serial="${escapeHtml(device.serial)}" data-original="${String(preference[key])}"${preference[key] ? ' checked' : ''}><span>${escapeHtml(labels[key])}</span></label>`;
   }
 
   function markPendingPreference(control, key, value) {
@@ -158,13 +160,11 @@
         await saveConfig({ ...existing, entityPreferences });
         if (key === 'represented') {
           const tile = control.closest?.('.device-tile');
-          const grid = tile?.parentElement;
-          if (tile && grid) {
-            tile.dataset.rank = value ? '0' : '1';
+          if (tile) {
             tile.classList.toggle('device-tile-disabled', !value);
-            [...grid.children]
-              .sort((left, right) => Number(left.dataset.rank) - Number(right.dataset.rank))
-              .forEach((entry) => grid.appendChild(entry));
+            tile.querySelectorAll('[data-requires-representation]').forEach((setting) => {
+              setting.hidden = !value;
+            });
           }
         }
       } catch {

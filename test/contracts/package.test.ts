@@ -606,7 +606,7 @@ describe('packed plugin', () => {
               represented: true,
               controllable: false,
               diagnosticOnly: false,
-              preferences: ['represented'],
+              preferences: ['represented', 'audio', 'snapshotMode'],
             },
             {
               serial: 'synthetic-back-contact',
@@ -654,6 +654,7 @@ describe('packed plugin', () => {
       });
       expect(dashboardUi.deviceGroups.innerHTML).toContain('Front contact');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('device-tile-disabled');
+      expect(dashboardUi.deviceGroups.innerHTML).toContain('data-requires-representation hidden');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.png');
       expect(dashboardUi.deviceGroups.innerHTML.indexOf('Back contact')).toBeLessThan(
         dashboardUi.deviceGroups.innerHTML.indexOf('Front contact'),
@@ -696,6 +697,7 @@ describe('packed plugin', () => {
       });
       expect(dashboardUi.saveButtonEnables).toBe(1);
       expect(dashboardUi.saveButtonDisables).toBe(2);
+      expect(script).not.toContain('appendChild(entry)');
 
       const twoFactorUi = await renderUi(script, [], catalogs, 'en', [], {
         status: 'two-factor',
