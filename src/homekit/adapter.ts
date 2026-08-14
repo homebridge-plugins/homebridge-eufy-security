@@ -7,7 +7,11 @@ import type { DeviceMemberEvidence, DeviceMemberRequirement } from '../device/me
 export interface HomeKitDefinitions {
   readonly Service: typeof Service;
   readonly Characteristic: typeof Characteristic;
-  readonly HAPStatus: { readonly SERVICE_COMMUNICATION_FAILURE: number };
+  readonly HAPStatus: {
+    readonly SERVICE_COMMUNICATION_FAILURE: number;
+    readonly INVALID_VALUE_IN_REQUEST: number;
+    readonly NOT_ALLOWED_IN_CURRENT_STATE: number;
+  };
   readonly HapStatusError: typeof HapStatusError;
 }
 

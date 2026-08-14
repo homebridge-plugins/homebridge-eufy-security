@@ -106,6 +106,34 @@ function sirenManifest(serial: string): DeviceManifest {
   };
 }
 
+function smartLightManifest(serial: string): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic smart light',
+    modelName: 'Synthetic Life light',
+    codec: 'light',
+    source: 'life',
+    bound: true,
+    capabilities: ['smart_light'],
+    details: [
+      {
+        capability: 'smart_light',
+        accessor: 'smartLight',
+        reads: [
+          { accessor: 'power', property: 'synthetic_light_power', type: 'bool', writable: true },
+          { accessor: 'brightness', property: 'synthetic_light_brightness', type: 'number', writable: true },
+        ],
+        actions: [
+          { name: 'power', form: 'stateful' },
+          { name: 'brightness', form: 'stateful' },
+        ],
+        undescribedActions: [],
+        events: ['smartLightState'],
+      },
+    ],
+  };
+}
+
 function eventManifest(
   serial: string,
   capability: 'motion' | 'person_detection' | 'doorbell',
@@ -160,6 +188,17 @@ function batteryContactDevice(open: boolean, level: number): Device {
 function sirenDevice(active = false): Device {
   return {
     siren: () => ({ active, test: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) }),
+  } as unknown as Device;
+}
+
+function smartLightDevice(power = false, brightness = 50): Device {
+  return {
+    smartLight: () => ({
+      power,
+      brightness,
+      set: vi.fn(async () => undefined),
+      setBrightness: vi.fn(async () => undefined),
+    }),
   } as unknown as Device;
 }
 
@@ -441,6 +480,26 @@ describe('HomeKit registry reconciliation', () => {
       nearMissSource.publish(registryView(1, new Map([[nearMiss.sn, sirenDevice()]]), snapshot(nearMiss)));
       expect(nearMissRecording.registerPlatformAccessories, missing).not.toHaveBeenCalled();
     }
+  });
+
+  it('creates a serial-based smart-light accessory and withdraws it only from a complete snapshot', () => {
+    const serial = 'synthetic-smart-light';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn()).start();
+
+    source.publish(registryView(1, new Map([[serial, smartLightDevice()]]), snapshot(smartLightManifest(serial))));
+
+    expect(recording.uuidInputs).toEqual([`d1_${serial}`]);
+    expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const service = accessory.getServiceById(Service.Lightbulb, 'smart-light.lightbulb')!;
+    expect(service).toBeDefined();
+    source.publishEvent({ eventName: 'smartLightState', deviceSn: serial, power: true });
+    expect(service.getCharacteristic(Characteristic.On).value).toBe(true);
+
+    source.publish(registryView(2, new Map(), snapshot()));
+    expect(recording.unregisterPlatformAccessories).toHaveBeenCalledWith([accessory]);
   });
 
   it('keeps devices without primary-purpose members dashboard-only with redacted diagnostics', () => {

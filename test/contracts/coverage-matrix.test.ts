@@ -118,6 +118,20 @@ describe('SDK/HAP coverage matrix', () => {
         .every(({ controlStatus }) => controlStatus === 'controllable'),
     ).toBe(true);
 
+    const representedSmartLight = SDK_HAP_COVERAGE_MATRIX.rows.filter(
+      ({ adapter }) => adapter === 'smart-light.lightbulb',
+    );
+    expect(representedSmartLight.map(({ id }) => id).sort()).toEqual(
+      [
+        'smart_light.power.read',
+        'smart_light.power.persistent-operation',
+        'smart_light.brightness.read',
+        'smart_light.brightness.persistent-operation',
+        'smart_light.smartLightState.event',
+      ].sort(),
+    );
+    expect(representedSmartLight.every(({ followUp }) => followUp === undefined)).toBe(true);
+
     const diagnosticOnlySiren = SDK_HAP_COVERAGE_MATRIX.rows.filter(
       ({ capability, disposition }) => capability === 'siren' && disposition === 'diagnostic-only',
     );

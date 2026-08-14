@@ -133,17 +133,6 @@ defer(
   'requires explicit arming-mode and alarm fault policy',
 );
 defer(
-  [
-    'smart_light.power.read',
-    'smart_light.power.persistent-operation',
-    'smart_light.brightness.read',
-    'smart_light.brightness.persistent-operation',
-    'smart_light.smartLightState.event',
-  ],
-  '#989',
-  'requires projection and partial-report reconciliation',
-);
-defer(
   ['lock.lock.momentary-action', 'lock.unlock.momentary-action'],
   '#992',
   'requires the T8531-only control boundary and unknown-current policy',
