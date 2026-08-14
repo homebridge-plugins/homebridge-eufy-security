@@ -318,6 +318,10 @@ h2 {
   pointer-events: auto;
 }
 
+.device-mobile-close {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .device-card-front,
   .device-card-back {
@@ -989,6 +993,26 @@ button:disabled {
     width: 100%;
     min-height: 36px;
     flex: 1;
+  }
+
+  .device-mobile-close {
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    right: 0;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    min-height: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--tile-ink);
+    padding: 0;
+    font-size: 28px;
+    font-weight: 400;
+    line-height: 1;
   }
 }
 

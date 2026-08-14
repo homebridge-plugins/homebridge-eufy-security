@@ -373,6 +373,7 @@ describe('packed plugin', () => {
         'categoryClean',
         'categoryLife',
         'categorySecurity',
+        'closeDetails',
         'controllable',
         'dashboardAuthenticationRequiredBadge',
         'dashboardAuthenticationRequiredSummary',
@@ -675,6 +676,7 @@ describe('packed plugin', () => {
       );
       expect(dashboardUi.deviceGroups.innerHTML).toContain(catalogs['i18n/en.json'].diagnosticOnly);
       expect(dashboardUi.deviceGroups.innerHTML.match(/device-tile-flippable/g)).toHaveLength(5);
+      expect(dashboardUi.deviceGroups.innerHTML.match(/device-mobile-close/g)).toHaveLength(5);
       expect(dashboardUi.deviceGroups.innerHTML.match(/diagnostic-panel/g)).toHaveLength(2);
       expect(dashboardUi.deviceGroups.innerHTML.match(/preference-panel/g)).toHaveLength(3);
       await dashboardUi.deviceGroups.dispatch('change', {

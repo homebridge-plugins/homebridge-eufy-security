@@ -86,13 +86,13 @@
               <div class="device-copy"><h3>${escapeHtml(device.name)}</h3><p>${escapeHtml(device.modelName)}</p></div>
               <div class="device-badges">${badges.map(({ icon, label }) => `<span class="device-badge device-badge-${icon}" role="img" tabindex="0" aria-label="${escapeHtml(label)}" data-tooltip="${escapeHtml(label)}"><img src="assets/icons/${icon}.svg" alt=""></span>`).join('')}</div>`;
             if (device.diagnosticOnly) {
-              return `<article class="device-tile device-tile-flippable" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><div class="diagnostic-panel"><img src="assets/icons/troubleshoot.svg" alt=""><strong>${escapeHtml(messages.diagnosticOnly)}</strong><p>${escapeHtml(messages.diagnosticDescription)}</p></div></div></div></article>`;
+              return `<article class="device-tile device-tile-flippable" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back"><button class="device-mobile-close" type="button" aria-label="${escapeHtml(messages.closeDetails)}">×</button><div class="diagnostic-panel"><img src="assets/icons/troubleshoot.svg" alt=""><strong>${escapeHtml(messages.diagnosticOnly)}</strong><p>${escapeHtml(messages.diagnosticDescription)}</p></div></div></div></article>`;
             }
             const controls = device.preferences
               .map((key) => preferenceControl(device, key, preference, messages))
               .join('');
             const disabledClass = rank === 1 ? ' device-tile-disabled' : '';
-            return `<article class="device-tile device-tile-flippable${disabledClass}" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back device-card-settings"><div class="preference-panel"><div class="preference-grid">${controls}</div></div></div></div></article>`;
+            return `<article class="device-tile device-tile-flippable${disabledClass}" data-category="${category}" data-rank="${rank}"><div class="device-card-inner"><div class="device-card-face device-card-front"><button class="device-summary device-flip-control" type="button" aria-expanded="false">${tile}</button></div><div class="device-card-face device-card-back device-card-settings"><button class="device-mobile-close" type="button" aria-label="${escapeHtml(messages.closeDetails)}">×</button><div class="preference-panel"><div class="preference-grid">${controls}</div></div></div></div></article>`;
           })
           .join('');
         const categoryKey = `category${category[0].toUpperCase()}${category.slice(1)}`;
@@ -125,9 +125,10 @@
   function bindPreferences(elements, getConfig, saveConfig, getMessages) {
     elements.groups.addEventListener('click', (event) => {
       const front = event.target.closest?.('.device-flip-control');
+      const close = event.target.closest?.('.device-mobile-close');
       const back = event.target.closest?.('.device-card-back');
-      if (!front && (!back || event.target.closest('input, select, option, label, button, a'))) return;
-      const tile = (front ?? back).closest('.device-tile-flippable');
+      if (!front && !close && (!back || event.target.closest('input, select, option, label, button, a'))) return;
+      const tile = (front ?? close ?? back).closest('.device-tile-flippable');
       const flipped = Boolean(front);
       tile.classList.toggle('device-tile-flipped', flipped);
       tile.querySelector('.device-flip-control').setAttribute('aria-expanded', String(flipped));
