@@ -271,7 +271,7 @@ function reviewedRows(): CoverageRow[] {
 
 export const SDK_HAP_COVERAGE_MATRIX: SdkHapCoverageMatrix = {
   version: 1,
-  sdkContract: '@mega-yfue/eufy-sdk@0.1.0-beta.11',
+  sdkContract: '@mega-yfue/eufy-sdk@0.1.0-beta.14',
   hapContract: 'Homebridge 2 HAP definitions',
   rows: reviewedRows(),
 };
