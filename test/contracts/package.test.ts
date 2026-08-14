@@ -374,7 +374,6 @@ describe('packed plugin', () => {
         'categoryLife',
         'categorySecurity',
         'closeDetails',
-        'controllable',
         'dashboardAuthenticationRequiredBadge',
         'dashboardAuthenticationRequiredSummary',
         'dashboardAuthenticationRequiredTitle',

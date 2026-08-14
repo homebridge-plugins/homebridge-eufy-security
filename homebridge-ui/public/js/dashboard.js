@@ -73,9 +73,6 @@
               snapshotMode: preferences[device.serial]?.snapshotMode ?? 'Refresh',
             };
             const badges = [
-              device.controllable && preference.represented
-                ? { icon: 'bolt', label: messages.controllable }
-                : undefined,
               device.diagnosticOnly ? { icon: 'troubleshoot', label: messages.diagnosticOnly } : undefined,
             ].filter(Boolean);
             const artwork = device.artwork

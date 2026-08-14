@@ -18,7 +18,6 @@
   "categoryLife": "Life",
   "categorySecurity": "Security",
   "closeDetails": "Close device details",
-  "controllable": "Controllable",
   "dashboardAuthenticationRequiredBadge": "Sign in",
   "dashboardAuthenticationRequiredSummary": "The saved account needs authentication before devices can reconnect.",
   "dashboardAuthenticationRequiredTitle": "Authentication required",
