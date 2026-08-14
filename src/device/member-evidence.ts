@@ -44,7 +44,8 @@ export function indexDeviceMemberEvidence(manifest: DeviceManifest): ReadonlyMap
         default:
           throw new TypeError(`device manifest contains an unsupported action form: ${String(action.form)}`);
       }
-      const id = `${detail.capability}.${action.name}.${kind}`;
+      const member = kind === 'persistent-operation' ? (action.reflects ?? action.name) : action.name;
+      const id = `${detail.capability}.${member}.${kind}`;
       addEvidence(evidence, { id, kind });
     }
     for (const event of detail.events) {

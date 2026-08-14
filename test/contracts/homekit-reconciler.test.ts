@@ -124,8 +124,8 @@ function smartLightManifest(serial: string): DeviceManifest {
           { accessor: 'brightness', property: 'synthetic_light_brightness', type: 'number', writable: true },
         ],
         actions: [
-          { name: 'power', form: 'stateful' },
-          { name: 'brightness', form: 'stateful' },
+          { name: 'set', form: 'stateful', reflects: 'power' },
+          { name: 'setBrightness', form: 'stateful', reflects: 'brightness' },
         ],
         undescribedActions: [],
         events: ['smartLightState'],
