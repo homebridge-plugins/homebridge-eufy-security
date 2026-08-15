@@ -135,6 +135,14 @@ function smartLightManifest(serial: string): DeviceManifest {
   };
 }
 
+function contactSmartLightManifest(serial: string): DeviceManifest {
+  const manifest = smartLightManifest(serial);
+  const contact = contactManifest(serial);
+  manifest.capabilities.push(...contact.capabilities);
+  manifest.details.push(...contact.details);
+  return manifest;
+}
+
 function eventManifest(
   serial: string,
   capability: 'motion' | 'person_detection' | 'doorbell',
@@ -202,6 +210,13 @@ function smartLightDevice(power = false, brightness = 50): Device {
       setColor: vi.fn(async () => undefined),
     }),
   } as unknown as Device;
+}
+
+function contactSmartLightDevice(open = false, power = false, brightness = 50): Device {
+  return {
+    ...contactDevice(open),
+    ...smartLightDevice(power, brightness),
+  } as Device;
 }
 
 class RegistrySource implements HomeKitRegistrySource {
@@ -506,6 +521,44 @@ describe('HomeKit registry reconciliation', () => {
     expect(recording.unregisterPlatformAccessories).toHaveBeenCalledWith([accessory]);
   });
 
+  it('withdraws and recreates only the affected service while another primary member remains', () => {
+    const serial = 'synthetic-contact-light';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn()).start();
+
+    source.publish(
+      registryView(1, new Map([[serial, contactSmartLightDevice()]]), snapshot(contactSmartLightManifest(serial))),
+    );
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const contact = accessory.getServiceById(Service.ContactSensor, 'contact.sensor')!;
+    const light = accessory.getServiceById(Service.Lightbulb, 'smart-light.lightbulb')!;
+
+    source.publish(
+      registryView(2, new Map([[serial, smartLightDevice()]]), snapshot(contactSmartLightManifest(serial))),
+    );
+
+    expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).toBe(contact);
+    expect(accessory.getServiceById(Service.Lightbulb, 'smart-light.lightbulb')).toBe(light);
+    expect(recording.unregisterPlatformAccessories).not.toHaveBeenCalled();
+
+    source.publish(registryView(3, new Map([[serial, smartLightDevice()]]), snapshot(smartLightManifest(serial))));
+
+    expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).toBeUndefined();
+    expect(accessory.getServiceById(Service.Lightbulb, 'smart-light.lightbulb')).toBe(light);
+    expect(recording.unregisterPlatformAccessories).not.toHaveBeenCalled();
+
+    source.publish(
+      registryView(4, new Map([[serial, contactSmartLightDevice(true)]]), snapshot(contactSmartLightManifest(serial))),
+    );
+
+    expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).toBeDefined();
+    expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).not.toBe(contact);
+    expect(accessory.getServiceById(Service.Lightbulb, 'smart-light.lightbulb')).toBe(light);
+    expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+    expect(recording.unregisterPlatformAccessories).not.toHaveBeenCalled();
+  });
+
   it('keeps devices without primary-purpose members dashboard-only with redacted diagnostics', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
@@ -691,7 +744,11 @@ describe('HomeKit registry reconciliation', () => {
     reconciler.start();
     source.publishEvent({ eventName: 'contactState', deviceSn: serial, open: true });
 
-    expect(state.value).toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
+    const reboundState = accessory
+      .getServiceById(Service.ContactSensor, 'contact.sensor')!
+      .getCharacteristic(Characteristic.ContactSensorState);
+    expect(reboundState).not.toBe(state);
+    expect(reboundState.value).toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED);
   });
 
   it.each([

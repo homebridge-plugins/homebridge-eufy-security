@@ -167,7 +167,7 @@ export class HomeKitReconciler {
       const existing = this.accessories.get(uuid);
       const accessory = existing ?? this.store.createAccessory(manifest.name, uuid);
       const handles = new Map<string, AttachedAdapter>();
-      const attach = (key: string, adapter: (typeof admittedAdapters)[number][1]): boolean => {
+      const attachOrRetain = (key: string, adapter: (typeof admittedAdapters)[number][1]): boolean => {
         const handle = adapter.attach({
           device,
           evidence,
@@ -179,15 +179,20 @@ export class HomeKitReconciler {
         });
         if (handle) {
           handles.set(key, handle);
+        } else {
+          const previous = previousHandles?.get(key);
+          if (previous) {
+            handles.set(key, previous);
+          }
         }
-        return handle !== undefined;
+        return handles.has(key);
       };
-      let primaryAttached = false;
+      let primaryAvailable = false;
       for (const [key, adapter] of admittedPrimaryAdapters) {
-        primaryAttached = attach(key, adapter) || primaryAttached;
+        primaryAvailable = attachOrRetain(key, adapter) || primaryAvailable;
       }
-      if (!primaryAttached) {
-        this.detachHandles(previousHandles);
+      if (!primaryAvailable) {
+        this.detachReplacedHandles(previousHandles, handles);
         this.attachedAdapters.set(serial, handles);
         this.setRepresentationDiagnostic(serial, 'primary-adapter-unavailable');
         continue;
@@ -197,10 +202,10 @@ export class HomeKitReconciler {
       (accessory.context as AccessoryContext).homebridgeEufy = { version: 1, serial };
       for (const [key, adapter] of admittedAdapters) {
         if (adapter.role === 'supplemental') {
-          attach(key, adapter);
+          attachOrRetain(key, adapter);
         }
       }
-      this.detachHandles(previousHandles);
+      this.detachReplacedHandles(previousHandles, handles);
       this.attachedAdapters.set(serial, handles);
       this.accessories.set(uuid, accessory);
       nextRepresented.add(serial);
@@ -274,6 +279,20 @@ export class HomeKitReconciler {
     }
     for (const handle of handles.values()) {
       handle.detach?.();
+    }
+  }
+
+  private detachReplacedHandles(
+    previous: ReadonlyMap<string, AttachedAdapter> | undefined,
+    next: ReadonlyMap<string, AttachedAdapter>,
+  ): void {
+    if (!previous) {
+      return;
+    }
+    for (const [key, handle] of previous) {
+      if (next.get(key) !== handle) {
+        handle.detach?.();
+      }
     }
   }
 

@@ -9,6 +9,7 @@ import type {
 } from '../adapter.js';
 
 export const CONTACT_ADAPTER_KEY = 'contact.sensor';
+const CONTACT_OWNERS = new WeakMap<object, symbol>();
 
 const CONTACT_OPEN_REQUIREMENT = {
   id: 'contact.open.read',
@@ -79,6 +80,8 @@ function attachContact(context: AdapterAttachmentContext): AttachedAdapter | und
   const service =
     accessory.getServiceById(hap.Service.ContactSensor, CONTACT_ADAPTER_KEY) ??
     accessory.addService(hap.Service.ContactSensor, accessory.displayName, CONTACT_ADAPTER_KEY);
+  const owner = Symbol('contact-owner');
+  CONTACT_OWNERS.set(service, owner);
   let observedOpen: boolean | undefined;
   let eventObservationInvalid = false;
   let faulted = true;
@@ -170,6 +173,12 @@ function attachContact(context: AdapterAttachmentContext): AttachedAdapter | und
       service.updateCharacteristic(hap.Characteristic.ContactSensorState, hapValue(event.open));
       context.observed('invalid-contact-observation');
       return { event: 'contact-state', observation: 'valid' };
+    },
+    detach(): void {
+      if (CONTACT_OWNERS.get(service) === owner) {
+        CONTACT_OWNERS.delete(service);
+        accessory.removeService(service);
+      }
     },
   };
 }
