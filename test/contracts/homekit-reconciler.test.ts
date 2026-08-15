@@ -173,7 +173,7 @@ function snapshot(...devices: DeviceManifest[]): CompleteDeviceSnapshot {
   return { version: 1, complete: true, devices };
 }
 
-function contactDevice(open: boolean, infoName = 'Synthetic contact tracer'): Device {
+function contactDevice(open: unknown, infoName = 'Synthetic contact tracer'): Device {
   return {
     contact: () => ({ open }),
     info: () => ({
@@ -432,7 +432,6 @@ describe('HomeKit registry reconciliation', () => {
       code: 'recognized-device-not-represented',
       active: true,
       reason: 'no-primary-purpose-member',
-      affectedDeviceCount: 1,
     });
   });
 
@@ -581,7 +580,6 @@ describe('HomeKit registry reconciliation', () => {
         code: 'recognized-device-not-represented',
         active: true,
         reason: 'no-primary-purpose-member',
-        affectedDeviceCount: 1,
       },
     ]);
     expect(JSON.stringify(diagnostics)).not.toContain(serial);
@@ -598,7 +596,7 @@ describe('HomeKit registry reconciliation', () => {
         snapshot(identityOnlyManifest(serial), secondManifest),
       ),
     );
-    expect(diagnostics.at(-1)).toMatchObject({ active: true, affectedDeviceCount: 2 });
+    expect(diagnostics.at(-1)).toMatchObject({ active: true });
 
     source.publish(
       registryView(
@@ -607,16 +605,45 @@ describe('HomeKit registry reconciliation', () => {
         snapshot(secondManifest),
       ),
     );
-    expect(diagnostics.at(-1)).toMatchObject({ active: true, affectedDeviceCount: 1 });
+    expect(diagnostics.at(-1)).toMatchObject({ active: true });
 
     source.publish(registryView(4, new Map(), snapshot()));
     expect(diagnostics.at(-1)).toEqual({
       code: 'recognized-device-not-represented',
       active: false,
       reason: 'recovered',
-      affectedDeviceCount: 0,
     });
     expect(JSON.stringify(diagnostics)).not.toContain(secondSerial);
+  });
+
+  it('selects a representation reason independently from registry order', () => {
+    const evaluate = (order: readonly ['identity', 'unavailable'] | readonly ['unavailable', 'identity']): string => {
+      const source = new RegistrySource();
+      const recording = recordingApi();
+      const diagnostics: HomeKitDiagnostic[] = [];
+      const identitySerial = 'synthetic-identity-only';
+      const unavailableSerial = 'synthetic-unavailable-primary';
+      const devices = {
+        identity: [
+          identitySerial,
+          { info: () => ({ manufacturer: 'eufy' }) } as unknown as Device,
+          identityOnlyManifest(identitySerial),
+        ] as const,
+        unavailable: [unavailableSerial, {} as Device, contactManifest(unavailableSerial)] as const,
+      };
+      new HomeKitReconciler(source, recording.api, (diagnostic) => diagnostics.push(diagnostic)).start();
+      source.publish(
+        registryView(
+          1,
+          new Map(order.map((key) => [devices[key][0], devices[key][1]])),
+          snapshot(...order.map((key) => devices[key][2])),
+        ),
+      );
+      return diagnostics.filter(({ code }) => code === 'recognized-device-not-represented').at(-1)!.reason;
+    };
+
+    expect(evaluate(['identity', 'unavailable'])).toBe('no-primary-purpose-member');
+    expect(evaluate(['unavailable', 'identity'])).toBe('no-primary-purpose-member');
   });
 
   it.each([
@@ -688,7 +715,6 @@ describe('HomeKit registry reconciliation', () => {
     expect(diagnostics.at(-1)).toMatchObject({
       code: 'invalid-contact-observation',
       active: true,
-      affectedDeviceCount: 1,
     });
 
     const diagnosticCount = diagnostics.length;
@@ -700,7 +726,54 @@ describe('HomeKit registry reconciliation', () => {
       code: 'invalid-contact-observation',
       active: false,
       reason: 'recovered',
-      affectedDeviceCount: 0,
+    });
+  });
+
+  it('selects an aggregate adapter reason independently from report order', async () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const diagnostics: Array<{ diagnostic: HomeKitDiagnostic; affectedDeviceIds: readonly string[] }> = [];
+    const malformedSerial = 'synthetic-malformed-contact';
+    const missingSerial = 'synthetic-missing-contact';
+    new HomeKitReconciler(source, recording.api, (diagnostic, affectedDeviceIds) =>
+      diagnostics.push({ diagnostic, affectedDeviceIds }),
+    ).start();
+    source.publish(
+      registryView(
+        1,
+        new Map([
+          [malformedSerial, contactDevice(false, 'Malformed contact')],
+          [missingSerial, contactDevice(undefined, 'Missing contact')],
+        ]),
+        snapshot(contactManifest(malformedSerial), contactManifest(missingSerial)),
+      ),
+    );
+
+    source.publishEvent({
+      eventName: 'contactState',
+      deviceSn: malformedSerial,
+      open: 'malformed',
+    } as unknown as AnyDeviceEvent);
+    const accessories = recording.registerPlatformAccessories.mock.calls.flatMap(
+      ([registered]) => registered as PlatformAccessory[],
+    );
+    const missingAccessory = accessories[1]!;
+    await expect(
+      missingAccessory
+        .getServiceById(Service.ContactSensor, 'contact.sensor')!
+        .getCharacteristic(Characteristic.ContactSensorState)
+        .handleGetRequest(),
+    ).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+
+    expect(diagnostics.at(-1)).toMatchObject({
+      diagnostic: { code: 'invalid-contact-observation', reason: 'malformed', active: true },
+      affectedDeviceIds: expect.arrayContaining([malformedSerial, missingSerial]),
+    });
+
+    source.publishEvent({ eventName: 'contactState', deviceSn: malformedSerial, open: false });
+    expect(diagnostics.at(-1)).toMatchObject({
+      diagnostic: { code: 'invalid-contact-observation', reason: 'missing', active: true },
+      affectedDeviceIds: [missingSerial],
     });
   });
 
@@ -713,7 +786,7 @@ describe('HomeKit registry reconciliation', () => {
     source.publish(registryView(1, new Map([[serial, {} as Device]]), snapshot(contactManifest(serial))));
 
     expect(diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'contact-capability-unavailable', active: true, affectedDeviceCount: 1 }),
+      expect.objectContaining({ code: 'contact-capability-unavailable', active: true }),
     );
     const withdrawnManifest = identityOnlyManifest(serial);
     source.publish(registryView(2, new Map([[serial, {} as Device]]), snapshot(withdrawnManifest)));
@@ -723,7 +796,6 @@ describe('HomeKit registry reconciliation', () => {
         code: 'contact-capability-unavailable',
         active: false,
         reason: 'recovered',
-        affectedDeviceCount: 0,
       }),
     );
   });

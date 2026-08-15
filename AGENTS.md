@@ -39,13 +39,14 @@ HomeKit representation, configuration, UI, diagnostics, media adaptation, and pr
 Internal dependencies follow a closed graph enforced by the contract suite. Adding a top-level module
 or dependency edge requires updating this section and the architecture contract deliberately.
 
-- `settings.ts` has no internal dependency. `storage.ts` owns the `homebridge-eufy` persistence root,
-  imports only account-owner liveness, and atomically migrates the pre-rename V5 path.
+- `settings.ts` and `diagnostics.ts` have no internal dependencies. `diagnostics.ts` owns bounded,
+  allowlisted normal output and support-case accessory aliases. `storage.ts` owns the
+  `homebridge-eufy` persistence root, imports only account-owner liveness, and atomically migrates the pre-rename V5 path.
   `configuration.ts` may import `settings.ts`.
 - `device/` owns complete discovery and snapshot vocabulary and has no dependency on another domain.
 - `account/` may import `configuration.ts` and `device/`. It never imports runtime, UI, HomeKit, or
   media.
-- `runtime/` may import account, configuration, and device. It never imports UI, HomeKit, or media.
+- `runtime/` may import account, configuration, diagnostics, and device. It never imports UI, HomeKit, or media.
 - `media/` may import configuration and device. It owns FFmpeg processes, media sessions, snapshots,
   and HKSV adaptation without importing runtime or HomeKit implementations.
 - `homekit/` may import device. It defines the media interfaces it consumes and never imports account,

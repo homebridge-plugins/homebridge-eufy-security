@@ -2,11 +2,12 @@ import type { API, DynamicPlatformPlugin, HAP, PlatformAccessory, PlatformConfig
 
 import { parseConfig } from './configuration.js';
 import {
-  HomeKitReconciler,
-  type HomeKitAccessoryStore,
-  type HomeKitDiagnostic,
-  type HomeKitEventTrace,
-} from './homekit/reconciler.js';
+  DiagnosticConditions,
+  reportDiscardedV4Settings,
+  reportHomeKitEvent,
+  type PlatformLogger,
+} from './diagnostics.js';
+import { HomeKitReconciler, type HomeKitAccessoryStore } from './homekit/reconciler.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -18,13 +19,6 @@ export type PlatformSignal = 'SIGHUP' | 'SIGINT' | 'SIGTERM';
 export interface PlatformSignalTarget {
   on(event: PlatformSignal, listener: () => void): unknown;
   off(event: PlatformSignal, listener: () => void): unknown;
-}
-
-export interface PlatformLogger {
-  debug?(message: string): void;
-  error(message: string): void;
-  info(message: string): void;
-  warn(message: string): void;
 }
 
 export interface PlatformApi {
@@ -53,11 +47,13 @@ export function createEufyPlatform(
 
     constructor(log: PlatformLogger, config: PlatformConfig, api: PlatformApi) {
       const configuredConfig = parseConfig(config);
+      const diagnostics = new DiagnosticConditions(log);
       if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
-        log.warn('Discarded V4 settings need acknowledgement in the Homebridge Eufy dashboard');
+        reportDiscardedV4Settings(log);
       }
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       this.runtime = new RuntimeOwner(log, configuredConfig, clientFactory, { storageRoot, shutdownTimeoutMs });
+      this.runtime.subscribeState((state) => diagnostics.reportRuntimeState(state));
       const signals: PlatformSignal[] = ['SIGHUP', 'SIGINT', 'SIGTERM'];
       let listeningForSignals = Boolean(signalTarget);
       const stop = (): void => {
@@ -79,7 +75,7 @@ export function createEufyPlatform(
           this.reconciler ??= new HomeKitReconciler(
             this.runtime,
             accessoryStore,
-            (diagnostic) => reportHomeKitDiagnostic(log, diagnostic),
+            (diagnostic, affectedDeviceIds = []) => diagnostics.reportHomeKit(diagnostic, affectedDeviceIds),
             this.cachedAccessories,
             (trace) => reportHomeKitEvent(log, trace),
             configuredConfig.entityPreferences,
@@ -115,19 +111,6 @@ function createAccessoryStore(api: PlatformApi): HomeKitAccessoryStore | undefin
     update: (accessories) => api.updatePlatformAccessories!(accessories),
     unregister: (accessories) => api.unregisterPlatformAccessories!(PLUGIN_NAME, PLATFORM_NAME, accessories),
   };
-}
-
-function reportHomeKitDiagnostic(log: PlatformLogger, diagnostic: HomeKitDiagnostic): void {
-  const message = JSON.stringify({ scope: 'homekit', ...diagnostic });
-  if (diagnostic.active) {
-    log.warn(message);
-  } else {
-    log.info(message);
-  }
-}
-
-function reportHomeKitEvent(log: PlatformLogger, trace: HomeKitEventTrace): void {
-  log.debug?.(JSON.stringify({ scope: 'homekit', ...trace }));
 }
 
 export const EufyPlatform = createEufyPlatform(createPersistedSdkClient, 10_000, process);

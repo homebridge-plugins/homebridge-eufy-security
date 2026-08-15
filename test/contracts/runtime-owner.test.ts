@@ -15,14 +15,10 @@ import { AccountOwnership } from '../../src/account/ownership.js';
 import { AccountSessionPersistence } from '../../src/account/persistence.js';
 import { parseConfig } from '../../src/configuration.js';
 import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
+import { createSdkLogger } from '../../src/diagnostics.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
 import { RuntimeOwner } from '../../src/runtime/owner.js';
-import {
-  createSdkLogger,
-  PersistedSdkClient,
-  type SdkClient,
-  type SdkStartResult,
-} from '../../src/runtime/sdk-client.js';
+import { PersistedSdkClient, type SdkClient, type SdkStartResult } from '../../src/runtime/sdk-client.js';
 import { RuntimeTracker } from '../../src/runtime/tracker.js';
 
 const roots: string[] = [];
@@ -133,7 +129,7 @@ describe('persisted runtime owner', () => {
     expect(debug).toHaveBeenCalledTimes(2);
     expect(debug.mock.calls[0]?.[0]).toContain('"subsystem":"mega"');
     expect(debug.mock.calls[0]?.[0]).toContain('"errorType":"Error"');
-    expect(debug.mock.calls[0]?.[0]).toContain('"keyCount":1');
+    expect(debug.mock.calls[0]?.[0]).toContain('"type":"object"');
     expect(debug.mock.calls[0]?.[0]).not.toContain('T8000');
     expect(debug.mock.calls[0]?.[0]).not.toContain('192.0.2.1');
     expect(debug.mock.calls[0]?.[0]).not.toContain('account@example.invalid');
@@ -293,7 +289,9 @@ describe('persisted runtime owner', () => {
     });
     expect(states).toEqual(['acquiring-ownership', 'starting', 'ready']);
     expect(views).toEqual([{ version: 1, serials: ['synthetic-first'], state: 'starting' }]);
-    expect(warn).toHaveBeenCalledWith('Runtime registry subscriber failed');
+    expect(warn.mock.calls.map(([message]) => JSON.parse(message))).toContainEqual(
+      expect.objectContaining({ scope: 'runtime-notice', code: 'registry-subscriber-failed' }),
+    );
 
     reportEvent?.({ eventName: 'contactState', deviceSn: 'synthetic-first', open: true });
     expect(events).toEqual(['contactState:synthetic-first']);
@@ -514,9 +512,12 @@ describe('persisted runtime owner', () => {
       new Platform({ error, info: vi.fn(), warn: vi.fn() }, { platform: 'HomebridgeEufy' }, events.api(directory));
       events.listeners.didFinishLaunching?.();
 
-      await vi.waitFor(() =>
-        expect(error).toHaveBeenCalledWith('Eufy SDK startup blocked by another live account owner'),
-      );
+      await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
+      expect(JSON.parse(error.mock.calls[0]![0])).toMatchObject({
+        scope: 'diagnostic-condition',
+        code: 'runtime-owner-conflict',
+        active: true,
+      });
       await expect(tracker.read()).resolves.toMatchObject({ state: 'ready' });
       expect(factory).not.toHaveBeenCalled();
       await expect(ownership.acquire('runtime@example.invalid', 'temporary-authentication')).resolves.toMatchObject({
@@ -934,9 +935,12 @@ describe('persisted runtime owner', () => {
     expect(release).toHaveBeenCalledOnce();
     expect(runtime.currentState()).toBe('failed');
     expect(statusPublisher.update).toHaveBeenLastCalledWith('failed');
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      'Eufy SDK shutdown exceeded 1000ms; Homebridge shutdown will continue',
-    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
+      scope: 'runtime-notice',
+      code: 'shutdown-timeout',
+      durationMs: 1_000,
+    });
     await runtime.stop();
     expect(client.stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -992,7 +996,7 @@ describe('persisted runtime owner', () => {
       snapshot: previousSnapshot,
     });
     expect(statusPublisher.update).toHaveBeenLastCalledWith('failed');
-    expect(error).toHaveBeenCalledExactlyOnceWith('Eufy SDK startup failed: synthetic owned startup failure');
+    expect(error).not.toHaveBeenCalled();
     await runtime.stop();
     expect(client.stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
 import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
+import type { RuntimeState } from '../diagnostics.js';
 
 const MAX_TRACKER_BYTES = 1024 * 1024;
 const ACTIVE_RUNTIME_STATES = new Set<RuntimeState>([
@@ -29,17 +30,6 @@ const RUNTIME_STATUSES = new Set<RuntimeStatus>([
   'failed',
   'stopped',
 ]);
-
-export type RuntimeState =
-  | 'stopped'
-  | 'acquiring-ownership'
-  | 'starting'
-  | 'ready'
-  | 'degraded'
-  | 'authentication-required'
-  | 'owner-conflict'
-  | 'failed'
-  | 'stopping';
 
 export interface FreshRuntimeEvidence {
   state: RuntimeState;

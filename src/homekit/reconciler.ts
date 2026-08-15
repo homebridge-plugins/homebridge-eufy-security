@@ -40,10 +40,8 @@ export interface RepresentationDiagnostic {
   reason: 'no-primary-purpose-member' | 'primary-adapter-unavailable' | 'recovered';
 }
 
-export type HomeKitDiagnostic = (RepresentationDiagnostic | AdapterDiagnostic) & {
-  affectedDeviceCount: number;
-};
-export type HomeKitDiagnosticSink = (diagnostic: HomeKitDiagnostic) => void;
+export type HomeKitDiagnostic = RepresentationDiagnostic | AdapterDiagnostic;
+export type HomeKitDiagnosticSink = (diagnostic: HomeKitDiagnostic, affectedDeviceIds: readonly string[]) => void;
 
 /** Redacted debug evidence that an SDK event reached one self-hosted adapter. */
 export interface HomeKitEventTrace {
@@ -304,25 +302,30 @@ export class HomeKitReconciler {
       return;
     }
     this.representationDiagnostics.set(serial, reason);
-    this.diagnose({
-      code: 'recognized-device-not-represented',
-      active: true,
-      reason,
-      affectedDeviceCount: this.representationDiagnostics.size,
-    });
+    const aggregateReason = [...this.representationDiagnostics.values()].sort()[0]!;
+    this.diagnose(
+      {
+        code: 'recognized-device-not-represented',
+        active: true,
+        reason: aggregateReason,
+      },
+      [...this.representationDiagnostics.keys()],
+    );
   }
 
   private clearRepresentationDiagnostic(serial: string): void {
     if (!this.representationDiagnostics.delete(serial)) {
       return;
     }
-    const remainingReason = this.representationDiagnostics.values().next().value;
-    this.diagnose({
-      code: 'recognized-device-not-represented',
-      active: remainingReason !== undefined,
-      reason: remainingReason ?? 'recovered',
-      affectedDeviceCount: this.representationDiagnostics.size,
-    });
+    const remainingReason = [...this.representationDiagnostics.values()].sort()[0];
+    this.diagnose(
+      {
+        code: 'recognized-device-not-represented',
+        active: remainingReason !== undefined,
+        reason: remainingReason ?? 'recovered',
+      },
+      [...this.representationDiagnostics.keys()],
+    );
   }
 
   private setAdapterDiagnostic(serial: string, adapter: string, diagnostic: AdapterDiagnostic): void {
@@ -332,23 +335,41 @@ export class HomeKitReconciler {
         return;
       }
       this.adapterDiagnostics.set(key, { serial, adapter, diagnostic });
-      this.diagnose({ ...diagnostic, affectedDeviceCount: this.adapterDiagnosticCount(diagnostic.code) });
+      this.publishAdapterDiagnostic(diagnostic);
       return;
     }
     if (this.adapterDiagnostics.delete(key)) {
-      const remaining = [...this.adapterDiagnostics.values()]
-        .map((entry) => entry.diagnostic)
-        .find(({ code }) => code === diagnostic.code);
-      this.diagnose({
-        ...(remaining ?? diagnostic),
-        active: remaining !== undefined,
-        affectedDeviceCount: this.adapterDiagnosticCount(diagnostic.code),
-      });
+      this.publishAdapterDiagnostic(diagnostic);
     }
   }
 
-  private adapterDiagnosticCount(code: string): number {
-    return [...this.adapterDiagnostics.values()].filter(({ diagnostic }) => diagnostic.code === code).length;
+  private adapterDiagnosticDeviceIds(condition: AdapterDiagnostic): string[] {
+    return [
+      ...new Set(
+        [...this.adapterDiagnostics.values()]
+          .filter(({ diagnostic }) => this.sameAdapterCondition(diagnostic, condition))
+          .map(({ serial }) => serial),
+      ),
+    ];
+  }
+
+  private sameAdapterCondition(left: AdapterDiagnostic, right: AdapterDiagnostic): boolean {
+    return left.code === right.code && left.capability === right.capability && left.member === right.member;
+  }
+
+  private publishAdapterDiagnostic(changed: AdapterDiagnostic): void {
+    const remaining = [...this.adapterDiagnostics.values()]
+      .map(({ diagnostic }) => diagnostic)
+      .filter((diagnostic) => this.sameAdapterCondition(diagnostic, changed))
+      .sort((left, right) => left.reason.localeCompare(right.reason))[0];
+    const affectedDeviceIds = this.adapterDiagnosticDeviceIds(changed);
+    this.diagnose(
+      {
+        ...(remaining ?? changed),
+        active: remaining !== undefined,
+      },
+      affectedDeviceIds,
+    );
   }
 
   private clearAdapterDiagnostics(serial: string, onlyCode?: string, onlyAdapter?: string): void {
@@ -361,18 +382,14 @@ export class HomeKitReconciler {
         (onlyAdapter === undefined || entry.adapter === onlyAdapter)
       ) {
         this.adapterDiagnostics.delete(key);
-        removed.set(entry.diagnostic.code, entry.diagnostic);
+        removed.set(
+          `${entry.diagnostic.code}:${entry.diagnostic.capability}:${entry.diagnostic.member}`,
+          entry.diagnostic,
+        );
       }
     }
-    for (const [code, removedDiagnostic] of removed) {
-      const remaining = [...this.adapterDiagnostics.values()]
-        .map((entry) => entry.diagnostic)
-        .find((diagnostic) => diagnostic.code === code);
-      this.diagnose({
-        ...(remaining ?? { ...removedDiagnostic, reason: 'recovered', active: false }),
-        active: remaining !== undefined,
-        affectedDeviceCount: this.adapterDiagnosticCount(code),
-      });
+    for (const removedDiagnostic of removed.values()) {
+      this.publishAdapterDiagnostic({ ...removedDiagnostic, reason: 'recovered', active: false });
     }
   }
 }

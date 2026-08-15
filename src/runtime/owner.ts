@@ -5,16 +5,12 @@ import type { AnyDeviceEvent, Device, FcmStore, SessionStore } from '@mega-yfue/
 import { AccountOwnership, type AccountOwnerEvidence, type AccountReleaseResult } from '../account/ownership.js';
 import { AccountSessionPersistence } from '../account/persistence.js';
 import type { EufyConfig } from '../configuration.js';
+import { reportRuntimeNotice, type PlatformLogger, type RuntimeState } from '../diagnostics.js';
 import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 import type { SdkClient, SdkClientFactory, SdkStartResult } from './sdk-client.js';
-import { RuntimeTracker, type RuntimeState, type RuntimeTrackerUpdate } from './tracker.js';
+import { RuntimeTracker, type RuntimeTrackerUpdate } from './tracker.js';
 
-export interface RuntimeLogger {
-  debug?(message: string): void;
-  info?(message: string): void;
-  error(message: string): void;
-  warn(message: string): void;
-}
+export type RuntimeLogger = Pick<PlatformLogger, 'error' | 'warn'> & Partial<Pick<PlatformLogger, 'debug' | 'info'>>;
 
 export interface RuntimeOwnership {
   acquire(
@@ -204,7 +200,6 @@ export class RuntimeOwner {
         this.pendingOwnership = undefined;
         if (ownership.state === 'owner-conflict') {
           this.transitionTo('owner-conflict');
-          this.log.error('Eufy SDK startup blocked by another live account owner');
           return;
         }
         this.runtimeLease = ownership.lease;
@@ -243,8 +238,7 @@ export class RuntimeOwner {
       this.client ??= this.clientFactory(config, active ?? undefined, this.log);
       await this.client.start();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.error(`Eufy SDK startup failed: ${message}`);
+      void error;
       await this.beginCleanup('failed');
     }
   }
@@ -269,8 +263,8 @@ export class RuntimeOwner {
 
   private createStatusPublisher(): RuntimeStatusPublisher {
     return new RuntimeTracker(join(this.storageRoot!, 'tracker.json'), 90_000, Date.now, (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn(`Runtime status publication failed: ${message}`);
+      void error;
+      reportRuntimeNotice(this.log, 'status-publication-failed');
     });
   }
 
@@ -354,12 +348,12 @@ export class RuntimeOwner {
         return false;
       }
       if (!finalized) {
-        this.log.error('Eufy SDK ownership release did not finalize runtime status');
+        reportRuntimeNotice(this.log, 'ownership-release-not-finalized');
         return false;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.error(`Eufy SDK ownership release failed: ${message}`);
+      void error;
+      reportRuntimeNotice(this.log, 'ownership-release-failed');
       return false;
     }
     return true;
@@ -371,16 +365,15 @@ export class RuntimeOwner {
     try {
       await client?.stop();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.error(`Eufy SDK shutdown failed: ${message}`);
+      void error;
+      reportRuntimeNotice(this.log, 'shutdown-failed');
       return false;
     }
     return true;
   }
 
   private async failRuntime(error: unknown): Promise<void> {
-    const message = error instanceof Error ? error.message : String(error);
-    this.log.error(`Eufy SDK runtime failed: ${message}`);
+    void error;
     await this.beginCleanup('failed');
   }
 
@@ -414,7 +407,7 @@ export class RuntimeOwner {
     );
     const timedOut = clientStopped === 'timeout' || ownershipSettled === 'timeout' || leaseReleased === 'timeout';
     if (timedOut) {
-      this.log.warn(`Eufy SDK shutdown exceeded ${this.shutdownTimeoutMs}ms; Homebridge shutdown will continue`);
+      reportRuntimeNotice(this.log, 'shutdown-timeout', { durationMs: this.shutdownTimeoutMs });
     }
     if (leaseReleased === 'timeout') {
       publishedTerminalState = 'failed';
@@ -468,8 +461,8 @@ export class RuntimeOwner {
         return true;
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.error(`Eufy SDK ownership acquisition failed: ${message}`);
+        void error;
+        reportRuntimeNotice(this.log, 'ownership-acquisition-failed');
         return false;
       });
     const settled = await this.boundedCleanup(acquisition, deadline);
@@ -480,7 +473,7 @@ export class RuntimeOwner {
         }
         const released = await this.boundedCleanup(this.releaseRuntimeLease(), Date.now() + this.shutdownTimeoutMs);
         if (released !== true) {
-          this.log.warn('Eufy SDK ownership release remained incomplete after shutdown');
+          reportRuntimeNotice(this.log, 'ownership-release-incomplete');
         }
       });
     }
@@ -503,7 +496,7 @@ export class RuntimeOwner {
       try {
         listener(view);
       } catch {
-        this.log.warn('Runtime registry subscriber failed');
+        reportRuntimeNotice(this.log, 'registry-subscriber-failed');
       }
     }
   }
@@ -513,7 +506,7 @@ export class RuntimeOwner {
       try {
         listener(event);
       } catch {
-        this.log.warn('Runtime event subscriber failed');
+        reportRuntimeNotice(this.log, 'event-subscriber-failed');
       }
     }
   }
@@ -527,7 +520,7 @@ export class RuntimeOwner {
       try {
         listener(state);
       } catch {
-        this.log.warn('Runtime state subscriber failed');
+        reportRuntimeNotice(this.log, 'state-subscriber-failed');
       }
     }
   }

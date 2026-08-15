@@ -65,9 +65,11 @@ describe('platform lifecycle', () => {
       { on: vi.fn() },
     );
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      'Discarded V4 settings need acknowledgement in the Homebridge Eufy dashboard',
-    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
+      scope: 'configuration-notice',
+      code: 'discarded-v4-settings-unacknowledged',
+    });
 
     const acknowledgedWarn = vi.fn();
     new Platform(
@@ -257,9 +259,13 @@ describe('platform lifecycle', () => {
     );
     listeners.didFinishLaunching?.();
 
-    await vi.waitFor(() =>
-      expect(error).toHaveBeenCalledExactlyOnceWith('Eufy SDK startup failed: synthetic startup failure'),
-    );
+    await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
+    expect(JSON.parse(error.mock.calls[0]![0])).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'runtime-failed',
+      active: true,
+    });
+    expect(error.mock.calls[0]![0]).not.toContain('synthetic startup failure');
   });
 
   it('bounds shutdown when the SDK client does not stop', async () => {
@@ -288,9 +294,12 @@ describe('platform lifecycle', () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      'Eufy SDK shutdown exceeded 1000ms; Homebridge shutdown will continue',
-    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
+      scope: 'runtime-notice',
+      code: 'shutdown-timeout',
+      durationMs: 1_000,
+    });
     vi.useRealTimers();
   });
 
