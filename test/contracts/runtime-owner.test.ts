@@ -17,7 +17,12 @@ import { parseConfig } from '../../src/configuration.js';
 import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import { createEufyPlatform, type PlatformLifecycleEvent } from '../../src/platform.js';
 import { RuntimeOwner } from '../../src/runtime/owner.js';
-import { PersistedSdkClient, type SdkClient, type SdkStartResult } from '../../src/runtime/sdk-client.js';
+import {
+  createSdkLogger,
+  PersistedSdkClient,
+  type SdkClient,
+  type SdkStartResult,
+} from '../../src/runtime/sdk-client.js';
 import { RuntimeTracker } from '../../src/runtime/tracker.js';
 
 const roots: string[] = [];
@@ -113,6 +118,30 @@ afterEach(async () => {
 });
 
 describe('persisted runtime owner', () => {
+  it('routes SDK debug diagnostics through a redacted Homebridge logger', () => {
+    const debug = vi.fn();
+    const error = vi.fn();
+    const logger = createSdkLogger({ debug, info: vi.fn(), warn: vi.fn(), error })!;
+
+    logger.debug(
+      '[mega] device T8000P0000000000 at 192.0.2.1 belongs to account@example.invalid',
+      Object.assign(new Error('must-not-appear'), { name: 'SensitiveDeviceName' }),
+      { token: 'must-not-appear' },
+    );
+    logger.error('synthetic failure', 'must-not-appear');
+
+    expect(debug).toHaveBeenCalledTimes(2);
+    expect(debug.mock.calls[0]?.[0]).toContain('"subsystem":"mega"');
+    expect(debug.mock.calls[0]?.[0]).toContain('"errorType":"Error"');
+    expect(debug.mock.calls[0]?.[0]).toContain('"keyCount":1');
+    expect(debug.mock.calls[0]?.[0]).not.toContain('T8000');
+    expect(debug.mock.calls[0]?.[0]).not.toContain('192.0.2.1');
+    expect(debug.mock.calls[0]?.[0]).not.toContain('account@example.invalid');
+    expect(debug.mock.calls[0]?.[0]).not.toContain('must-not-appear');
+    expect(debug.mock.calls[0]?.[0]).not.toContain('SensitiveDeviceName');
+    expect(debug.mock.calls[1]?.[0]).toContain('"level":"error"');
+    expect(error).not.toHaveBeenCalled();
+  });
   it('owns startup, complete publication, and shutdown through one direct interface', async () => {
     const calls: string[] = [];
     const config = parseConfig({
@@ -337,6 +366,7 @@ describe('persisted runtime owner', () => {
     expect(factory).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ account: 'runtime@example.invalid', generation: active?.generation }),
+      expect.objectContaining({ error: expect.any(Function), info: expect.any(Function), warn: expect.any(Function) }),
     );
     expect(client.start).toHaveBeenCalledOnce();
     expect((await persistence.active())?.snapshot.load()).toEqual(nextSnapshot);

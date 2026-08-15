@@ -521,6 +521,8 @@ describe('packed plugin', () => {
         challengeForm: { hidden: true },
       });
       expect(englishUi.saves).toBe(1);
+      expect(englishUi.saveButtonEnables).toBe(2);
+      expect(englishUi.saveButtonDisables).toBe(1);
 
       const migrationFixture = JSON.parse(
         readFileSync(join(repository, 'test', 'fixtures', 'v4-migration.json'), 'utf8'),

@@ -157,7 +157,7 @@ async function saveAuthenticatedConfig() {
     await homebridge.savePluginConfig();
     pluginConfig = [pendingConfig];
     savedConfigSignature = configSignature(pluginConfig);
-    homebridge.disableSaveButton();
+    homebridge.enableSaveButton();
   } catch {
   } finally {
     passwordInput.value = '';

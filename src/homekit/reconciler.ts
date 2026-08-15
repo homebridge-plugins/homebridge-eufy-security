@@ -175,6 +175,7 @@ export class HomeKitReconciler {
           hap: this.store.hap,
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
+          persist: () => this.store.update([accessory]),
         });
         if (handle) {
           handles.set(key, handle);

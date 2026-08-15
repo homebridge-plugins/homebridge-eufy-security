@@ -21,6 +21,7 @@ describe('doorbell event adapter', () => {
       hap: HAP,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      persist: vi.fn(),
     })!;
     const event = target
       .getServiceById(Service.Doorbell, DOORBELL_ADAPTER_KEY)!

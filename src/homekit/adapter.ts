@@ -38,6 +38,7 @@ export interface AdapterAttachmentContext {
   readonly hap: HomeKitDefinitions;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;
+  persist(): void;
 }
 
 /** Successful attachment state, optionally retaining typed SDK event behavior. */

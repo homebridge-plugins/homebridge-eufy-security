@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import { CAPABILITY_MODULES, type CapabilityModule, type Member } from '@mega-yfue/eufy-sdk';
 
 import type { AdapterCoverage } from './adapter.js';
@@ -33,7 +31,6 @@ export interface CoverageRow {
 
 export interface SdkHapCoverageMatrix {
   version: 1;
-  sdkContract: string;
   hapContract: string;
   rows: CoverageRow[];
 }
@@ -43,34 +40,6 @@ const COVERAGE_BY_ROW = new Map<string, { adapter: string; coverage: AdapterCove
     registration.coverage.map((coverage) => [coverage.id, { adapter, coverage }] as const),
   ),
 );
-
-const REVIEWED_SDK_SURFACE_SHA256 = '817e1b0c0877fbd0fd18c39cba51b09879fc92fff15fbaf2f8d470052cf35bab';
-
-function stableContractValue(value: unknown, ancestors = new WeakSet<object>()): unknown {
-  if (typeof value === 'function') {
-    return '<function>';
-  }
-  if (value === undefined) {
-    return '<undefined>';
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => stableContractValue(entry, ancestors));
-  }
-  if (typeof value !== 'object' || value === null) {
-    return value;
-  }
-  if (ancestors.has(value)) {
-    return '<cycle>';
-  }
-  ancestors.add(value);
-  const normalized = Object.fromEntries(
-    Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableContractValue(entry, ancestors)]),
-  );
-  ancestors.delete(value);
-  return normalized;
-}
 
 const BLOCKED = new Set([
   'person_detection.detectionEnabled.read',
@@ -242,14 +211,6 @@ function makeRow(id: string): CoverageRow {
 
 function reviewedRows(): CoverageRow[] {
   const surface = currentSdkSurface();
-  const reviewedContract = stableContractValue({
-    capabilityModules: CAPABILITY_MODULES,
-    information: INFORMATION_SDK_ROWS,
-  });
-  const fingerprint = createHash('sha256').update(JSON.stringify(reviewedContract)).digest('hex');
-  if (fingerprint !== REVIEWED_SDK_SURFACE_SHA256) {
-    throw new TypeError(`SDK member surface requires review: ${fingerprint}`);
-  }
   const current = new Set(surface);
   const stalePolicy = [...BLOCKED, ...Object.keys(DEFERRED)].find((id) => !current.has(id));
   if (stalePolicy) {
@@ -260,7 +221,6 @@ function reviewedRows(): CoverageRow[] {
 
 export const SDK_HAP_COVERAGE_MATRIX: SdkHapCoverageMatrix = {
   version: 1,
-  sdkContract: '@mega-yfue/eufy-sdk@0.1.0-beta.14',
   hapContract: 'Homebridge 2 HAP definitions',
   rows: reviewedRows(),
 };

@@ -199,6 +199,11 @@ describe('platform lifecycle', () => {
         expect(clientFactory).toHaveBeenCalledExactlyOnceWith(
           replacementConfig,
           expect.objectContaining({ account: 'replacement@example.invalid' }),
+          expect.objectContaining({
+            error: expect.any(Function),
+            info: expect.any(Function),
+            warn: expect.any(Function),
+          }),
         ),
       );
       await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());

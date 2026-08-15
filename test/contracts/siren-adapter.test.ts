@@ -33,6 +33,7 @@ function attach(
     hap: HAP,
     diagnose,
     observed: vi.fn(),
+    persist: vi.fn(),
   });
 }
 

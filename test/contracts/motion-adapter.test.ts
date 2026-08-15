@@ -25,6 +25,7 @@ describe('motion event adapter', () => {
       hap: HAP,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      persist: vi.fn(),
     })!;
     const state = target
       .getServiceById(Service.MotionSensor, MOTION_ADAPTER_KEY)!
@@ -68,6 +69,7 @@ describe('motion event adapter', () => {
       hap: HAP,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      persist: vi.fn(),
     })!;
     const state = target
       .getServiceById(Service.MotionSensor, MOTION_ADAPTER_KEY)!
@@ -88,6 +90,7 @@ describe('motion event adapter', () => {
       hap: HAP,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      persist: vi.fn(),
     })!;
     const state = target
       .getServiceById(Service.MotionSensor, MOTION_ADAPTER_KEY)!
@@ -102,6 +105,7 @@ describe('motion event adapter', () => {
       hap: HAP,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      persist: vi.fn(),
     });
     adapter.detach?.();
     await vi.advanceTimersByTimeAsync(6_999);
@@ -124,6 +128,7 @@ describe('motion event adapter', () => {
       hap: HAP,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      persist: vi.fn(),
     })!;
     const state = target
       .getServiceById(Service.MotionSensor, MOTION_ADAPTER_KEY)!

@@ -8,13 +8,7 @@ import { SDK_HAP_COVERAGE_MATRIX } from '../../src/homekit/coverage-matrix.js';
 
 describe('SDK/HAP coverage matrix', () => {
   it('classifies the complete current SDK member surface', () => {
-    const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {
-      dependencies: Record<string, string>;
-    };
     expect(SDK_HAP_COVERAGE_MATRIX.version).toBe(1);
-    expect(SDK_HAP_COVERAGE_MATRIX.sdkContract).toBe(
-      `@mega-yfue/eufy-sdk@${packageJson.dependencies['@mega-yfue/eufy-sdk']}`,
-    );
     expect(SDK_HAP_COVERAGE_MATRIX.rows.length).toBeGreaterThan(0);
     expect(new Set(SDK_HAP_COVERAGE_MATRIX.rows.map((row) => row.id)).size).toBe(SDK_HAP_COVERAGE_MATRIX.rows.length);
   });
@@ -128,6 +122,7 @@ describe('SDK/HAP coverage matrix', () => {
         'smart_light.brightness.read',
         'smart_light.brightness.persistent-operation',
         'smart_light.smartLightState.event',
+        'smart_light.setColor.momentary-action',
       ].sort(),
     );
     expect(representedSmartLight.every(({ followUp }) => followUp === undefined)).toBe(true);

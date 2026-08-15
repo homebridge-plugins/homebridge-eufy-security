@@ -12,6 +12,13 @@ import {
 
 const HAP = { Service, Characteristic, HAPStatus, HapStatusError };
 const SMART_LIGHT_EVIDENCE = new Map(SMART_LIGHT_ADAPTER.requires.map((requirement) => [requirement.id, requirement]));
+const SMART_LIGHT_COLOR_EVIDENCE = new Map([
+  ...SMART_LIGHT_EVIDENCE,
+  [
+    'smart_light.setColor.momentary-action',
+    { id: 'smart_light.setColor.momentary-action', kind: 'momentary-action' as const },
+  ] as const,
+]);
 
 function accessory(): PlatformAccessory {
   return new Accessory('Synthetic smart light', uuid.generate('synthetic-smart-light')) as unknown as PlatformAccessory;
@@ -25,14 +32,17 @@ function attach(
   device: SmartLightSdkDevice,
   target: PlatformAccessory,
   diagnose: (diagnostic: SmartLightDiagnostic) => void = vi.fn(),
+  evidence = SMART_LIGHT_EVIDENCE,
+  persist: () => void = vi.fn(),
 ) {
   return SMART_LIGHT_ADAPTER.attach({
     device: device as never,
-    evidence: SMART_LIGHT_EVIDENCE,
+    evidence,
     accessory: target,
     hap: HAP,
     diagnose,
     observed: vi.fn(),
+    persist,
   });
 }
 
@@ -71,6 +81,236 @@ describe('smart-light capability adapter', () => {
     adapter.event?.({ eventName: 'smartLightState', brightness: 72 } as AnyDeviceEvent);
     expect(power.value).toBe(true);
     expect(brightness.value).toBe(72);
+  });
+
+  it('exposes color only from SDK evidence and acknowledges the sent Hue and Saturation after publication', async () => {
+    vi.useFakeTimers();
+    const target = accessory();
+    const publication = deferred();
+    const setColor = vi.fn(() => publication.promise);
+    const persist = vi.fn();
+    attach(
+      lightDevice({
+        power: true,
+        brightness: 50,
+        set: vi.fn(async () => undefined),
+        setBrightness: vi.fn(async () => undefined),
+        setColor,
+      }),
+      target,
+      vi.fn(),
+      SMART_LIGHT_COLOR_EVIDENCE,
+      persist,
+    );
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+    const hue = service.getCharacteristic(Characteristic.Hue);
+    const saturation = service.getCharacteristic(Characteristic.Saturation);
+
+    await expect(hue.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    await expect(saturation.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    const hueWrite = hue.handleSetRequest(30);
+    const saturationWrite = saturation.handleSetRequest(100);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setColor).toHaveBeenCalledExactlyOnceWith({ red: 255, green: 128, blue: 0 });
+    await expect(hue.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+
+    publication.resolve();
+    await Promise.all([hueWrite, saturationWrite]);
+    await expect(hue.handleGetRequest()).resolves.toBe(30);
+    await expect(saturation.handleGetRequest()).resolves.toBe(100);
+    expect(target.context).toMatchObject({
+      homebridgeEufySmartLightColor: { version: 1, hue: 30, saturation: 100 },
+    });
+    expect(persist).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('does not expose color characteristics without SDK color evidence', () => {
+    const target = accessory();
+    attach(
+      lightDevice({
+        power: true,
+        brightness: 50,
+        set: vi.fn(async () => undefined),
+        setBrightness: vi.fn(async () => undefined),
+        setColor: vi.fn(async () => undefined),
+      }),
+      target,
+    );
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+
+    expect(service.testCharacteristic(Characteristic.Hue)).toBe(false);
+    expect(service.testCharacteristic(Characteristic.Saturation)).toBe(false);
+  });
+
+  it('reuses the acknowledged counterpart for one-component color writes and retains it on failure', async () => {
+    vi.useFakeTimers();
+    const target = accessory();
+    const setColor = vi
+      .fn<(color: { red: number; green: number; blue: number }) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('synthetic publication failure'));
+    attach(
+      lightDevice({
+        power: true,
+        brightness: 50,
+        set: vi.fn(),
+        setBrightness: vi.fn(),
+        setColor,
+      }),
+      target,
+      vi.fn(),
+      SMART_LIGHT_COLOR_EVIDENCE,
+    );
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+    const hue = service.getCharacteristic(Characteristic.Hue);
+    const saturation = service.getCharacteristic(Characteristic.Saturation);
+
+    const first = Promise.all([hue.handleSetRequest(120), saturation.handleSetRequest(50)]);
+    await vi.advanceTimersByTimeAsync(1);
+    await first;
+    expect(setColor).toHaveBeenNthCalledWith(1, { red: 128, green: 255, blue: 128 });
+
+    const failed = expect(hue.handleSetRequest(240)).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    await vi.advanceTimersByTimeAsync(1);
+    await failed;
+    expect(setColor).toHaveBeenNthCalledWith(2, { red: 128, green: 128, blue: 255 });
+    await expect(hue.handleGetRequest()).resolves.toBe(120);
+    await expect(saturation.handleGetRequest()).resolves.toBe(50);
+    vi.useRealTimers();
+  });
+
+  it('rejects an incomplete first color request without dispatch', async () => {
+    vi.useFakeTimers();
+    const target = accessory();
+    const setColor = vi.fn(async () => undefined);
+    attach(
+      lightDevice({
+        power: true,
+        brightness: 50,
+        set: vi.fn(),
+        setBrightness: vi.fn(),
+        setColor,
+      }),
+      target,
+      vi.fn(),
+      SMART_LIGHT_COLOR_EVIDENCE,
+    );
+    const hue = target
+      .getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!
+      .getCharacteristic(Characteristic.Hue);
+
+    const write = expect(hue.handleSetRequest(90)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    await vi.advanceTimersByTimeAsync(0);
+    await write;
+    expect(setColor).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('maps a synchronous SDK color failure without leaving the scheduler active', async () => {
+    vi.useFakeTimers();
+    const target = accessory();
+    const setColor = vi.fn((): Promise<void> => {
+      throw new Error('synthetic synchronous failure');
+    });
+    attach(
+      lightDevice({ power: true, brightness: 50, set: vi.fn(), setBrightness: vi.fn(), setColor }),
+      target,
+      vi.fn(),
+      SMART_LIGHT_COLOR_EVIDENCE,
+    );
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+    const failed = Promise.all([
+      expect(service.getCharacteristic(Characteristic.Hue).handleSetRequest(180)).rejects.toBe(
+        HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+      ),
+      expect(service.getCharacteristic(Characteristic.Saturation).handleSetRequest(100)).rejects.toBe(
+        HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+      ),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    await failed;
+    expect(setColor).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('retains a late successful publication as acknowledged color after the HomeKit deadline', async () => {
+    vi.useFakeTimers();
+    const target = accessory();
+    const publication = deferred();
+    const persist = vi.fn();
+    attach(
+      lightDevice({
+        power: true,
+        brightness: 50,
+        set: vi.fn(),
+        setBrightness: vi.fn(),
+        setColor: vi.fn(() => publication.promise),
+      }),
+      target,
+      vi.fn(),
+      SMART_LIGHT_COLOR_EVIDENCE,
+      persist,
+    );
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+    const hue = service.getCharacteristic(Characteristic.Hue);
+    const saturation = service.getCharacteristic(Characteristic.Saturation);
+    const hueFailure = expect(hue.handleSetRequest(60)).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    const saturationFailure = expect(saturation.handleSetRequest(100)).rejects.toBe(
+      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    await Promise.all([hueFailure, saturationFailure]);
+
+    publication.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(hue.handleGetRequest()).resolves.toBe(60);
+    await expect(saturation.handleGetRequest()).resolves.toBe(100);
+    expect(persist).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('restores acknowledged color from accessory context after adapter replacement', async () => {
+    const target = accessory();
+    target.context = { homebridgeEufySmartLightColor: { version: 1, hue: 210, saturation: 75 } };
+    attach(
+      lightDevice({
+        power: true,
+        brightness: 50,
+        set: vi.fn(),
+        setBrightness: vi.fn(),
+        setColor: vi.fn(),
+      }),
+      target,
+      vi.fn(),
+      SMART_LIGHT_COLOR_EVIDENCE,
+    );
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+
+    await expect(service.getCharacteristic(Characteristic.Hue).handleGetRequest()).resolves.toBe(210);
+    await expect(service.getCharacteristic(Characteristic.Saturation).handleGetRequest()).resolves.toBe(75);
+  });
+
+  it('clears acknowledged color when a complete attachment no longer has SDK color evidence', () => {
+    const target = accessory();
+    target.context = { homebridgeEufySmartLightColor: { version: 1, hue: 210, saturation: 75 } };
+    const device = lightDevice({
+      power: true,
+      brightness: 50,
+      set: vi.fn(),
+      setBrightness: vi.fn(),
+      setColor: vi.fn(),
+    });
+    attach(device, target, vi.fn(), SMART_LIGHT_COLOR_EVIDENCE);
+
+    attach(device, target);
+
+    const service = target.getServiceById(Service.Lightbulb, SMART_LIGHT_ADAPTER_KEY)!;
+    expect(service.testCharacteristic(Characteristic.Hue)).toBe(false);
+    expect(service.testCharacteristic(Characteristic.Saturation)).toBe(false);
+    expect(target.context).not.toHaveProperty('homebridgeEufySmartLightColor');
   });
 
   it('retains authoritative values until a post-request observation matches or conflicts', async () => {

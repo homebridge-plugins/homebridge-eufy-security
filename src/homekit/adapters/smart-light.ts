@@ -1,4 +1,9 @@
-import { CapabilityNotSupportedError, type AnyDeviceEvent, type SmartLightActions } from '@mega-yfue/eufy-sdk';
+import {
+  CapabilityNotSupportedError,
+  type AnyDeviceEvent,
+  type RgbColor,
+  type SmartLightActions,
+} from '@mega-yfue/eufy-sdk';
 
 import type {
   AdapterAttachmentContext,
@@ -34,6 +39,15 @@ const SMART_LIGHT_STATE_EVENT = {
   id: 'smart_light.smartLightState.event',
   kind: 'event',
 } as const;
+const SMART_LIGHT_COLOR_WRITE = {
+  id: 'smart_light.setColor.momentary-action',
+  kind: 'momentary-action',
+} as const;
+
+interface AcknowledgedColor {
+  hue: number;
+  saturation: number;
+}
 
 interface SmartLightState {
   owner: symbol;
@@ -45,6 +59,7 @@ interface SmartLightState {
   brightnessBlocked: boolean;
   powerWrites?: PersistentMemberWrites<boolean>;
   brightnessWrites?: PersistentMemberWrites<number>;
+  colorWrites?: AcknowledgedColorWrites;
 }
 
 const SMART_LIGHT_STATES = new WeakMap<object, SmartLightState>();
@@ -62,7 +77,7 @@ export interface SmartLightDiagnostic extends AdapterDiagnostic {
     | 'smart-light-operation-failed'
     | 'smart-light-reconciliation-expired';
   capability: 'smart_light';
-  member: 'power' | 'brightness';
+  member: 'power' | 'brightness' | 'color';
   active: boolean;
   reason:
     | 'missing'
@@ -93,6 +108,189 @@ interface WriteBatch<T> {
 
 const OPERATION_DEADLINE_MS = 8_000;
 const RECONCILIATION_WINDOW_MS = 60_000;
+
+interface ColorRequest {
+  settled: boolean;
+  deadline: ReturnType<typeof setTimeout>;
+  resolve(): void;
+  reject(error: unknown): void;
+}
+
+interface ColorBatch {
+  hue?: number;
+  saturation?: number;
+  requests: ColorRequest[];
+}
+
+/** Coalesces HomeKit's split color characteristics into one RGB publication and retains its acknowledgement. */
+class AcknowledgedColorWrites {
+  private pending?: ColorBatch;
+  private active?: ColorBatch;
+  private scheduled?: ReturnType<typeof setTimeout>;
+  private acknowledged?: AcknowledgedColor;
+  private detached = false;
+
+  constructor(
+    acknowledged: AcknowledgedColor | undefined,
+    private readonly issue: (color: RgbColor) => Promise<void>,
+    private readonly communicationFailure: () => unknown,
+    private readonly incompleteColor: () => unknown,
+    private readonly acknowledge: (color: AcknowledgedColor) => void,
+    private readonly diagnose: (active: boolean, reason: 'operation-failure' | 'timeout' | 'recovered') => void,
+  ) {
+    this.acknowledged = acknowledged;
+  }
+
+  read(component: keyof AcknowledgedColor): number | undefined {
+    return this.acknowledged?.[component];
+  }
+
+  request(component: keyof AcknowledgedColor, value: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const request = {
+        settled: false,
+        deadline: undefined as unknown as ReturnType<typeof setTimeout>,
+        resolve,
+        reject,
+      };
+      request.deadline = setTimeout(() => this.timeout(request), OPERATION_DEADLINE_MS);
+      this.pending ??= { requests: [] };
+      this.pending[component] = value;
+      this.pending.requests.push(request);
+      this.schedule();
+    });
+  }
+
+  detach(): void {
+    this.detached = true;
+    if (this.scheduled) {
+      clearTimeout(this.scheduled);
+    }
+    for (const request of [...(this.active?.requests ?? []), ...(this.pending?.requests ?? [])]) {
+      this.settle(request, 'reject', this.communicationFailure());
+    }
+    this.active = undefined;
+    this.pending = undefined;
+    this.scheduled = undefined;
+  }
+
+  private schedule(): void {
+    if (this.detached || this.active || this.scheduled) {
+      return;
+    }
+    this.scheduled = setTimeout(() => {
+      this.scheduled = undefined;
+      this.flush();
+    }, 0);
+  }
+
+  private flush(): void {
+    const batch = this.pending;
+    this.pending = undefined;
+    if (!batch) {
+      return;
+    }
+    const color = {
+      hue: batch.hue ?? this.acknowledged?.hue,
+      saturation: batch.saturation ?? this.acknowledged?.saturation,
+    };
+    if (color.hue === undefined || color.saturation === undefined) {
+      for (const request of batch.requests) {
+        this.settle(request, 'reject', this.incompleteColor());
+      }
+      this.schedule();
+      return;
+    }
+    const acknowledgedColor: AcknowledgedColor = { hue: color.hue, saturation: color.saturation };
+    this.active = batch;
+    Promise.resolve()
+      .then(() => this.issue(hsvToRgb(acknowledgedColor.hue, acknowledgedColor.saturation)))
+      .then(
+        () => this.complete(batch, acknowledgedColor),
+        () => this.fail(batch),
+      );
+  }
+
+  private complete(batch: ColorBatch, color: AcknowledgedColor): void {
+    if (this.active !== batch) {
+      return;
+    }
+    this.acknowledged = color;
+    this.acknowledge(color);
+    this.diagnose(false, 'recovered');
+    for (const request of batch.requests) {
+      this.settle(request, 'resolve');
+    }
+    this.active = undefined;
+    this.schedule();
+  }
+
+  private fail(batch: ColorBatch): void {
+    if (this.active !== batch) {
+      return;
+    }
+    const error = this.communicationFailure();
+    for (const request of batch.requests) {
+      this.settle(request, 'reject', error);
+    }
+    this.diagnose(true, 'operation-failure');
+    this.active = undefined;
+    this.schedule();
+  }
+
+  private timeout(request: ColorRequest): void {
+    if (request.settled) {
+      return;
+    }
+    this.settle(request, 'reject', this.communicationFailure());
+    this.diagnose(true, 'timeout');
+    if (this.pending) {
+      this.pending.requests = this.pending.requests.filter(({ settled }) => !settled);
+      if (this.pending.requests.length === 0) {
+        this.pending = undefined;
+      }
+    }
+  }
+
+  private settle(request: ColorRequest, result: 'resolve' | 'reject', error?: unknown): void {
+    if (request.settled) {
+      return;
+    }
+    request.settled = true;
+    clearTimeout(request.deadline);
+    if (result === 'resolve') {
+      request.resolve();
+    } else {
+      request.reject(error);
+    }
+  }
+}
+
+/** Convert HomeKit hue/saturation to full-value RGB while configured device brightness remains independent. */
+function hsvToRgb(hue: number, saturation: number): RgbColor {
+  const h = hue === 360 ? 0 : hue / 60;
+  const s = saturation / 100;
+  const chroma = s;
+  const x = chroma * (1 - Math.abs((h % 2) - 1));
+  const [red, green, blue] =
+    h < 1
+      ? [chroma, x, 0]
+      : h < 2
+        ? [x, chroma, 0]
+        : h < 3
+          ? [0, chroma, x]
+          : h < 4
+            ? [0, x, chroma]
+            : h < 5
+              ? [x, 0, chroma]
+              : [chroma, 0, x];
+  const match = 1 - chroma;
+  return {
+    red: Math.round((red + match) * 255),
+    green: Math.round((green + match) * 255),
+    blue: Math.round((blue + match) * 255),
+  };
+}
 
 /** Serializes one persistent member while keeping operation acknowledgement separate from observation. */
 class PersistentMemberWrites<T> {
@@ -293,20 +491,27 @@ const COVERAGE = [
   SMART_LIGHT_BRIGHTNESS_READ,
   SMART_LIGHT_BRIGHTNESS_WRITE,
   SMART_LIGHT_STATE_EVENT,
+  SMART_LIGHT_COLOR_WRITE,
 ].map(({ id }) => ({
   id,
-  hapFit: 'Lightbulb On and Brightness expose authoritative smart-light state and evidenced persistent operations',
+  hapFit:
+    id === SMART_LIGHT_COLOR_WRITE.id
+      ? 'Lightbulb Hue and Saturation expose the last RGB request acknowledged by the SDK transport'
+      : 'Lightbulb On and Brightness expose authoritative smart-light state and evidenced persistent operations',
   identityEffect: 'Primary-purpose service uses stable semantic key smart-light.lightbulb',
   diagnostics: 'Fail closed for unavailable, malformed, failed, or unreconciled smart-light members',
   verification: [
     {
       file: 'test/contracts/smart-light-adapter.test.ts',
-      behavior: 'exposes authoritative power and brightness through one real HAP Lightbulb',
+      behavior:
+        id === SMART_LIGHT_COLOR_WRITE.id
+          ? 'acknowledges the sent Hue and Saturation after publication'
+          : 'exposes authoritative power and brightness through one real HAP Lightbulb',
     },
   ],
 }));
 
-/** Complete HomeKit policy for evidenced Life smart-light power and brightness. */
+/** Complete HomeKit policy for evidenced Life smart-light power, brightness, and acknowledged color. */
 export const SMART_LIGHT_ADAPTER = {
   key: SMART_LIGHT_ADAPTER_KEY,
   role: 'primary-purpose',
@@ -385,6 +590,32 @@ function attachSmartLight(context: AdapterAttachmentContext): AttachedAdapter | 
   SMART_LIGHT_STATES.set(service, state);
   const power = service.getCharacteristic(hap.Characteristic.On);
   const brightness = service.getCharacteristic(hap.Characteristic.Brightness);
+  const colorEvidence = context.evidence.has(SMART_LIGHT_COLOR_WRITE.id) && typeof light.setColor === 'function';
+
+  interface ColorContext {
+    homebridgeEufySmartLightColor?: { version: 1; hue: number; saturation: number };
+  }
+  const accessoryContext = (accessory.context ?? {}) as ColorContext;
+  accessory.context = accessoryContext;
+  const storedColor = accessoryContext.homebridgeEufySmartLightColor;
+  const acknowledgedColor =
+    storedColor?.version === 1 &&
+    Number.isFinite(storedColor.hue) &&
+    storedColor.hue >= 0 &&
+    storedColor.hue <= 360 &&
+    Number.isFinite(storedColor.saturation) &&
+    storedColor.saturation >= 0 &&
+    storedColor.saturation <= 100
+      ? { hue: storedColor.hue, saturation: storedColor.saturation }
+      : undefined;
+  if (!colorEvidence) {
+    delete accessoryContext.homebridgeEufySmartLightColor;
+    for (const characteristicType of [hap.Characteristic.Hue, hap.Characteristic.Saturation]) {
+      if (service.testCharacteristic(characteristicType)) {
+        service.removeCharacteristic(service.getCharacteristic(characteristicType));
+      }
+    }
+  }
 
   const diagnoseObservation = (
     member: 'power' | 'brightness',
@@ -425,6 +656,58 @@ function attachSmartLight(context: AdapterAttachmentContext): AttachedAdapter | 
 
   power.onGet(() => read('power'));
   brightness.onGet(() => read('brightness'));
+
+  if (colorEvidence) {
+    service.addOptionalCharacteristic(hap.Characteristic.Hue);
+    service.addOptionalCharacteristic(hap.Characteristic.Saturation);
+    const hue = service.getCharacteristic(hap.Characteristic.Hue);
+    const saturation = service.getCharacteristic(hap.Characteristic.Saturation);
+    const readColor = (component: keyof AcknowledgedColor): number => {
+      const value = state.colorWrites?.read(component);
+      if (value === undefined) {
+        throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+      }
+      return value;
+    };
+    state.colorWrites = new AcknowledgedColorWrites(
+      acknowledgedColor,
+      (color) => light.setColor!(color),
+      () => new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE),
+      () => new hap.HapStatusError(hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE),
+      (color) => {
+        accessoryContext.homebridgeEufySmartLightColor = { version: 1, ...color };
+        hue.updateValue(color.hue);
+        saturation.updateValue(color.saturation);
+        context.persist();
+      },
+      (active, reason) => {
+        context.diagnose({
+          code: 'smart-light-operation-failed',
+          capability: 'smart_light',
+          member: 'color',
+          active,
+          reason,
+        });
+        if (!active) {
+          context.observed('smart-light-operation-failed');
+        }
+      },
+    );
+    hue.onGet(() => readColor('hue'));
+    saturation.onGet(() => readColor('saturation'));
+    hue.onSet((value) => {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 360) {
+        throw new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+      }
+      return state.colorWrites!.request('hue', value);
+    });
+    saturation.onSet((value) => {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+        throw new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+      }
+      return state.colorWrites!.request('saturation', value);
+    });
+  }
 
   const writes = <T>(
     member: 'power' | 'brightness',
@@ -545,6 +828,7 @@ function attachSmartLight(context: AdapterAttachmentContext): AttachedAdapter | 
       }
       state.powerWrites?.detach();
       state.brightnessWrites?.detach();
+      state.colorWrites?.detach();
       SMART_LIGHT_STATES.delete(service);
       accessory.removeService(service);
     },

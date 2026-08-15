@@ -126,6 +126,7 @@ function smartLightManifest(serial: string): DeviceManifest {
         actions: [
           { name: 'set', form: 'stateful', reflects: 'power' },
           { name: 'setBrightness', form: 'stateful', reflects: 'brightness' },
+          { name: 'setColor', form: 'momentary' },
         ],
         undescribedActions: [],
         events: ['smartLightState'],
@@ -198,6 +199,7 @@ function smartLightDevice(power = false, brightness = 50): Device {
       brightness,
       set: vi.fn(async () => undefined),
       setBrightness: vi.fn(async () => undefined),
+      setColor: vi.fn(async () => undefined),
     }),
   } as unknown as Device;
 }
@@ -495,6 +497,8 @@ describe('HomeKit registry reconciliation', () => {
     const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
     const service = accessory.getServiceById(Service.Lightbulb, 'smart-light.lightbulb')!;
     expect(service).toBeDefined();
+    expect(service.testCharacteristic(Characteristic.Hue)).toBe(true);
+    expect(service.testCharacteristic(Characteristic.Saturation)).toBe(true);
     source.publishEvent({ eventName: 'smartLightState', deviceSn: serial, power: true });
     expect(service.getCharacteristic(Characteristic.On).value).toBe(true);
 

@@ -10,6 +10,8 @@ import type { SdkClient, SdkClientFactory, SdkStartResult } from './sdk-client.j
 import { RuntimeTracker, type RuntimeState, type RuntimeTrackerUpdate } from './tracker.js';
 
 export interface RuntimeLogger {
+  debug?(message: string): void;
+  info?(message: string): void;
   error(message: string): void;
   warn(message: string): void;
 }
@@ -227,7 +229,7 @@ export class RuntimeOwner {
           });
           return;
         }
-        this.client = this.clientFactory(config, active);
+        this.client = this.clientFactory(config, active, this.log);
         this.client.onEvent?.((event) => this.publishEvent(event));
         this.client.onInventory?.((result) => {
           void this.applyRuntimeResult(active, result).catch((error: unknown) => this.failRuntime(error));
@@ -238,7 +240,7 @@ export class RuntimeOwner {
         }
         return;
       }
-      this.client ??= this.clientFactory(config, active ?? undefined);
+      this.client ??= this.clientFactory(config, active ?? undefined, this.log);
       await this.client.start();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

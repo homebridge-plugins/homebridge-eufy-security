@@ -1,4 +1,4 @@
-import type { AnyDeviceEvent, Device, EufyMega, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, Device, EufyMega, FcmStore, Logger, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import type { EufyConfig } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
@@ -35,7 +35,52 @@ export interface RuntimeClientStores {
   push: FcmStore;
 }
 
-export type SdkClientFactory = (config: EufyConfig, stores?: RuntimeClientStores) => SdkClient;
+export interface SdkLogger {
+  debug?(message: string): void;
+  info?(message: string): void;
+  warn?(message: string): void;
+  error?(message: string): void;
+}
+
+export type SdkClientFactory = (config: EufyConfig, stores?: RuntimeClientStores, logger?: SdkLogger) => SdkClient;
+
+/** Adapts SDK diagnostics to the Homebridge logger while redacting identifiers and object values. */
+export function createSdkLogger(target: SdkLogger | undefined): Logger | undefined {
+  if (!target) {
+    return undefined;
+  }
+  const format = (message: string, args: unknown[]): Record<string, unknown> => {
+    const requestedSubsystem = /^\[([a-z0-9-]+)\]/i.exec(message)?.[1]?.toLowerCase();
+    const subsystem = ['device', 'ffmpeg', 'mega', 'mqtt', 'p2p', 'push', 'webrtc'].includes(requestedSubsystem ?? '')
+      ? requestedSubsystem
+      : 'sdk';
+    const details = args.map((value) => {
+      if (value instanceof Error) {
+        const errorType = ['Error', 'RangeError', 'SessionExpiredError', 'TypeError'].includes(value.name)
+          ? value.name
+          : 'Error';
+        return { errorType };
+      }
+      if (typeof value === 'string') {
+        return { type: 'string', length: value.length };
+      }
+      if (value && typeof value === 'object') {
+        return { type: 'object', keyCount: Object.keys(value).length };
+      }
+      return { type: typeof value };
+    });
+    return { scope: 'sdk', subsystem, ...(details.length ? { details } : {}) };
+  };
+  const write = (level: 'debug' | 'info' | 'warn' | 'error', message: string, args: unknown[]): void => {
+    target.debug?.(JSON.stringify({ ...format(message, args), level }));
+  };
+  return {
+    debug: (message, ...args) => write('debug', message, args),
+    info: (message, ...args) => write('info', message, args),
+    warn: (message, ...args) => write('warn', message, args),
+    error: (message, ...args) => write('error', message, args),
+  };
+}
 
 export class SyntheticSdkClient implements SdkClient {
   async start(): Promise<void> {}
@@ -57,8 +102,10 @@ export class PersistedSdkClient implements SdkClient {
   private epoch = 0;
   private connected = false;
   private inventoryReady = false;
+  private readonly diagnostics?: Logger;
   private isSessionExpired: (error: unknown) => boolean = () => false;
   private readonly handleError = (error: Error): void => {
+    this.diagnostics?.error('[client] error event', error);
     if (this.isSessionExpired(error)) {
       this.inventoryListener?.({ state: 'authentication-required' });
     }
@@ -90,7 +137,10 @@ export class PersistedSdkClient implements SdkClient {
     private readonly config: EufyConfig,
     private readonly stores: RuntimeClientStores,
     private readonly restoredClient?: EufyMega,
-  ) {}
+    private readonly logger?: SdkLogger,
+  ) {
+    this.diagnostics = createSdkLogger(logger);
+  }
 
   async start(): Promise<SdkStartResult> {
     if (!this.stores.session.load()) {
@@ -108,6 +158,7 @@ export class PersistedSdkClient implements SdkClient {
         pollMs: this.config.pollingIntervalMinutes * 60_000,
         store: this.stores.session,
         pushStore: this.stores.push,
+        logger: this.diagnostics,
       });
     const epoch = ++this.epoch;
     this.connected = true;
@@ -212,9 +263,13 @@ export class PersistedSdkClient implements SdkClient {
   }
 }
 
-export function createPersistedSdkClient(config: EufyConfig, stores?: RuntimeClientStores): SdkClient {
+export function createPersistedSdkClient(
+  config: EufyConfig,
+  stores?: RuntimeClientStores,
+  logger?: SdkLogger,
+): SdkClient {
   if (!stores) {
     return createSyntheticSdkClient(config);
   }
-  return new PersistedSdkClient(config, stores);
+  return new PersistedSdkClient(config, stores, undefined, logger);
 }
