@@ -135,6 +135,28 @@ function smartLightManifest(serial: string): DeviceManifest {
   };
 }
 
+function armingManifest(serial: string): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic security system',
+    modelName: 'Synthetic station',
+    codec: 'station',
+    source: 'security',
+    bound: true,
+    capabilities: ['arming'],
+    details: [
+      {
+        capability: 'arming',
+        accessor: 'arming',
+        reads: [{ accessor: 'mode', property: 'synthetic_arming_mode', type: 'enum', writable: true }],
+        actions: [{ name: 'setMode', form: 'stateful', reflects: 'mode' }],
+        undescribedActions: [],
+        events: ['armingModeChanged', 'alarm'],
+      },
+    ],
+  };
+}
+
 function contactSmartLightManifest(serial: string): DeviceManifest {
   const manifest = smartLightManifest(serial);
   const contact = contactManifest(serial);
@@ -209,6 +231,12 @@ function smartLightDevice(power = false, brightness = 50): Device {
       setBrightness: vi.fn(async () => undefined),
       setColor: vi.fn(async () => undefined),
     }),
+  } as unknown as Device;
+}
+
+function armingDevice(mode = 1): Device {
+  return {
+    arming: () => ({ mode, setMode: vi.fn(async () => undefined) }),
   } as unknown as Device;
 }
 
@@ -515,6 +543,34 @@ describe('HomeKit registry reconciliation', () => {
     expect(service.testCharacteristic(Characteristic.Saturation)).toBe(true);
     source.publishEvent({ eventName: 'smartLightState', deviceSn: serial, power: true });
     expect(service.getCharacteristic(Characteristic.On).value).toBe(true);
+
+    source.publish(registryView(2, new Map(), snapshot()));
+    expect(recording.unregisterPlatformAccessories).toHaveBeenCalledWith([accessory]);
+  });
+
+  it('routes arming events and withdraws the stable Security System service only from complete evidence', () => {
+    const serial = 'synthetic-security-system';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const traces: HomeKitEventTrace[] = [];
+    new HomeKitReconciler(source, recording.api, vi.fn(), [], (trace) => traces.push(trace)).start();
+
+    source.publish(registryView(1, new Map([[serial, armingDevice()]]), snapshot(armingManifest(serial))));
+
+    expect(recording.uuidInputs).toEqual([`d1_${serial}`]);
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const service = accessory.getServiceById(Service.SecuritySystem, 'arming.security-system')!;
+    expect(service).toBeDefined();
+
+    source.publishEvent({ eventName: 'alarm', deviceSn: serial, stationSn: serial, phase: 'delayed' });
+    expect(service.getCharacteristic(Characteristic.SecuritySystemCurrentState).value).toBe(
+      Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED,
+    );
+    expect(traces).toContainEqual({
+      adapter: 'arming.security-system',
+      event: 'security-system-alarm',
+      observation: 'valid',
+    });
 
     source.publish(registryView(2, new Map(), snapshot()));
     expect(recording.unregisterPlatformAccessories).toHaveBeenCalledWith([accessory]);

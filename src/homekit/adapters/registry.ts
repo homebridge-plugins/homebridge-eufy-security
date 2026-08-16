@@ -3,6 +3,7 @@ import { CONTACT_ADAPTER, CONTACT_ADAPTER_KEY } from './contact.js';
 import { DOORBELL_ADAPTER, DOORBELL_ADAPTER_KEY } from './doorbell.js';
 import { INFORMATION_ADAPTER, INFORMATION_ADAPTER_KEY } from './information.js';
 import { MOTION_ADAPTER, MOTION_ADAPTER_KEY } from './motion.js';
+import { SECURITY_SYSTEM_ADAPTER, SECURITY_SYSTEM_ADAPTER_KEY } from './security-system.js';
 import { SIREN_ADAPTER, SIREN_ADAPTER_KEY } from './siren.js';
 import { SMART_LIGHT_ADAPTER, SMART_LIGHT_ADAPTER_KEY } from './smart-light.js';
 import type { HomeKitAdapter } from '../adapter.js';
@@ -12,6 +13,7 @@ export { CONTACT_ADAPTER_KEY } from './contact.js';
 export { DOORBELL_ADAPTER_KEY } from './doorbell.js';
 export { INFORMATION_ADAPTER_KEY } from './information.js';
 export { MOTION_ADAPTER_KEY } from './motion.js';
+export { SECURITY_SYSTEM_ADAPTER_KEY } from './security-system.js';
 export { SIREN_ADAPTER_KEY } from './siren.js';
 export { SMART_LIGHT_ADAPTER_KEY } from './smart-light.js';
 
@@ -22,6 +24,7 @@ export const ADAPTER_REGISTRY = {
   [DOORBELL_ADAPTER_KEY]: DOORBELL_ADAPTER,
   [INFORMATION_ADAPTER_KEY]: INFORMATION_ADAPTER,
   [MOTION_ADAPTER_KEY]: MOTION_ADAPTER,
+  [SECURITY_SYSTEM_ADAPTER_KEY]: SECURITY_SYSTEM_ADAPTER,
   [SIREN_ADAPTER_KEY]: SIREN_ADAPTER,
   [SMART_LIGHT_ADAPTER_KEY]: SMART_LIGHT_ADAPTER,
 } as const satisfies Readonly<Record<string, HomeKitAdapter>>;

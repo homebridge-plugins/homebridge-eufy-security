@@ -682,7 +682,7 @@ export type RuntimeState =
   | 'failed'
   | 'stopping';
 
-const CAPABILITIES = new Set(['battery', 'contact', 'siren', 'smart_light']);
+const CAPABILITIES = new Set(['arming', 'battery', 'contact', 'siren', 'smart_light']);
 const MEMBERS = new Set([
   'active',
   'batteryAlert',
@@ -690,6 +690,7 @@ const MEMBERS = new Set([
   'charging',
   'color',
   'level',
+  'mode',
   'open',
   'power',
   'stop',
@@ -707,6 +708,7 @@ const REASONS = new Set([
   'recovered',
   'sdk-fault',
   'timeout',
+  'unsupported',
 ]);
 const RUNTIME_CONDITION_REASONS = new Set([
   'stopped',
@@ -726,6 +728,7 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'contact.sensor': new Set(['contact-state']),
   'doorbell.press': new Set(['doorbell-press']),
   'motion.sensor': new Set(['motion-detection']),
+  'arming.security-system': new Set(['arming-mode-changed', 'security-system-alarm']),
   'smart-light.lightbulb': new Set(['smart-light-state']),
 };
 const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
@@ -848,6 +851,22 @@ const HOMEKIT_CONDITIONS = {
   'smart-light-reconciliation-expired': {
     summaryKey: 'log.homekit.lightReconciliationExpired',
     actionKey: 'log.action.checkPhysicalLight',
+  },
+  'arming-capability-unavailable': {
+    summaryKey: 'log.homekit.armingCapabilityUnavailable',
+    actionKey: 'log.action.waitArming',
+  },
+  'unsupported-arming-mode': {
+    summaryKey: 'log.homekit.unsupportedArmingMode',
+    actionKey: 'log.action.selectSupportedArmingMode',
+  },
+  'arming-operation-failed': {
+    summaryKey: 'log.homekit.armingOperationFailed',
+    actionKey: 'log.action.retryArming',
+  },
+  'arming-reconciliation-expired': {
+    summaryKey: 'log.homekit.armingReconciliationExpired',
+    actionKey: 'log.action.checkPhysicalArmingMode',
   },
 } as const;
 

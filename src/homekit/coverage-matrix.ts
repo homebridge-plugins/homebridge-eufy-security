@@ -97,11 +97,6 @@ defer(
 );
 defer(['camera.talkback.momentary-action'], '#1001', 'requires isolated return-audio adaptation');
 defer(
-  ['arming.mode.read', 'arming.mode.persistent-operation', 'arming.armingModeChanged.event', 'arming.alarm.event'],
-  '#991',
-  'requires explicit arming-mode and alarm fault policy',
-);
-defer(
   ['lock.lock.momentary-action', 'lock.unlock.momentary-action'],
   '#992',
   'requires the T8531-only control boundary and unknown-current policy',

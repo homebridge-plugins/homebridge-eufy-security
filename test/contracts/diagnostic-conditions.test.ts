@@ -112,6 +112,34 @@ describe('diagnostic conditions', () => {
     expect(JSON.parse(debug.mock.calls[2]![0])).toMatchObject({ member: 'power', active: false });
   });
 
+  it('allowlists security-system faults without retaining device identity', () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info: vi.fn(), warn });
+    const identity = 'synthetic-security-system';
+
+    conditions.reportHomeKit(
+      {
+        code: 'unsupported-arming-mode',
+        capability: 'arming',
+        member: 'mode',
+        active: true,
+        reason: 'unsupported',
+      },
+      [identity],
+    );
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(debug.mock.calls[0]![0])).toMatchObject({
+      code: 'unsupported-arming-mode',
+      capability: 'arming',
+      member: 'mode',
+      active: true,
+      reason: 'unsupported',
+    });
+    expect(JSON.stringify([warn.mock.calls, debug.mock.calls])).not.toContain(identity);
+  });
+
   it('bounds aliases while retaining the complete affected-accessory count', () => {
     const warn = vi.fn();
     const debug = vi.fn();
@@ -244,14 +272,29 @@ describe('diagnostic conditions', () => {
       { debug },
       { adapter: 'T8000P0000000000', event: 'protocol-frame-value', observation: 'raw-capture-value' },
     );
+    reportHomeKitEvent(
+      { debug },
+      { adapter: 'arming.security-system', event: 'security-system-alarm', observation: 'valid' },
+    );
 
-    expect(debug).toHaveBeenCalledExactlyOnceWith(
+    expect(debug).toHaveBeenNthCalledWith(
+      1,
       JSON.stringify({
         scope: 'homekit',
         level: 'debug',
         adapter: 'contact.sensor',
         event: 'contact-state',
         observation: 'malformed',
+      }),
+    );
+    expect(debug).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'arming.security-system',
+        event: 'security-system-alarm',
+        observation: 'valid',
       }),
     );
   });
