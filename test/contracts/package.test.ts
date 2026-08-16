@@ -56,20 +56,55 @@ async function renderUi(
   const authSubmit = { disabled: false };
   const challengeSubmit = { disabled: false };
   const dashboard = { hidden: true, dataset: {} as Record<string, string> };
+  const dashboardState = { hidden: false };
   const dashboardTitle = { textContent: '' };
   const dashboardBadge = { textContent: '' };
-  const dashboardSummary = { textContent: '' };
+  const dashboardSummary = { hidden: false, textContent: '' };
   const dashboardAuthenticate = interactiveElement({ hidden: true });
-  const deviceGroups = interactiveElement({ innerHTML: '' });
+  const deviceGroups = interactiveElement({ hidden: false, innerHTML: '' });
   const pageTitle = { textContent: '' };
   const legacyNotice = { hidden: true };
   const legacySettings = { textContent: '' };
   const legacyAcknowledge = interactiveElement({});
+  const dashboardMenuTrigger = interactiveElement({
+    attributes: { 'aria-expanded': 'false' },
+    focused: false,
+    focus() {
+      this.focused = true;
+    },
+    setAttribute(name: string, value: string) {
+      this.attributes[name] = value;
+    },
+  });
+  const dashboardMenu = { hidden: true };
+  const menuDiagnostics = interactiveElement({});
+  const menuAdvanced = interactiveElement({});
+  const diagnosticsPanel = { hidden: true, scrollIntoView() {} };
+  const diagnosticsClose = interactiveElement({ focus() {} });
   const diagnosticsProfile = interactiveElement({ disabled: false, value: 'startup-authentication' });
-  const diagnosticsAuthorize = interactiveElement({ disabled: false });
+  const diagnosticsAuthorize = interactiveElement({ disabled: false, textContent: '' });
   const diagnosticsReproduction = interactiveElement({ disabled: true, textContent: '' });
   const diagnosticsStatus = { textContent: '' };
   const diagnosticsIssue = { hidden: true, href: '' };
+  const diagnosticsResult = { hidden: true };
+  const diagnosticsSteps = { dataset: {} as Record<string, string> };
+  const diagnosticsGuidanceTitle = { textContent: '' };
+  const diagnosticsGuidanceSummary = { textContent: '' };
+  const diagnosticsGuidanceBefore = { textContent: '' };
+  const diagnosticsGuidanceAction = { textContent: '' };
+  const diagnosticsCase = { hidden: true, textContent: '' };
+  const advancedPanel = { hidden: true, scrollIntoView() {} };
+  const advancedClose = interactiveElement({ focus() {} });
+  const advancedPolling = interactiveElement({
+    value: '',
+    validityMessage: '',
+    setCustomValidity(message: string) {
+      this.validityMessage = message;
+    },
+    reportValidity() {},
+  });
+  const advancedFfmpeg = interactiveElement({ value: '' });
+  const advancedStatus = { textContent: '' };
   const browserWindow = interactiveElement({});
   const requests: Array<{ path: string; body: unknown }> = [];
   let updatedConfig: Array<Record<string, unknown>> | undefined;
@@ -77,7 +112,13 @@ async function renderUi(
   let saveButtonDisables = 0;
   let saveButtonEnables = 0;
   const translatedNodes = translationKeys.map((key) => ({ dataset: { i18n: key }, textContent: '__untranslated__' }));
-  const translatedLabels = ['accountConnectionLabel', 'setupSequenceLabel'].map((key) => ({
+  const translatedLabels = [
+    'accountConnectionLabel',
+    'closeAdvanced',
+    'closeDiagnostics',
+    'dashboardMenuLabel',
+    'setupSequenceLabel',
+  ].map((key) => ({
     attributes: { 'aria-label': '__untranslated__' },
     dataset: { i18nAriaLabel: key },
     setAttribute(name: string, value: string) {
@@ -109,6 +150,7 @@ async function renderUi(
           '[data-auth-submit]': authSubmit,
           '[data-challenge-submit]': challengeSubmit,
           '[data-dashboard]': dashboard,
+          '[data-dashboard-state]': dashboardState,
           '[data-dashboard-title]': dashboardTitle,
           '[data-dashboard-badge]': dashboardBadge,
           '[data-dashboard-summary]': dashboardSummary,
@@ -118,11 +160,29 @@ async function renderUi(
           '[data-legacy-notice]': legacyNotice,
           '[data-legacy-settings]': legacySettings,
           '[data-legacy-acknowledge]': legacyAcknowledge,
+          '[data-dashboard-menu-trigger]': dashboardMenuTrigger,
+          '[data-dashboard-menu]': dashboardMenu,
+          '[data-menu-diagnostics]': menuDiagnostics,
+          '[data-menu-advanced]': menuAdvanced,
+          '[data-diagnostics]': diagnosticsPanel,
+          '[data-diagnostics-close]': diagnosticsClose,
           '[data-diagnostics-profile]': diagnosticsProfile,
           '[data-diagnostics-authorize]': diagnosticsAuthorize,
           '[data-diagnostics-reproduction]': diagnosticsReproduction,
           '[data-diagnostics-status]': diagnosticsStatus,
           '[data-diagnostics-issue]': diagnosticsIssue,
+          '[data-diagnostics-result]': diagnosticsResult,
+          '[data-diagnostics-steps]': diagnosticsSteps,
+          '[data-diagnostics-guidance-title]': diagnosticsGuidanceTitle,
+          '[data-diagnostics-guidance-summary]': diagnosticsGuidanceSummary,
+          '[data-diagnostics-guidance-before]': diagnosticsGuidanceBefore,
+          '[data-diagnostics-guidance-action]': diagnosticsGuidanceAction,
+          '[data-diagnostics-case]': diagnosticsCase,
+          '[data-advanced-settings]': advancedPanel,
+          '[data-advanced-close]': advancedClose,
+          '[data-advanced-polling]': advancedPolling,
+          '[data-advanced-ffmpeg]': advancedFfmpeg,
+          '[data-advanced-status]': advancedStatus,
         }[selector];
       },
       querySelectorAll(selector: string) {
@@ -184,11 +244,29 @@ async function renderUi(
     country,
     password,
     dashboard,
+    dashboardState,
     dashboardBadge,
     dashboardSummary,
     dashboardAuthenticate,
     dashboardTitle,
+    dashboardMenu,
+    dashboardMenuTrigger,
     deviceGroups,
+    menuAdvanced,
+    menuDiagnostics,
+    diagnosticsPanel,
+    diagnosticsClose,
+    diagnosticsProfile,
+    diagnosticsGuidanceAction,
+    diagnosticsGuidanceBefore,
+    diagnosticsGuidanceSummary,
+    diagnosticsGuidanceTitle,
+    diagnosticsSteps,
+    advancedPanel,
+    advancedClose,
+    advancedPolling,
+    advancedFfmpeg,
+    advancedStatus,
     legacyAcknowledge,
     legacyNotice,
     legacySettings,
@@ -306,7 +384,10 @@ describe('packed plugin', () => {
       expect(uiShellFiles).toEqual([
         'homebridge-ui/public/app.css',
         'homebridge-ui/public/assets/icons/bolt.svg',
+        'homebridge-ui/public/assets/icons/bug-report.svg',
         'homebridge-ui/public/assets/icons/inventory.svg',
+        'homebridge-ui/public/assets/icons/settings.svg',
+        'homebridge-ui/public/assets/icons/settings_backup_restore.svg',
         'homebridge-ui/public/assets/icons/troubleshoot.svg',
         'homebridge-ui/public/assets/icons/warning.svg',
         'homebridge-ui/public/assets/logo-dark.svg',
@@ -334,7 +415,10 @@ describe('packed plugin', () => {
       expect(document).toContain('src="assets/logo.svg"');
       expect(document).toContain('src="assets/logo-dark.svg"');
       expect(document).toContain('src="assets/icons/inventory.svg"');
+      expect(document).toContain('src="assets/icons/bug-report.svg"');
+      expect(document).toContain('src="assets/icons/settings.svg"');
       expect(document).toContain('src="assets/icons/warning.svg"');
+      expect(document).toContain('homebridge-eufy-security/issues/1010');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
       expect(document).toContain('data-first-setup-continue');
@@ -348,6 +432,14 @@ describe('packed plugin', () => {
         [
           'accountLabel',
           'acknowledge',
+          'advancedDeviceHelp',
+          'advancedEyebrow',
+          'advancedFfmpegHelp',
+          'advancedFfmpegLabel',
+          'advancedPollingHelp',
+          'advancedPollingLabel',
+          'advancedSummary',
+          'advancedTitle',
           'authenticate',
           'authReady',
           'authSummary',
@@ -365,6 +457,11 @@ describe('packed plugin', () => {
           'countryLabel',
           'devicesEyebrow',
           'diagnosticsAuthorize',
+          'diagnosticsActionLabel',
+          'diagnosticsArchivePlan',
+          'diagnosticsArchiveUnavailable',
+          'diagnosticsBeforeLabel',
+          'diagnosticsEvidenceReady',
           'diagnosticsEyebrow',
           'diagnosticsOpenIssue',
           'diagnosticsProfileControl',
@@ -375,7 +472,11 @@ describe('packed plugin', () => {
           'diagnosticsProfileOther',
           'diagnosticsProfileRecording',
           'diagnosticsProfileStartup',
+          'diagnosticsPrivacy',
           'diagnosticsStartReproduction',
+          'diagnosticsStepChoose',
+          'diagnosticsStepReproduce',
+          'diagnosticsStepReview',
           'diagnosticsSummary',
           'diagnosticsTitle',
           'oneAccountSession',
@@ -384,6 +485,9 @@ describe('packed plugin', () => {
           'legacyEyebrow',
           'legacySummary',
           'legacyTitle',
+          'menuAdvanced',
+          'menuDiagnostics',
+          'menuRelogin',
           'sessionDetails',
           'setupStatusEyebrow',
           'shareLink',
@@ -393,7 +497,13 @@ describe('packed plugin', () => {
           'trustedDeviceLabel',
         ].sort(),
       );
-      expect(translatedLabelKeys).toEqual(['accountConnectionLabel', 'setupSequenceLabel']);
+      expect(translatedLabelKeys).toEqual([
+        'accountConnectionLabel',
+        'closeAdvanced',
+        'closeDiagnostics',
+        'dashboardMenuLabel',
+        'setupSequenceLabel',
+      ]);
       const expectedCatalogKeys = [
         ...translationKeys,
         ...translatedLabelKeys,
@@ -401,6 +511,8 @@ describe('packed plugin', () => {
         'authFailed',
         'authSuccess',
         'authTimedOut',
+        'advancedSaveFailed',
+        'advancedPollingInvalid',
         'captchaLabel',
         'twoFactorLabel',
         'categoryClean',
@@ -432,13 +544,37 @@ describe('packed plugin', () => {
         'diagnosticDescription',
         'diagnosticOnly',
         'diagnosticsAuthorized',
+        'diagnosticsCase',
         'diagnosticsComplete',
+        'diagnosticsControlAction',
+        'diagnosticsControlBefore',
+        'diagnosticsControlSummary',
+        'diagnosticsDashboardAction',
+        'diagnosticsDashboardBefore',
+        'diagnosticsDashboardSummary',
+        'diagnosticsDevicesAction',
+        'diagnosticsDevicesBefore',
+        'diagnosticsDevicesSummary',
         'diagnosticsEndReproduction',
         'diagnosticsExpired',
         'diagnosticsFailed',
         'diagnosticsInactive',
+        'diagnosticsLiveAction',
+        'diagnosticsLiveBefore',
+        'diagnosticsLiveSummary',
         'diagnosticsMissingEvidence',
+        'diagnosticsOtherAction',
+        'diagnosticsOtherBefore',
+        'diagnosticsOtherSummary',
+        'diagnosticsProfileChanged',
+        'diagnosticsReauthorize',
+        'diagnosticsRecordingAction',
+        'diagnosticsRecordingBefore',
+        'diagnosticsRecordingSummary',
         'diagnosticsReproducing',
+        'diagnosticsStartupAction',
+        'diagnosticsStartupBefore',
+        'diagnosticsStartupSummary',
         'preferenceAudio',
         'preferenceRepresented',
         'preferenceSaveFailed',
@@ -505,6 +641,9 @@ describe('packed plugin', () => {
       expect(Object.values(frenchUi.translations)).not.toContain(undefined);
       expect(frenchUi.translatedLabels).toEqual({
         accountConnectionLabel: 'Informations sur la connexion du compte',
+        closeAdvanced: 'Fermer les réglages avancés',
+        closeDiagnostics: 'Fermer les diagnostics',
+        dashboardMenuLabel: 'Ouvrir le menu du tableau de bord',
         setupSequenceLabel: 'Étapes de configuration',
       });
       const englishUi = await renderUi(script, [], catalogs, 'es', translationKeys);
@@ -518,6 +657,62 @@ describe('packed plugin', () => {
       });
       expect(Object.values(englishUi.translations)).not.toContain('__untranslated__');
       expect(Object.values(englishUi.translations)).not.toContain(undefined);
+
+      const menuUi = await renderUi(
+        script,
+        [
+          {
+            platform: 'HomebridgeEufy',
+            username: 'guest@example.invalid',
+            pollingIntervalMinutes: 15,
+            ffmpegPath: '/synthetic/ffmpeg',
+          },
+        ],
+        catalogs,
+      );
+      await menuUi.dashboardMenuTrigger.dispatch('click');
+      expect(menuUi.dashboardMenu).toMatchObject({ hidden: false });
+      expect(menuUi.dashboardMenuTrigger.attributes['aria-expanded']).toBe('true');
+      await menuUi.menuDiagnostics.dispatch('click');
+      expect(menuUi).toMatchObject({
+        dashboardMenu: { hidden: true },
+        dashboardState: { hidden: true },
+        dashboardSummary: { hidden: true },
+        deviceGroups: { hidden: true },
+        diagnosticsPanel: { hidden: false },
+        diagnosticsSteps: { dataset: { phase: 'choose' } },
+        diagnosticsGuidanceTitle: { textContent: catalogs['i18n/en.json'].diagnosticsProfileStartup },
+        diagnosticsGuidanceSummary: { textContent: catalogs['i18n/en.json'].diagnosticsStartupSummary },
+      });
+      menuUi.diagnosticsProfile.value = 'control-state';
+      await menuUi.diagnosticsProfile.dispatch('change');
+      expect(menuUi.diagnosticsGuidanceAction.textContent).toBe(catalogs['i18n/en.json'].diagnosticsControlAction);
+      await menuUi.diagnosticsClose.dispatch('click');
+      expect(menuUi.diagnosticsPanel.hidden).toBe(true);
+      expect(menuUi).toMatchObject({
+        dashboardState: { hidden: false },
+        dashboardSummary: { hidden: false },
+        deviceGroups: { hidden: false },
+      });
+      await menuUi.dashboardMenuTrigger.dispatch('click');
+      await menuUi.menuAdvanced.dispatch('click');
+      expect(menuUi).toMatchObject({
+        advancedPanel: { hidden: false },
+        advancedPolling: { value: '15' },
+        advancedFfmpeg: { value: '/synthetic/ffmpeg' },
+      });
+      menuUi.advancedPolling.value = '5';
+      await menuUi.advancedPolling.dispatch('change');
+      expect(menuUi.updatedConfig?.[0]).toMatchObject({ pollingIntervalMinutes: 5, ffmpegPath: '/synthetic/ffmpeg' });
+      menuUi.advancedPolling.value = '';
+      await menuUi.advancedPolling.dispatch('change');
+      expect(menuUi.updatedConfig?.[0]).not.toHaveProperty('pollingIntervalMinutes');
+      menuUi.advancedPolling.value = '2.5';
+      await menuUi.advancedPolling.dispatch('change');
+      expect(menuUi.advancedPolling.validityMessage).toBe(catalogs['i18n/en.json'].advancedPollingInvalid);
+      expect(menuUi.updatedConfig?.[0]).not.toHaveProperty('pollingIntervalMinutes');
+      await menuUi.advancedClose.dispatch('click');
+      expect(menuUi.advancedPanel.hidden).toBe(true);
 
       englishUi.account.value = 'guest@example.invalid';
       englishUi.password.value = 'synthetic-password';

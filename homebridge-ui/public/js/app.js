@@ -17,6 +17,7 @@ const authStatus = document.querySelector('[data-auth-status]');
 const authSubmit = document.querySelector('[data-auth-submit]');
 const challengeSubmit = document.querySelector('[data-challenge-submit]');
 const dashboard = document.querySelector('[data-dashboard]');
+const dashboardState = document.querySelector('[data-dashboard-state]');
 const dashboardTitle = document.querySelector('[data-dashboard-title]');
 const dashboardBadge = document.querySelector('[data-dashboard-badge]');
 const dashboardSummary = document.querySelector('[data-dashboard-summary]');
@@ -26,11 +27,29 @@ const pageTitle = document.querySelector('[data-page-title]');
 const legacyNotice = document.querySelector('[data-legacy-notice]');
 const legacySettings = document.querySelector('[data-legacy-settings]');
 const legacyAcknowledge = document.querySelector('[data-legacy-acknowledge]');
+const dashboardMenuTrigger = document.querySelector('[data-dashboard-menu-trigger]');
+const dashboardMenu = document.querySelector('[data-dashboard-menu]');
+const menuDiagnostics = document.querySelector('[data-menu-diagnostics]');
+const menuAdvanced = document.querySelector('[data-menu-advanced]');
+const diagnosticsPanel = document.querySelector('[data-diagnostics]');
+const diagnosticsClose = document.querySelector('[data-diagnostics-close]');
 const diagnosticsProfile = document.querySelector('[data-diagnostics-profile]');
 const diagnosticsAuthorize = document.querySelector('[data-diagnostics-authorize]');
 const diagnosticsReproduction = document.querySelector('[data-diagnostics-reproduction]');
 const diagnosticsStatus = document.querySelector('[data-diagnostics-status]');
 const diagnosticsIssue = document.querySelector('[data-diagnostics-issue]');
+const diagnosticsResult = document.querySelector('[data-diagnostics-result]');
+const diagnosticsSteps = document.querySelector('[data-diagnostics-steps]');
+const diagnosticsGuidanceTitle = document.querySelector('[data-diagnostics-guidance-title]');
+const diagnosticsGuidanceSummary = document.querySelector('[data-diagnostics-guidance-summary]');
+const diagnosticsGuidanceBefore = document.querySelector('[data-diagnostics-guidance-before]');
+const diagnosticsGuidanceAction = document.querySelector('[data-diagnostics-guidance-action]');
+const diagnosticsCase = document.querySelector('[data-diagnostics-case]');
+const advancedPanel = document.querySelector('[data-advanced-settings]');
+const advancedClose = document.querySelector('[data-advanced-close]');
+const advancedPolling = document.querySelector('[data-advanced-polling]');
+const advancedFfmpeg = document.querySelector('[data-advanced-ffmpeg]');
+const advancedStatus = document.querySelector('[data-advanced-status]');
 
 let messages = {};
 let pluginConfig = [];
@@ -108,8 +127,67 @@ function setBusy(busy) {
   challengeSubmit.disabled = busy;
 }
 
+const diagnosticsProfiles = {
+  'startup-authentication': {
+    title: 'diagnosticsProfileStartup',
+    summary: 'diagnosticsStartupSummary',
+    before: 'diagnosticsStartupBefore',
+    action: 'diagnosticsStartupAction',
+  },
+  'device-representation': {
+    title: 'diagnosticsProfileDevices',
+    summary: 'diagnosticsDevicesSummary',
+    before: 'diagnosticsDevicesBefore',
+    action: 'diagnosticsDevicesAction',
+  },
+  'control-state': {
+    title: 'diagnosticsProfileControl',
+    summary: 'diagnosticsControlSummary',
+    before: 'diagnosticsControlBefore',
+    action: 'diagnosticsControlAction',
+  },
+  'live-media': {
+    title: 'diagnosticsProfileLiveMedia',
+    summary: 'diagnosticsLiveSummary',
+    before: 'diagnosticsLiveBefore',
+    action: 'diagnosticsLiveAction',
+  },
+  'hksv-recording': {
+    title: 'diagnosticsProfileRecording',
+    summary: 'diagnosticsRecordingSummary',
+    before: 'diagnosticsRecordingBefore',
+    action: 'diagnosticsRecordingAction',
+  },
+  'dashboard-ui': {
+    title: 'diagnosticsProfileDashboard',
+    summary: 'diagnosticsDashboardSummary',
+    before: 'diagnosticsDashboardBefore',
+    action: 'diagnosticsDashboardAction',
+  },
+  other: {
+    title: 'diagnosticsProfileOther',
+    summary: 'diagnosticsOtherSummary',
+    before: 'diagnosticsOtherBefore',
+    action: 'diagnosticsOtherAction',
+  },
+};
+
+function renderDiagnosticsGuidance() {
+  const guidance = diagnosticsProfiles[diagnosticsProfile.value] ?? diagnosticsProfiles.other;
+  diagnosticsGuidanceTitle.textContent = messages[guidance.title] ?? '';
+  diagnosticsGuidanceSummary.textContent = messages[guidance.summary] ?? '';
+  diagnosticsGuidanceBefore.textContent = messages[guidance.before] ?? '';
+  diagnosticsGuidanceAction.textContent = messages[guidance.action] ?? '';
+}
+
 function renderDiagnostics(state) {
   diagnosticsState = state;
+  const phase = state.partialExportAvailable
+    ? 'review'
+    : state.status === 'authorized' || state.status === 'reproducing'
+      ? 'reproduce'
+      : 'choose';
+  diagnosticsSteps.dataset.phase = phase;
   diagnosticsProfile.disabled = state.status === 'reproducing';
   diagnosticsAuthorize.disabled = state.status === 'reproducing';
   diagnosticsReproduction.disabled = !['authorized', 'reproducing'].includes(state.status);
@@ -117,7 +195,16 @@ function renderDiagnostics(state) {
     state.status === 'reproducing' ? messages.diagnosticsEndReproduction : messages.diagnosticsStartReproduction;
   diagnosticsIssue.hidden = !state.partialExportAvailable;
   diagnosticsIssue.href = state.issueUrl ?? '';
+  diagnosticsResult.hidden = !state.partialExportAvailable;
   if (state.profile) diagnosticsProfile.value = state.profile;
+  renderDiagnosticsGuidance();
+  diagnosticsAuthorize.textContent = state.status === 'inactive' ? messages.diagnosticsAuthorize : messages.diagnosticsReauthorize;
+  diagnosticsCase.hidden = !state.supportCaseId;
+  diagnosticsCase.textContent = state.supportCaseId
+    ? (messages.diagnosticsCase ?? '')
+        .replace('{caseId}', state.supportCaseId)
+        .replace('{expiresAt}', new Date(state.expiresAt).toLocaleString(shell.lang || 'en'))
+    : '';
   const statusKey = {
     inactive: 'diagnosticsInactive',
     authorized: 'diagnosticsAuthorized',
@@ -143,7 +230,17 @@ diagnosticsAuthorize.addEventListener('click', async () => {
 });
 
 diagnosticsProfile.addEventListener('change', () => {
-  if (diagnosticsProfile.value !== diagnosticsState.profile) diagnosticsReproduction.disabled = true;
+  renderDiagnosticsGuidance();
+  if (diagnosticsProfile.value !== diagnosticsState.profile) {
+    diagnosticsReproduction.disabled = true;
+    diagnosticsResult.hidden = true;
+    diagnosticsIssue.hidden = true;
+    diagnosticsCase.hidden = true;
+    diagnosticsSteps.dataset.phase = 'choose';
+    diagnosticsStatus.textContent = messages.diagnosticsProfileChanged ?? '';
+  } else {
+    renderDiagnostics(diagnosticsState);
+  }
 });
 
 diagnosticsReproduction.addEventListener('click', async () => {
@@ -166,6 +263,79 @@ diagnosticsReproduction.addEventListener('click', async () => {
   }
 });
 
+function closeDashboardMenu() {
+  dashboardMenu.hidden = true;
+  dashboardMenuTrigger.setAttribute('aria-expanded', 'false');
+}
+
+function openDashboardPanel(panel) {
+  closeDashboardMenu();
+  dashboardState.hidden = true;
+  dashboardSummary.hidden = true;
+  deviceGroups.hidden = true;
+  diagnosticsPanel.hidden = panel !== diagnosticsPanel;
+  advancedPanel.hidden = panel !== advancedPanel;
+  panel.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  (panel === diagnosticsPanel ? diagnosticsClose : advancedClose).focus?.();
+}
+
+function closeDashboardPanel() {
+  diagnosticsPanel.hidden = true;
+  advancedPanel.hidden = true;
+  dashboardState.hidden = false;
+  dashboardSummary.hidden = false;
+  deviceGroups.hidden = false;
+  dashboardMenuTrigger.focus?.();
+}
+
+dashboardMenuTrigger.addEventListener('click', () => {
+  const open = dashboardMenu.hidden;
+  dashboardMenu.hidden = !open;
+  dashboardMenuTrigger.setAttribute('aria-expanded', String(open));
+});
+
+menuDiagnostics.addEventListener('click', () => openDashboardPanel(diagnosticsPanel));
+menuAdvanced.addEventListener('click', () => {
+  const config = configuredBlock() ?? {};
+  advancedPolling.value = String(config.pollingIntervalMinutes ?? 10);
+  advancedFfmpeg.value = config.ffmpegPath ?? '';
+  openDashboardPanel(advancedPanel);
+});
+diagnosticsClose.addEventListener('click', () => {
+  closeDashboardPanel();
+});
+advancedClose.addEventListener('click', () => {
+  closeDashboardPanel();
+});
+
+async function updateAdvancedSettings() {
+  const existing = configuredBlock();
+  if (!existing) return;
+  const rawPolling = advancedPolling.value.trim();
+  const pollingIntervalMinutes = rawPolling === '' ? 10 : Number(rawPolling);
+  if (!Number.isInteger(pollingIntervalMinutes) || pollingIntervalMinutes < 0) {
+    advancedPolling.setCustomValidity?.(messages.advancedPollingInvalid ?? '');
+    advancedPolling.reportValidity?.();
+    return;
+  }
+  advancedPolling.setCustomValidity?.('');
+  const ffmpegPath = advancedFfmpeg.value.trim();
+  const next = { ...existing };
+  if (pollingIntervalMinutes === 10) delete next.pollingIntervalMinutes;
+  else next.pollingIntervalMinutes = pollingIntervalMinutes;
+  if (ffmpegPath) next.ffmpegPath = ffmpegPath;
+  else delete next.ffmpegPath;
+  try {
+    await updateConfig(next);
+    advancedStatus.textContent = '';
+  } catch {
+    advancedStatus.textContent = messages.advancedSaveFailed ?? '';
+  }
+}
+
+advancedPolling.addEventListener('change', updateAdvancedSettings);
+advancedFfmpeg.addEventListener('change', updateAdvancedSettings);
+
 function configuredBlock() {
   return pluginConfig.find((block) => block.platform === 'HomebridgeEufy');
 }
@@ -185,20 +355,25 @@ function configSignature(config) {
 }
 
 async function updateConfig(block) {
-  pluginConfig = pluginConfig.map((candidate) => (candidate.platform === 'HomebridgeEufy' ? block : candidate));
-  if (!pluginConfig.includes(block)) pluginConfig.push(block);
-  await homebridge.updatePluginConfig(pluginConfig);
-  if (configSignature(pluginConfig) === savedConfigSignature) homebridge.disableSaveButton();
+  const nextConfig = pluginConfig.map((candidate) => (candidate.platform === 'HomebridgeEufy' ? block : candidate));
+  if (!nextConfig.includes(block)) nextConfig.push(block);
+  await homebridge.updatePluginConfig(nextConfig);
+  pluginConfig = nextConfig;
+  if (configSignature(nextConfig) === savedConfigSignature) homebridge.disableSaveButton();
   else homebridge.enableSaveButton();
 }
 
 dashboardView.bindPreferences(dashboardElements, configuredBlock, updateConfig, () => messages);
 
 dashboardAuthenticate.addEventListener('click', () => {
+  closeDashboardMenu();
+  diagnosticsPanel.hidden = true;
+  advancedPanel.hidden = true;
   dashboard.hidden = true;
   setupContent.hidden = false;
   masthead.hidden = false;
   pageTitle.textContent = messages.pageTitle;
+  accountInput.focus?.();
 });
 
 legacyAcknowledge.addEventListener('click', async () => {

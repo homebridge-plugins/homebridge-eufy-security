@@ -111,7 +111,7 @@
     elements.masthead.hidden = true;
     renderDevices(result.devices, config, messages, elements.groups);
     elements.setup.hidden = true;
-    elements.authenticate.hidden = result.state !== 'authentication-required' || result.devices.length === 0;
+    elements.authenticate.hidden = false;
     if (result.devices.length > 0) {
       elements.pageTitle.textContent = messages.dashboardPageTitle;
     } else if (result.state === 'authentication-required') {

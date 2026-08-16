@@ -23,6 +23,9 @@ homebridge-ui/public/assets/*
 homebridge-ui/public/assets/icons/*
 !homebridge-ui/public/assets/icons/inventory.svg
 !homebridge-ui/public/assets/icons/bolt.svg
+!homebridge-ui/public/assets/icons/bug-report.svg
+!homebridge-ui/public/assets/icons/settings.svg
+!homebridge-ui/public/assets/icons/settings_backup_restore.svg
 !homebridge-ui/public/assets/icons/troubleshoot.svg
 !homebridge-ui/public/assets/icons/warning.svg
 !homebridge-ui/public/i18n/
