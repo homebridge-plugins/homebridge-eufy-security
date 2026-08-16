@@ -24,6 +24,12 @@ async function renderUi(
     retry: false,
   },
   dashboardSnapshot: Record<string, unknown> = { state: 'ready', devices: [] },
+  diagnosticsSnapshot: Record<string, unknown> = {
+    status: 'inactive',
+    selectedEvidence: [],
+    missingEvidence: [],
+    partialExportAvailable: false,
+  },
 ) {
   function interactiveElement<T extends object>(state: T) {
     const listeners: Record<string, Array<(event?: { preventDefault(): void }) => void | Promise<void>>> = {};
@@ -210,7 +216,7 @@ async function renderUi(
       i18nCurrentLang: async () => language,
       request: async (path: string, body: unknown) => {
         if (path === '/diagnostics/status') {
-          return { status: 'inactive', selectedEvidence: [], missingEvidence: [], partialExportAvailable: false };
+          return diagnosticsSnapshot;
         }
         requests.push({ path, body });
         if (path === '/auth/start') return authenticationStart;
@@ -257,6 +263,11 @@ async function renderUi(
     diagnosticsPanel,
     diagnosticsClose,
     diagnosticsProfile,
+    diagnosticsAuthorize,
+    diagnosticsReproduction,
+    diagnosticsStatus,
+    diagnosticsIssue,
+    diagnosticsResult,
     diagnosticsGuidanceAction,
     diagnosticsGuidanceBefore,
     diagnosticsGuidanceSummary,
@@ -682,6 +693,8 @@ describe('packed plugin', () => {
         dashboardSummary: { hidden: true },
         deviceGroups: { hidden: true },
         diagnosticsPanel: { hidden: false },
+        diagnosticsIssue: { hidden: true },
+        diagnosticsResult: { hidden: true },
         diagnosticsSteps: { dataset: { phase: 'choose' } },
         diagnosticsGuidanceTitle: { textContent: catalogs['i18n/en.json'].diagnosticsProfileStartup },
         diagnosticsGuidanceSummary: { textContent: catalogs['i18n/en.json'].diagnosticsStartupSummary },
@@ -715,6 +728,31 @@ describe('packed plugin', () => {
       expect(menuUi.updatedConfig?.[0]).not.toHaveProperty('pollingIntervalMinutes');
       await menuUi.advancedClose.dispatch('click');
       expect(menuUi.advancedPanel.hidden).toBe(true);
+
+      const completedDiagnosticsUi = await renderUi(
+        script,
+        [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        undefined,
+        {
+          status: 'complete',
+          supportCaseId: 'support-00000000-0000-4000-8000-000000000000',
+          profile: 'startup-authentication',
+          expiresAt: '2026-08-19T10:18:42.832Z',
+          selectedEvidence: ['plugin-log', 'sdk-log'],
+          missingEvidence: [],
+          partialExportAvailable: true,
+          issueUrl: 'https://example.invalid/issue',
+        },
+      );
+      expect(completedDiagnosticsUi).toMatchObject({
+        diagnosticsSteps: { dataset: { phase: 'review' } },
+        diagnosticsIssue: { hidden: false, href: 'https://example.invalid/issue' },
+        diagnosticsResult: { hidden: false },
+      });
 
       englishUi.account.value = 'guest@example.invalid';
       englishUi.password.value = 'synthetic-password';
