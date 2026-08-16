@@ -868,6 +868,18 @@ const HOMEKIT_CONDITIONS = {
     summaryKey: 'log.homekit.armingReconciliationExpired',
     actionKey: 'log.action.checkPhysicalArmingMode',
   },
+  'lock-capability-unavailable': {
+    summaryKey: 'log.homekit.lockCapabilityUnavailable',
+    actionKey: 'log.action.waitLock',
+  },
+  'lock-operation-failed': {
+    summaryKey: 'log.homekit.lockOperationFailed',
+    actionKey: 'log.action.retryLock',
+  },
+  'lock-reconciliation-expired': {
+    summaryKey: 'log.homekit.lockReconciliationExpired',
+    actionKey: 'log.action.checkPhysicalLock',
+  },
 } as const;
 
 type HomeKitConditionCode = keyof typeof HOMEKIT_CONDITIONS;

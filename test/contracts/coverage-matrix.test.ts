@@ -127,6 +127,22 @@ describe('SDK/HAP coverage matrix', () => {
     );
     expect(representedSmartLight.every(({ followUp }) => followUp === undefined)).toBe(true);
 
+    const representedLock = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'lock.mechanism');
+    expect(representedLock.map(({ id }) => id).sort()).toEqual(
+      ['lock.lock.momentary-action', 'lock.unlock.momentary-action'].sort(),
+    );
+    expect(representedLock.every(({ controlStatus }) => controlStatus === 'controllable')).toBe(true);
+    expect(representedLock.every(({ followUp }) => followUp === undefined)).toBe(true);
+    expect(representedLock.every(({ evidence }) => evidence.some((item) => item.includes('T8531')))).toBe(true);
+    expect(
+      SDK_HAP_COVERAGE_MATRIX.rows
+        .filter(({ id }) => id === 'lock.locked.read' || id === 'lock.lockState.event')
+        .every(
+          ({ disposition, representationStatus }) =>
+            disposition === 'blocked-sdk-gap' && representationStatus === 'not-represented',
+        ),
+    ).toBe(true);
+
     const diagnosticOnlySiren = SDK_HAP_COVERAGE_MATRIX.rows.filter(
       ({ capability, disposition }) => capability === 'siren' && disposition === 'diagnostic-only',
     );

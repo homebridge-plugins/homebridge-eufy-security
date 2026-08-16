@@ -2,7 +2,7 @@ import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
 import type { PlatformAccessory } from 'homebridge';
 
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
-import { indexDeviceMemberEvidence } from '../device/member-evidence.js';
+import { indexDeviceEvidence } from '../device/member-evidence.js';
 import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
 import { admittedHomeKitAdapters } from './representation.js';
 
@@ -138,8 +138,8 @@ export class HomeKitReconciler {
     for (const [serial, device] of view.registry) {
       const previousHandles = this.attachedAdapters.get(serial);
       const manifest = manifests.get(serial)!;
-      const evidence = indexDeviceMemberEvidence(manifest);
-      const admittedAdapters = admittedHomeKitAdapters(manifest);
+      const evidence = indexDeviceEvidence(manifest);
+      const admittedAdapters = admittedHomeKitAdapters(manifest, evidence);
       const admittedKeys = new Set(admittedAdapters.map(([key]) => key));
       for (const previousKey of this.activeAdapters.get(serial) ?? []) {
         if (!admittedKeys.has(previousKey)) {
@@ -168,7 +168,7 @@ export class HomeKitReconciler {
       const attachOrRetain = (key: string, adapter: (typeof admittedAdapters)[number][1]): boolean => {
         const handle = adapter.attach({
           device,
-          evidence,
+          evidence: evidence.members,
           accessory,
           hap: this.store.hap,
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),

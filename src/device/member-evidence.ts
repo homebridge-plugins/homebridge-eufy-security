@@ -13,6 +13,22 @@ export interface DeviceMemberEvidence {
 /** Exact SDK evidence an adapter requires before it may attach. */
 export interface DeviceMemberRequirement extends DeviceMemberEvidence {}
 
+/** Product identity evidence retained without deriving capability meaning from presentation fields. */
+export interface DeviceProductEvidence {
+  readonly model?: string;
+}
+
+/** Exact product evidence an adapter requires in addition to semantic members. */
+export interface DeviceProductRequirement {
+  readonly model: string;
+}
+
+/** One device's product and member evidence indexed from the same complete manifest. */
+export interface DeviceEvidenceIndex {
+  readonly product: DeviceProductEvidence;
+  readonly members: ReadonlyMap<string, DeviceMemberEvidence>;
+}
+
 function addEvidence(evidence: Map<string, DeviceMemberEvidence>, member: DeviceMemberEvidence): void {
   const previous = evidence.get(member.id);
   if (previous) {
@@ -54,6 +70,22 @@ export function indexDeviceMemberEvidence(manifest: DeviceManifest): ReadonlyMap
     }
   }
   return evidence;
+}
+
+/** Indexes product identity and semantic members once from one complete SDK manifest. */
+export function indexDeviceEvidence(manifest: DeviceManifest): DeviceEvidenceIndex {
+  return {
+    product: { ...(manifest.model === undefined ? {} : { model: manifest.model }) },
+    members: indexDeviceMemberEvidence(manifest),
+  };
+}
+
+/** Matches an exact SDK product model without consulting display or transport fields. */
+export function satisfiesProductRequirement(
+  evidence: DeviceProductEvidence,
+  requirement: DeviceProductRequirement | undefined,
+): boolean {
+  return requirement === undefined || evidence.model === requirement.model;
 }
 
 /** Matches every required member plus at least one alternative when alternatives are declared. */

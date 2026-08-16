@@ -1,7 +1,12 @@
 import type { CapabilityDescriptor, DeviceManifest } from '@mega-yfue/eufy-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { indexDeviceMemberEvidence, satisfiesMemberRequirements } from '../../src/device/member-evidence.js';
+import {
+  indexDeviceEvidence,
+  indexDeviceMemberEvidence,
+  satisfiesMemberRequirements,
+  satisfiesProductRequirement,
+} from '../../src/device/member-evidence.js';
 
 function manifest(details: CapabilityDescriptor[]): DeviceManifest {
   return {
@@ -71,5 +76,18 @@ describe('device member evidence', () => {
         { id: 'doorbell.doorbellPress.event', kind: 'event' },
       ]),
     ).toBe(false);
+  });
+
+  it('indexes exact product evidence without inferring from display model or codec', () => {
+    const candidate = manifest([contactDetail()]);
+    candidate.model = 'T8531';
+    candidate.modelName = 'Synthetic unrelated display model';
+    candidate.codec = 'lock';
+
+    expect(satisfiesProductRequirement(indexDeviceEvidence(candidate).product, { model: 'T8531' })).toBe(true);
+    expect(satisfiesProductRequirement(indexDeviceEvidence(candidate).product, { model: 'T85D0' })).toBe(false);
+    delete candidate.model;
+    candidate.modelName = 'T8531';
+    expect(satisfiesProductRequirement(indexDeviceEvidence(candidate).product, { model: 'T8531' })).toBe(false);
   });
 });

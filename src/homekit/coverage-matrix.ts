@@ -35,10 +35,23 @@ export interface SdkHapCoverageMatrix {
   rows: CoverageRow[];
 }
 
-const COVERAGE_BY_ROW = new Map<string, { adapter: string; coverage: AdapterCoverage }>(
-  Object.entries(ADAPTER_REGISTRY).flatMap(([adapter, registration]) =>
-    registration.coverage.map((coverage) => [coverage.id, { adapter, coverage }] as const),
-  ),
+const COVERAGE_BY_ROW = new Map<string, { adapter: string; coverage: AdapterCoverage; productEvidence?: string }>(
+  Object.entries(ADAPTER_REGISTRY).flatMap(([adapter, registration]) => {
+    const requiresProduct = 'requiresProduct' in registration ? registration.requiresProduct : undefined;
+    return registration.coverage.map(
+      (coverage) =>
+        [
+          coverage.id,
+          {
+            adapter,
+            coverage,
+            ...(requiresProduct
+              ? { productEvidence: `@mega-yfue/eufy-sdk DeviceManifest.model ${requiresProduct.model}` }
+              : {}),
+          },
+        ] as const,
+    );
+  }),
 );
 
 const BLOCKED = new Set([
@@ -96,11 +109,6 @@ defer(
   'requires distinct stored-only and live snapshot policy',
 );
 defer(['camera.talkback.momentary-action'], '#1001', 'requires isolated return-audio adaptation');
-defer(
-  ['lock.lock.momentary-action', 'lock.unlock.momentary-action'],
-  '#992',
-  'requires the T8531-only control boundary and unknown-current policy',
-);
 /** Derives the current semantic member inventory directly from the pinned SDK contract. */
 function currentSdkSurface(): string[] {
   const rows: string[] = [];
@@ -169,7 +177,10 @@ function makeRow(id: string): CoverageRow {
     capability,
     member,
     memberKind,
-    evidence: memberEvidence(CAPABILITY_MODULES[capability as keyof typeof CAPABILITY_MODULES], member, memberKind),
+    evidence: [
+      ...memberEvidence(CAPABILITY_MODULES[capability as keyof typeof CAPABILITY_MODULES], member, memberKind),
+      ...(represented?.productEvidence ? [represented.productEvidence] : []),
+    ],
     hapFit:
       represented?.coverage.hapFit ??
       (disposition === 'blocked-sdk-gap'

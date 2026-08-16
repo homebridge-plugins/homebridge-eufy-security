@@ -157,6 +157,32 @@ function armingManifest(serial: string): DeviceManifest {
   };
 }
 
+function lockManifest(serial: string, model = 'T8531'): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic lock',
+    model,
+    modelName: 'Synthetic lock family',
+    codec: 'lock',
+    source: 'security',
+    bound: true,
+    capabilities: ['lock'],
+    details: [
+      {
+        capability: 'lock',
+        accessor: 'lock',
+        reads: [],
+        actions: [
+          { name: 'lock', form: 'momentary' },
+          { name: 'unlock', form: 'momentary' },
+        ],
+        undescribedActions: [],
+        events: ['lockState'],
+      },
+    ],
+  };
+}
+
 function contactSmartLightManifest(serial: string): DeviceManifest {
   const manifest = smartLightManifest(serial);
   const contact = contactManifest(serial);
@@ -237,6 +263,12 @@ function smartLightDevice(power = false, brightness = 50): Device {
 function armingDevice(mode = 1): Device {
   return {
     arming: () => ({ mode, setMode: vi.fn(async () => undefined) }),
+  } as unknown as Device;
+}
+
+function lockDevice(): Device {
+  return {
+    lock: () => ({ lock: vi.fn(async () => undefined), unlock: vi.fn(async () => undefined) }),
   } as unknown as Device;
 }
 
@@ -574,6 +606,42 @@ describe('HomeKit registry reconciliation', () => {
 
     source.publish(registryView(2, new Map(), snapshot()));
     expect(recording.unregisterPlatformAccessories).toHaveBeenCalledWith([accessory]);
+  });
+
+  it('represents lock targets only for the exact evidenced T8531 boundary', async () => {
+    const serial = 'synthetic-video-lock';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn()).start();
+
+    source.publish(registryView(1, new Map([[serial, lockDevice()]]), snapshot(lockManifest(serial))));
+
+    expect(recording.uuidInputs).toEqual([`d1_${serial}`]);
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    const service = accessory.getServiceById(Service.LockMechanism, 'lock.mechanism')!;
+    expect(service).toBeDefined();
+    await expect(service.getCharacteristic(Characteristic.LockCurrentState).handleGetRequest()).resolves.toBe(
+      Characteristic.LockCurrentState.UNKNOWN,
+    );
+
+    for (const [suffix, model] of [
+      ['garage-family', 'T85D0'],
+      ['other-family', 'T0000'],
+    ] as const) {
+      const nearMissSource = new RegistrySource();
+      const nearMissRecording = recordingApi();
+      new HomeKitReconciler(nearMissSource, nearMissRecording.api, vi.fn()).start();
+      const nearMiss = lockManifest(`synthetic-${suffix}`, model);
+      nearMissSource.publish(registryView(1, new Map([[nearMiss.sn, lockDevice()]]), snapshot(nearMiss)));
+      expect(nearMissRecording.registerPlatformAccessories, suffix).not.toHaveBeenCalled();
+    }
+    const missingModelSource = new RegistrySource();
+    const missingModelRecording = recordingApi();
+    new HomeKitReconciler(missingModelSource, missingModelRecording.api, vi.fn()).start();
+    const missingModel = lockManifest('synthetic-missing-model');
+    delete missingModel.model;
+    missingModelSource.publish(registryView(1, new Map([[missingModel.sn, lockDevice()]]), snapshot(missingModel)));
+    expect(missingModelRecording.registerPlatformAccessories).not.toHaveBeenCalled();
   });
 
   it('withdraws and recreates only the affected service while another primary member remains', () => {

@@ -1,7 +1,11 @@
 import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
 import type { Characteristic, HapStatusError, PlatformAccessory, Service } from 'homebridge';
 
-import type { DeviceMemberEvidence, DeviceMemberRequirement } from '../device/member-evidence.js';
+import type {
+  DeviceMemberEvidence,
+  DeviceMemberRequirement,
+  DeviceProductRequirement,
+} from '../device/member-evidence.js';
 
 /** The HAP definitions required by any self-hosted capability adapter. */
 export interface HomeKitDefinitions {
@@ -60,6 +64,7 @@ export interface AdapterCoverage {
 export interface HomeKitAdapter {
   readonly key: string;
   readonly role: 'primary-purpose' | 'supplemental';
+  readonly requiresProduct?: DeviceProductRequirement;
   readonly requires: readonly DeviceMemberRequirement[];
   readonly requiresAny?: readonly DeviceMemberRequirement[];
   readonly coverage: readonly AdapterCoverage[];
