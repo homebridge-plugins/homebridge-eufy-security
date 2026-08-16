@@ -418,6 +418,8 @@ describe('packed plugin', () => {
       expect(document).toContain('src="assets/icons/bug-report.svg"');
       expect(document).toContain('src="assets/icons/settings.svg"');
       expect(document).toContain('src="assets/icons/warning.svg"');
+      expect(document.match(/class="dashboard-page-back"/g)).toHaveLength(2);
+      expect(document.match(/aria-hidden="true">←<\/span>/g)).toHaveLength(2);
       expect(document).toContain('homebridge-eufy-security/issues/1010');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
@@ -641,8 +643,8 @@ describe('packed plugin', () => {
       expect(Object.values(frenchUi.translations)).not.toContain(undefined);
       expect(frenchUi.translatedLabels).toEqual({
         accountConnectionLabel: 'Informations sur la connexion du compte',
-        closeAdvanced: 'Fermer les réglages avancés',
-        closeDiagnostics: 'Fermer les diagnostics',
+        closeAdvanced: 'Retour aux appareils',
+        closeDiagnostics: 'Retour aux appareils',
         dashboardMenuLabel: 'Ouvrir le menu du tableau de bord',
         setupSequenceLabel: 'Étapes de configuration',
       });

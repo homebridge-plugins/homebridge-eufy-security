@@ -134,32 +134,47 @@ h2 {
 }
 
 .dashboard-panel {
-  position: relative;
   display: grid;
   gap: 18px;
-  margin-top: 22px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--panel);
-  padding: clamp(16px, 4vw, 24px);
-  box-shadow: 0 14px 40px rgb(32 48 78 / 9%);
-}
-
-.diagnostics-panel {
-  border-top: 4px solid var(--accent);
-}
-
-.dashboard-panel-close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 34px;
-  min-height: 34px;
+  margin: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  padding: 0;
+}
+
+.dashboard-panel-header {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.dashboard-panel-header > div {
+  min-width: 0;
+}
+
+.dashboard-panel-header .summary {
+  margin: 5px 0 0;
+}
+
+.dashboard-page-back {
+  display: grid;
+  width: 38px;
+  min-height: 38px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 0;
   font-size: 22px;
   line-height: 1;
+}
+
+.dashboard-page-icon {
+  width: 24px;
+  height: 24px;
+  opacity: 0.72;
 }
 
 .diagnostics-panel .summary,
@@ -288,10 +303,6 @@ h2 {
   margin-top: 10px;
   color: var(--accent-ink);
   font-weight: 750;
-}
-
-.advanced-panel {
-  border-top: 4px solid #65758b;
 }
 
 .advanced-fields {

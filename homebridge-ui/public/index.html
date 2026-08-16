@@ -85,18 +85,21 @@
     <div data-device-groups></div>
 
     <section class="dashboard-panel diagnostics-panel" data-diagnostics hidden aria-labelledby="diagnostics-title">
-      <button
-        type="button"
-        class="dashboard-panel-close"
-        data-diagnostics-close
-        data-i18n-aria-label="closeDiagnostics"
-      >
-        ×
-      </button>
-      <div>
-        <p class="eyebrow" data-i18n="diagnosticsEyebrow"></p>
-        <h2 id="diagnostics-title" data-i18n="diagnosticsTitle"></h2>
-        <p class="summary" data-i18n="diagnosticsSummary"></p>
+      <div class="dashboard-panel-header">
+        <button
+          type="button"
+          class="dashboard-page-back"
+          data-diagnostics-close
+          data-i18n-aria-label="closeDiagnostics"
+        >
+          <span aria-hidden="true">←</span>
+        </button>
+        <img class="dashboard-page-icon" src="assets/icons/bug-report.svg" alt="" />
+        <div>
+          <p class="eyebrow" data-i18n="diagnosticsEyebrow"></p>
+          <h2 id="diagnostics-title" data-i18n="diagnosticsTitle"></h2>
+          <p class="summary" data-i18n="diagnosticsSummary"></p>
+        </div>
       </div>
       <ol class="diagnostics-steps" data-diagnostics-steps>
         <li data-diagnostics-step="choose"><span>1</span><strong data-i18n="diagnosticsStepChoose"></strong></li>
@@ -150,18 +153,21 @@
     </section>
 
     <section class="dashboard-panel advanced-panel" data-advanced-settings hidden aria-labelledby="advanced-title">
-      <button
-        type="button"
-        class="dashboard-panel-close"
-        data-advanced-close
-        data-i18n-aria-label="closeAdvanced"
-      >
-        ×
-      </button>
-      <div>
-        <p class="eyebrow" data-i18n="advancedEyebrow"></p>
-        <h2 id="advanced-title" data-i18n="advancedTitle"></h2>
-        <p class="summary" data-i18n="advancedSummary"></p>
+      <div class="dashboard-panel-header">
+        <button
+          type="button"
+          class="dashboard-page-back"
+          data-advanced-close
+          data-i18n-aria-label="closeAdvanced"
+        >
+          <span aria-hidden="true">←</span>
+        </button>
+        <img class="dashboard-page-icon" src="assets/icons/settings.svg" alt="" />
+        <div>
+          <p class="eyebrow" data-i18n="advancedEyebrow"></p>
+          <h2 id="advanced-title" data-i18n="advancedTitle"></h2>
+          <p class="summary" data-i18n="advancedSummary"></p>
+        </div>
       </div>
       <div class="advanced-fields">
         <label>
