@@ -316,6 +316,10 @@ describe('packed plugin', () => {
       main?: string;
       dependencies?: Record<string, string>;
     };
+    const packageLock = JSON.parse(readFileSync(join(repository, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; integrity?: string }>;
+    };
+    const sdk = packageLock.packages['node_modules/@mega-yfue/eufy-sdk'];
     const generatedVersion = readFileSync(join(repository, 'src', 'version.ts'), 'utf8');
 
     expect(packageJson.displayName).toBe('Homebridge Eufy');
@@ -326,6 +330,14 @@ describe('packed plugin', () => {
       '@mega-yfue/eufy-sdk',
       'ffmpeg-for-homebridge',
     ]);
+    expect(packageJson.dependencies?.['@mega-yfue/eufy-sdk']).toBe('0.1.0-beta.17');
+    expect(sdk).toEqual(
+      expect.objectContaining({
+        version: '0.1.0-beta.17',
+        integrity:
+          'sha512-k5ai6k44JqR+fcxZxmL1NG2kP68T55V08C+W0w0x81N2H+gcmtPGha5flbqyYJV/sl4l8wWbHO3tR9OFG8xzyw==',
+      }),
+    );
     expect(generatedVersion).toBe(`export const LIB_VERSION = ${JSON.stringify(packageJson.version)};\n`);
   });
 
