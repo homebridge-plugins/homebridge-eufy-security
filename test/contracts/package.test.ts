@@ -254,6 +254,9 @@ describe('packed plugin', () => {
         .join('\n');
       const server = readFileSync(join(packageDirectory, 'homebridge-ui', 'server.js'), 'utf8');
       const stylesheet = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'app.css'), 'utf8');
+      const runtimeMessages = JSON.parse(
+        readFileSync(join(packageDirectory, 'i18n', 'runtime', 'en.json'), 'utf8'),
+      ) as Record<string, string>;
       const catalogs = Object.fromEntries(
         ['en', 'fr'].map((language) => [
           `i18n/${language}.json`,
@@ -284,6 +287,9 @@ describe('packed plugin', () => {
       expect(packedPackage.name).toBe('@homebridge-plugins/homebridge-eufy-security');
       expect(schema.customUi).toBe(true);
       expect(result.files.map((file) => file.path)).toContain('dist/ui/server.js');
+      expect(result.files.map((file) => file.path)).toContain('i18n/runtime/en.json');
+      expect(Object.keys(runtimeMessages).every((key) => key.startsWith('log.'))).toBe(true);
+      expect(runtimeMessages['log.condition.active']).toContain('{summary}');
       expect(uiShellFiles).toEqual([
         'homebridge-ui/public/app.css',
         'homebridge-ui/public/assets/icons/bolt.svg',

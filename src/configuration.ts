@@ -97,7 +97,7 @@ function parseDiscardedV4Settings(value: unknown): string[] {
   return [...new Set(value)].sort();
 }
 
-/** Validates a Homebridge block and resolves the fresh V5 defaults. */
+/** Validates a Homebridge block and resolves the current defaults. */
 export function parseConfig(value: unknown): EufyConfig {
   if (!isRecord(value)) {
     throw new TypeError('configuration must be an object');

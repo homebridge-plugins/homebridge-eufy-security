@@ -66,10 +66,9 @@ describe('platform lifecycle', () => {
     );
 
     expect(warn).toHaveBeenCalledOnce();
-    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
-      scope: 'configuration-notice',
-      code: 'discarded-v4-settings-unacknowledged',
-    });
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[discarded-v4-settings-unacknowledged] Some legacy settings were discarded.',
+    );
 
     const acknowledgedWarn = vi.fn();
     new Platform(
@@ -260,11 +259,7 @@ describe('platform lifecycle', () => {
     listeners.didFinishLaunching?.();
 
     await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
-    expect(JSON.parse(error.mock.calls[0]![0])).toMatchObject({
-      scope: 'diagnostic-condition',
-      code: 'runtime-failed',
-      active: true,
-    });
+    expect(error.mock.calls[0]![0]).toContain('[runtime-failed] The Eufy runtime failed.');
     expect(error.mock.calls[0]![0]).not.toContain('synthetic startup failure');
   });
 
@@ -295,11 +290,9 @@ describe('platform lifecycle', () => {
     expect(warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(warn).toHaveBeenCalledOnce();
-    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
-      scope: 'runtime-notice',
-      code: 'shutdown-timeout',
-      durationMs: 1_000,
-    });
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[shutdown-timeout] The Eufy runtime exceeded its shutdown deadline; Homebridge shutdown will continue. (1000 ms)',
+    );
     vi.useRealTimers();
   });
 

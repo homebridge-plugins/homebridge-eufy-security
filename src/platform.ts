@@ -2,6 +2,7 @@ import type { API, DynamicPlatformPlugin, HAP, PlatformAccessory, PlatformConfig
 
 import { parseConfig } from './configuration.js';
 import {
+  createDiagnosticLogger,
   DiagnosticConditions,
   reportDiscardedV4Settings,
   reportHomeKitEvent,
@@ -47,12 +48,16 @@ export function createEufyPlatform(
 
     constructor(log: PlatformLogger, config: PlatformConfig, api: PlatformApi) {
       const configuredConfig = parseConfig(config);
-      const diagnostics = new DiagnosticConditions(log);
-      if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
-        reportDiscardedV4Settings(log);
-      }
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
-      this.runtime = new RuntimeOwner(log, configuredConfig, clientFactory, { storageRoot, shutdownTimeoutMs });
+      const diagnosticLog = createDiagnosticLogger(log, storageRoot);
+      const diagnostics = new DiagnosticConditions(diagnosticLog);
+      if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
+        reportDiscardedV4Settings(diagnosticLog);
+      }
+      this.runtime = new RuntimeOwner(diagnosticLog, configuredConfig, clientFactory, {
+        storageRoot,
+        shutdownTimeoutMs,
+      });
       this.runtime.subscribeState((state) => diagnostics.reportRuntimeState(state));
       const signals: PlatformSignal[] = ['SIGHUP', 'SIGINT', 'SIGTERM'];
       let listeningForSignals = Boolean(signalTarget);
@@ -64,7 +69,7 @@ export function createEufyPlatform(
           }
         }
         this.reconciler?.stop();
-        void this.runtime.stop();
+        void this.runtime.stop().finally(() => diagnosticLog.flush?.());
       };
       for (const signal of signals) {
         signalTarget?.on(signal, stop);
@@ -77,7 +82,7 @@ export function createEufyPlatform(
             accessoryStore,
             (diagnostic, affectedDeviceIds = []) => diagnostics.reportHomeKit(diagnostic, affectedDeviceIds),
             this.cachedAccessories,
-            (trace) => reportHomeKitEvent(log, trace),
+            (trace) => reportHomeKitEvent(diagnosticLog, trace),
             configuredConfig.entityPreferences,
           );
           this.reconciler.start();

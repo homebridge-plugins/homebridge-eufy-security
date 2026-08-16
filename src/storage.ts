@@ -40,7 +40,7 @@ function hasLiveOwner(root: string): boolean {
   }
 }
 
-/** Atomically adopts the pre-rename V5 directory when no SDK owner is using it. */
+/** Atomically adopts the alternate storage directory when no SDK owner is using it. */
 export function resolveStorageRoot(homebridgeStoragePath: string): string {
   const root = join(homebridgeStoragePath, STORAGE_DIRECTORY);
   const legacyRoot = join(homebridgeStoragePath, LEGACY_V5_STORAGE_DIRECTORY);

@@ -289,8 +289,8 @@ describe('persisted runtime owner', () => {
     });
     expect(states).toEqual(['acquiring-ownership', 'starting', 'ready']);
     expect(views).toEqual([{ version: 1, serials: ['synthetic-first'], state: 'starting' }]);
-    expect(warn.mock.calls.map(([message]) => JSON.parse(message))).toContainEqual(
-      expect.objectContaining({ scope: 'runtime-notice', code: 'registry-subscriber-failed' }),
+    expect(warn).toHaveBeenCalledWith(
+      '[registry-subscriber-failed] A device registry consumer failed; review Homebridge Eufy health in the dashboard.',
     );
 
     reportEvent?.({ eventName: 'contactState', deviceSn: 'synthetic-first', open: true });
@@ -513,11 +513,9 @@ describe('persisted runtime owner', () => {
       events.listeners.didFinishLaunching?.();
 
       await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
-      expect(JSON.parse(error.mock.calls[0]![0])).toMatchObject({
-        scope: 'diagnostic-condition',
-        code: 'runtime-owner-conflict',
-        active: true,
-      });
+      expect(error.mock.calls[0]![0]).toContain(
+        '[runtime-owner-conflict] Another process owns the Eufy account session.',
+      );
       await expect(tracker.read()).resolves.toMatchObject({ state: 'ready' });
       expect(factory).not.toHaveBeenCalled();
       await expect(ownership.acquire('runtime@example.invalid', 'temporary-authentication')).resolves.toMatchObject({
@@ -936,11 +934,9 @@ describe('persisted runtime owner', () => {
     expect(runtime.currentState()).toBe('failed');
     expect(statusPublisher.update).toHaveBeenLastCalledWith('failed');
     expect(warn).toHaveBeenCalledOnce();
-    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({
-      scope: 'runtime-notice',
-      code: 'shutdown-timeout',
-      durationMs: 1_000,
-    });
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[shutdown-timeout] The Eufy runtime exceeded its shutdown deadline; Homebridge shutdown will continue. (1000 ms)',
+    );
     await runtime.stop();
     expect(client.stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

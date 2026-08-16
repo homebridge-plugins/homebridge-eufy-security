@@ -13,4 +13,5 @@ Start with one reproducible failure and the smallest relevant evidence.
 - [Node.js compatibility](/troubleshooting/node-compatibility)
 - [Collecting diagnostics safely](/troubleshooting/collecting-diagnostics)
 
-Legacy debug buttons, V4 log filenames, camera presets, and reset screenshots do not describe V5.
+Legacy debug buttons, separate plugin/library logs, camera presets, and reset screenshots do not
+describe V5.
