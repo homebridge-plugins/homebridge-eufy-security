@@ -26,6 +26,11 @@ const pageTitle = document.querySelector('[data-page-title]');
 const legacyNotice = document.querySelector('[data-legacy-notice]');
 const legacySettings = document.querySelector('[data-legacy-settings]');
 const legacyAcknowledge = document.querySelector('[data-legacy-acknowledge]');
+const diagnosticsProfile = document.querySelector('[data-diagnostics-profile]');
+const diagnosticsAuthorize = document.querySelector('[data-diagnostics-authorize]');
+const diagnosticsReproduction = document.querySelector('[data-diagnostics-reproduction]');
+const diagnosticsStatus = document.querySelector('[data-diagnostics-status]');
+const diagnosticsIssue = document.querySelector('[data-diagnostics-issue]');
 
 let messages = {};
 let pluginConfig = [];
@@ -34,6 +39,7 @@ let pendingConfig;
 let challenge = '';
 let legacyNames = [];
 let legacyAcknowledged = false;
+let diagnosticsState = { status: 'inactive', missingEvidence: [] };
 const dashboardView = window.HomebridgeEufyDashboard;
 const legacySettingsView = window.HomebridgeEufyLegacySettings;
 const dashboardElements = {
@@ -101,6 +107,64 @@ function setBusy(busy) {
   authSubmit.disabled = busy;
   challengeSubmit.disabled = busy;
 }
+
+function renderDiagnostics(state) {
+  diagnosticsState = state;
+  diagnosticsProfile.disabled = state.status === 'reproducing';
+  diagnosticsAuthorize.disabled = state.status === 'reproducing';
+  diagnosticsReproduction.disabled = !['authorized', 'reproducing'].includes(state.status);
+  diagnosticsReproduction.textContent =
+    state.status === 'reproducing' ? messages.diagnosticsEndReproduction : messages.diagnosticsStartReproduction;
+  diagnosticsIssue.hidden = !state.partialExportAvailable;
+  diagnosticsIssue.href = state.issueUrl ?? '';
+  if (state.profile) diagnosticsProfile.value = state.profile;
+  const statusKey = {
+    inactive: 'diagnosticsInactive',
+    authorized: 'diagnosticsAuthorized',
+    reproducing: 'diagnosticsReproducing',
+    complete: state.missingEvidence?.length ? 'diagnosticsMissingEvidence' : 'diagnosticsComplete',
+    expired: 'diagnosticsExpired',
+  }[state.status];
+  diagnosticsStatus.textContent = (messages[statusKey] ?? '').replace(
+    '{evidence}',
+    state.missingEvidence?.join(', ') ?? '',
+  );
+}
+
+diagnosticsAuthorize.addEventListener('click', async () => {
+  diagnosticsAuthorize.disabled = true;
+  try {
+    renderDiagnostics(await requestWithinDeadline('/diagnostics/authorize', { profile: diagnosticsProfile.value }, 12000));
+  } catch {
+    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+  } finally {
+    diagnosticsAuthorize.disabled = diagnosticsState.status === 'reproducing';
+  }
+});
+
+diagnosticsProfile.addEventListener('change', () => {
+  if (diagnosticsProfile.value !== diagnosticsState.profile) diagnosticsReproduction.disabled = true;
+});
+
+diagnosticsReproduction.addEventListener('click', async () => {
+  diagnosticsReproduction.disabled = true;
+  const path =
+    diagnosticsState.status === 'reproducing'
+      ? '/diagnostics/reproduction/end'
+      : '/diagnostics/reproduction/start';
+  try {
+    let state = await requestWithinDeadline(path, undefined, 12000);
+    if (state.status === 'complete' && state.missingEvidence?.length) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      state = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
+    }
+    renderDiagnostics(state);
+  } catch {
+    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+  } finally {
+    diagnosticsReproduction.disabled = !['authorized', 'reproducing'].includes(diagnosticsState.status);
+  }
+});
 
 function configuredBlock() {
   return pluginConfig.find((block) => block.platform === 'HomebridgeEufy');
@@ -257,6 +321,11 @@ homebridge.addEventListener('ready', async () => {
   pluginConfig = await homebridge.getPluginConfig();
   savedConfigSignature = configSignature(pluginConfig);
   await applyTranslations(language);
+  try {
+    renderDiagnostics(await requestWithinDeadline('/diagnostics/status', undefined, 12000));
+  } catch {
+    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+  }
   const configured = pluginConfig.find(
     (block) =>
       block.platform === 'HomebridgeEufy' && typeof block.username === 'string' && block.username.trim().length > 0,

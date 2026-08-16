@@ -133,6 +133,45 @@ h2 {
   padding: 0;
 }
 
+.diagnostics-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 28px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: clamp(16px, 4vw, 24px);
+}
+
+.diagnostics-panel .summary,
+.diagnostics-status {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.diagnostics-panel select {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 10px;
+}
+
+.diagnostics-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.diagnostics-actions button {
+  width: auto;
+  min-width: 180px;
+}
+
 .legacy-notice {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

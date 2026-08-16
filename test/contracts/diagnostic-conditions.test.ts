@@ -9,6 +9,7 @@ import {
   createDiagnosticLogger,
   createSdkLogger,
   DiagnosticConditions,
+  GuidedDiagnostics,
   reportHomeKitEvent,
   reportRuntimeNotice,
 } from '../../src/diagnostics.js';
@@ -259,6 +260,7 @@ describe('diagnostic conditions', () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-diagnostics-'));
     const debug = vi.fn();
     const warn = vi.fn();
+    await new GuidedDiagnostics(root).authorize('startup-authentication');
     const logger = createDiagnosticLogger({ debug, error: vi.fn(), info: vi.fn(), warn }, root);
 
     try {
@@ -310,6 +312,7 @@ describe('diagnostic conditions', () => {
 
   it('reconstructs file records from allowlisted fields and excludes FFmpeg', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-diagnostics-'));
+    await new GuidedDiagnostics(root).authorize('startup-authentication');
     const logger = createDiagnosticLogger({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, root);
 
     try {

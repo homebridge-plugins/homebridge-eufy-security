@@ -128,6 +128,32 @@
     <p class="authentication-status" role="status" aria-live="polite" data-auth-status></p>
   </section>
 
+  <section class="diagnostics-panel" data-diagnostics aria-labelledby="diagnostics-title">
+    <div>
+      <p class="eyebrow" data-i18n="diagnosticsEyebrow"></p>
+      <h2 id="diagnostics-title" data-i18n="diagnosticsTitle"></h2>
+      <p class="summary" data-i18n="diagnosticsSummary"></p>
+    </div>
+    <label>
+      <span data-i18n="diagnosticsProfileLabel"></span>
+      <select data-diagnostics-profile>
+        <option value="startup-authentication" data-i18n="diagnosticsProfileStartup"></option>
+        <option value="device-representation" data-i18n="diagnosticsProfileDevices"></option>
+        <option value="control-state" data-i18n="diagnosticsProfileControl"></option>
+        <option value="live-media" data-i18n="diagnosticsProfileLiveMedia"></option>
+        <option value="hksv-recording" data-i18n="diagnosticsProfileRecording"></option>
+        <option value="dashboard-ui" data-i18n="diagnosticsProfileDashboard"></option>
+        <option value="other" data-i18n="diagnosticsProfileOther"></option>
+      </select>
+    </label>
+    <div class="diagnostics-actions">
+      <button type="button" data-diagnostics-authorize data-i18n="diagnosticsAuthorize"></button>
+      <button type="button" data-diagnostics-reproduction disabled data-i18n="diagnosticsStartReproduction"></button>
+    </div>
+    <p class="diagnostics-status" role="status" aria-live="polite" data-diagnostics-status></p>
+    <a data-diagnostics-issue hidden target="_blank" rel="noopener noreferrer" data-i18n="diagnosticsOpenIssue"></a>
+  </section>
+
   <p class="footnote" data-i18n="footnote"></p>
 </main>
 

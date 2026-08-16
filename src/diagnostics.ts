@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gzip as gzipCallback } from 'node:zlib';
 
@@ -38,6 +38,10 @@ const MAX_QUEUED_LOG_BYTES = 1024 * 1024;
 const LOG_ROTATIONS = 3;
 const LOG_DIRECTORY = 'logs';
 const LOG_FILE = 'homebridge-eufy.jsonl';
+const DIAGNOSTICS_DIRECTORY = 'diagnostics';
+const GUIDED_SESSION_FILE = 'session.json';
+const REPRODUCTION_MARKERS_FILE = 'reproduction-markers.jsonl';
+const DEBUG_AUTHORIZATION_MS = 72 * 60 * 60 * 1_000;
 const gzip = promisify(gzipCallback);
 const SDK_SUBSYSTEMS = new Set(['device', 'mega', 'mqtt', 'p2p', 'push', 'webrtc', 'sdk']);
 const SDK_EVENT_KEYS = new Set([
@@ -64,6 +68,245 @@ const EN_MESSAGES = JSON.parse(readFileSync(new URL('../i18n/runtime/en.json', i
   string,
   string
 >;
+
+export type DiagnosticsProfile =
+  | 'startup-authentication'
+  | 'device-representation'
+  | 'control-state'
+  | 'live-media'
+  | 'hksv-recording'
+  | 'dashboard-ui'
+  | 'other';
+
+export type DiagnosticEvidence = 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log' | 'ui-log';
+
+const DIAGNOSTICS_PROFILES: Readonly<Record<DiagnosticsProfile, readonly DiagnosticEvidence[]>> = {
+  'startup-authentication': ['plugin-log', 'sdk-log'],
+  'device-representation': ['plugin-log', 'sdk-log', 'homekit-log'],
+  'control-state': ['plugin-log', 'sdk-log', 'homekit-log'],
+  'live-media': ['plugin-log', 'sdk-log', 'ffmpeg-log'],
+  'hksv-recording': ['plugin-log', 'sdk-log', 'ffmpeg-log'],
+  'dashboard-ui': ['plugin-log', 'ui-log'],
+  other: ['plugin-log', 'sdk-log', 'homekit-log'],
+};
+
+/** Narrows external profile input against the diagnostics-owned profile registry. */
+export function isDiagnosticsProfile(value: unknown): value is DiagnosticsProfile {
+  return typeof value === 'string' && Object.hasOwn(DIAGNOSTICS_PROFILES, value);
+}
+
+interface PersistedDiagnosticsSession {
+  version: 1;
+  supportCaseId: string;
+  profile: DiagnosticsProfile;
+  authorizedAt: string;
+  expiresAt: string;
+  reproductionStartedAt?: string;
+  reproductionEndedAt?: string;
+}
+
+export interface GuidedDiagnosticsStatus {
+  status: 'inactive' | 'authorized' | 'reproducing' | 'complete' | 'expired';
+  supportCaseId?: string;
+  profile?: DiagnosticsProfile;
+  selectedEvidence: readonly DiagnosticEvidence[];
+  missingEvidence: readonly DiagnosticEvidence[];
+  authorizedAt?: string;
+  expiresAt?: string;
+  reproductionStartedAt?: string;
+  reproductionEndedAt?: string;
+  partialExportAvailable: boolean;
+  issueUrl?: string;
+}
+
+function diagnosticsSessionPath(storageRoot: string): string {
+  return join(storageRoot, DIAGNOSTICS_DIRECTORY, GUIDED_SESSION_FILE);
+}
+
+function readDiagnosticsSession(storageRoot: string): PersistedDiagnosticsSession | undefined {
+  try {
+    const candidate = JSON.parse(
+      readFileSync(diagnosticsSessionPath(storageRoot), 'utf8'),
+    ) as Partial<PersistedDiagnosticsSession>;
+    if (
+      candidate.version !== 1 ||
+      typeof candidate.supportCaseId !== 'string' ||
+      !/^support-[0-9a-f-]{36}$/.test(candidate.supportCaseId) ||
+      typeof candidate.profile !== 'string' ||
+      !isDiagnosticsProfile(candidate.profile) ||
+      typeof candidate.authorizedAt !== 'string' ||
+      typeof candidate.expiresAt !== 'string'
+    ) {
+      return undefined;
+    }
+    return candidate as PersistedDiagnosticsSession;
+  } catch {
+    return undefined;
+  }
+}
+
+function activeDiagnosticsSession(storageRoot: string, now: number): PersistedDiagnosticsSession | undefined {
+  const session = readDiagnosticsSession(storageRoot);
+  return session && Date.parse(session.expiresAt) > now ? session : undefined;
+}
+
+function observedEvidencePath(storageRoot: string, supportCaseId: string, evidence: DiagnosticEvidence): string {
+  return join(storageRoot, DIAGNOSTICS_DIRECTORY, 'evidence', supportCaseId, evidence);
+}
+
+function evidenceForEvent(event: Readonly<Record<string, unknown>>): DiagnosticEvidence[] {
+  const evidence: DiagnosticEvidence[] = ['plugin-log'];
+  if (event.scope === 'sdk') evidence.push('sdk-log');
+  if (event.scope === 'homekit') evidence.push('homekit-log');
+  return evidence;
+}
+
+/** Owns persisted, user-authorized diagnostic evidence windows and identity-free reproduction markers. */
+export class GuidedDiagnostics {
+  constructor(
+    private readonly storageRoot: string,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  async authorize(profile: DiagnosticsProfile): Promise<GuidedDiagnosticsStatus> {
+    if (!isDiagnosticsProfile(profile)) {
+      throw new Error('Unknown diagnostics profile');
+    }
+    const authorizedAt = this.now();
+    const session: PersistedDiagnosticsSession = {
+      version: 1,
+      supportCaseId: `support-${randomUUID()}`,
+      profile,
+      authorizedAt: new Date(authorizedAt).toISOString(),
+      expiresAt: new Date(authorizedAt + DEBUG_AUTHORIZATION_MS).toISOString(),
+    };
+    await this.writeSession(session);
+    return this.project(session);
+  }
+
+  async status(): Promise<GuidedDiagnosticsStatus> {
+    return this.project(readDiagnosticsSession(this.storageRoot));
+  }
+
+  async startReproduction(): Promise<GuidedDiagnosticsStatus> {
+    const session = this.requireAuthorized();
+    if (!session.reproductionStartedAt || session.reproductionEndedAt) {
+      session.reproductionStartedAt = new Date(this.now()).toISOString();
+      delete session.reproductionEndedAt;
+      await this.writeSession(session);
+    }
+    await this.ensureMarker(session, 'reproduction-started', session.reproductionStartedAt);
+    return this.project(session);
+  }
+
+  async endReproduction(): Promise<GuidedDiagnosticsStatus> {
+    const session = this.requireAuthorized();
+    if (!session.reproductionStartedAt) {
+      throw new Error('Reproduction has not started');
+    }
+    if (!session.reproductionEndedAt) {
+      session.reproductionEndedAt = new Date(this.now()).toISOString();
+      await this.writeSession(session);
+    }
+    await this.ensureMarker(session, 'reproduction-ended', session.reproductionEndedAt);
+    return this.project(session);
+  }
+
+  private requireAuthorized(): PersistedDiagnosticsSession {
+    const session = activeDiagnosticsSession(this.storageRoot, this.now());
+    if (!session) throw new Error('Diagnostics authorization is inactive or expired');
+    return session;
+  }
+
+  private project(session: PersistedDiagnosticsSession | undefined): GuidedDiagnosticsStatus {
+    if (!session) {
+      return { status: 'inactive', selectedEvidence: [], missingEvidence: [], partialExportAvailable: false };
+    }
+    const selectedEvidence = DIAGNOSTICS_PROFILES[session.profile];
+    const missingEvidence = session.reproductionEndedAt
+      ? selectedEvidence.filter((evidence) => {
+          try {
+            readFileSync(observedEvidencePath(this.storageRoot, session.supportCaseId, evidence));
+            return false;
+          } catch {
+            return true;
+          }
+        })
+      : [];
+    const expired = Date.parse(session.expiresAt) <= this.now();
+    const status = expired
+      ? 'expired'
+      : session.reproductionEndedAt
+        ? 'complete'
+        : session.reproductionStartedAt
+          ? 'reproducing'
+          : 'authorized';
+    const issueBody = [
+      `Support case: ${session.supportCaseId}`,
+      `Profile: ${session.profile}`,
+      `Missing evidence: ${missingEvidence.length ? missingEvidence.join(', ') : 'none'}`,
+    ].join('\n');
+    return {
+      status,
+      supportCaseId: session.supportCaseId,
+      profile: session.profile,
+      selectedEvidence,
+      missingEvidence,
+      authorizedAt: session.authorizedAt,
+      expiresAt: session.expiresAt,
+      ...(session.reproductionStartedAt ? { reproductionStartedAt: session.reproductionStartedAt } : {}),
+      ...(session.reproductionEndedAt ? { reproductionEndedAt: session.reproductionEndedAt } : {}),
+      partialExportAvailable: Boolean(session.reproductionEndedAt),
+      issueUrl: `https://github.com/homebridge-plugins/homebridge-eufy-security/issues/new?body=${encodeURIComponent(issueBody)}`,
+    };
+  }
+
+  private async writeSession(session: PersistedDiagnosticsSession): Promise<void> {
+    const directory = join(this.storageRoot, DIAGNOSTICS_DIRECTORY);
+    const path = diagnosticsSessionPath(this.storageRoot);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    await mkdir(directory, { mode: 0o700, recursive: true });
+    await chmod(directory, 0o700);
+    await writeFile(temporary, `${JSON.stringify(session)}\n`, { mode: 0o600 });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  }
+
+  private async ensureMarker(
+    session: PersistedDiagnosticsSession,
+    event: 'reproduction-started' | 'reproduction-ended',
+    timestamp: string,
+  ): Promise<void> {
+    const directory = join(this.storageRoot, DIAGNOSTICS_DIRECTORY);
+    const path = join(directory, REPRODUCTION_MARKERS_FILE);
+    await mkdir(directory, { mode: 0o700, recursive: true });
+    try {
+      const markers = (await readFile(path, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Partial<{ supportCaseId: string; event: string; timestamp: string }>);
+      if (
+        markers.some(
+          (marker) =>
+            marker.supportCaseId === session.supportCaseId && marker.event === event && marker.timestamp === timestamp,
+        )
+      ) {
+        return;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await appendFile(
+      path,
+      `${JSON.stringify({ version: 1, supportCaseId: session.supportCaseId, event, timestamp })}\n`,
+      {
+        encoding: 'utf8',
+        mode: 0o600,
+      },
+    );
+    await chmod(path, 0o600);
+  }
+}
 
 function formatMessage(
   catalog: Readonly<Record<string, string>>,
@@ -101,7 +344,7 @@ class JsonLineLog {
     this.path = join(this.directory, LOG_FILE);
   }
 
-  write(message: string): void {
+  write(message: string, written?: () => void): void {
     const payload = sanitizeStructuredEvent(message);
     if (!payload) {
       return;
@@ -134,6 +377,7 @@ class JsonLineLog {
           );
         }
         await this.append(record);
+        written?.();
       })
       .catch(() => this.onError())
       .finally(() => {
@@ -268,6 +512,7 @@ export function createDiagnosticLogger(
   target: PlatformLogger,
   storageRoot?: string,
   catalog: Readonly<Record<string, string>> = EN_MESSAGES,
+  now: () => number = Date.now,
 ): PlatformLogger {
   let fileFailureReported = false;
   const reportFileFailure = (): void => {
@@ -277,7 +522,36 @@ export function createDiagnosticLogger(
     }
   };
   const file = storageRoot ? new JsonLineLog(storageRoot, reportFileFailure) : undefined;
-  const debug = file ? (message: string): void => file.write(message) : undefined;
+  const debug = file
+    ? (message: string): void => {
+        const event = sanitizeStructuredEvent(message);
+        if (!event) return;
+        const session = activeDiagnosticsSession(storageRoot!, now());
+        const requiredEvidence = evidenceForEvent(event);
+        const verbose = event.scope === 'sdk' || event.scope === 'homekit';
+        if (
+          verbose &&
+          (!session || !requiredEvidence.every((evidence) => DIAGNOSTICS_PROFILES[session.profile].includes(evidence)))
+        ) {
+          return;
+        }
+        file.write(JSON.stringify(event), () => {
+          if (session?.reproductionStartedAt && !session.reproductionEndedAt) {
+            for (const evidence of requiredEvidence.filter((candidate) =>
+              DIAGNOSTICS_PROFILES[session.profile].includes(candidate),
+            )) {
+              const path = observedEvidencePath(storageRoot!, session.supportCaseId, evidence);
+              mkdirSync(dirname(path), { mode: 0o700, recursive: true });
+              writeFileSync(
+                path,
+                `${JSON.stringify({ version: 1, supportCaseId: session.supportCaseId, evidence, observedAt: new Date(now()).toISOString() })}\n`,
+                { mode: 0o600 },
+              );
+            }
+          }
+        });
+      }
+    : undefined;
   return {
     ...(debug ? { debug } : {}),
     error: (message) => target.error(message),

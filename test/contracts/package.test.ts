@@ -65,6 +65,11 @@ async function renderUi(
   const legacyNotice = { hidden: true };
   const legacySettings = { textContent: '' };
   const legacyAcknowledge = interactiveElement({});
+  const diagnosticsProfile = interactiveElement({ disabled: false, value: 'startup-authentication' });
+  const diagnosticsAuthorize = interactiveElement({ disabled: false });
+  const diagnosticsReproduction = interactiveElement({ disabled: true, textContent: '' });
+  const diagnosticsStatus = { textContent: '' };
+  const diagnosticsIssue = { hidden: true, href: '' };
   const browserWindow = interactiveElement({});
   const requests: Array<{ path: string; body: unknown }> = [];
   let updatedConfig: Array<Record<string, unknown>> | undefined;
@@ -113,6 +118,11 @@ async function renderUi(
           '[data-legacy-notice]': legacyNotice,
           '[data-legacy-settings]': legacySettings,
           '[data-legacy-acknowledge]': legacyAcknowledge,
+          '[data-diagnostics-profile]': diagnosticsProfile,
+          '[data-diagnostics-authorize]': diagnosticsAuthorize,
+          '[data-diagnostics-reproduction]': diagnosticsReproduction,
+          '[data-diagnostics-status]': diagnosticsStatus,
+          '[data-diagnostics-issue]': diagnosticsIssue,
         }[selector];
       },
       querySelectorAll(selector: string) {
@@ -139,6 +149,9 @@ async function renderUi(
       },
       i18nCurrentLang: async () => language,
       request: async (path: string, body: unknown) => {
+        if (path === '/diagnostics/status') {
+          return { status: 'inactive', selectedEvidence: [], missingEvidence: [], partialExportAvailable: false };
+        }
         requests.push({ path, body });
         if (path === '/auth/start') return authenticationStart;
         if (path === '/dashboard') return dashboardSnapshot;
@@ -351,6 +364,20 @@ describe('packed plugin', () => {
           'continueAuthentication',
           'countryLabel',
           'devicesEyebrow',
+          'diagnosticsAuthorize',
+          'diagnosticsEyebrow',
+          'diagnosticsOpenIssue',
+          'diagnosticsProfileControl',
+          'diagnosticsProfileDashboard',
+          'diagnosticsProfileDevices',
+          'diagnosticsProfileLabel',
+          'diagnosticsProfileLiveMedia',
+          'diagnosticsProfileOther',
+          'diagnosticsProfileRecording',
+          'diagnosticsProfileStartup',
+          'diagnosticsStartReproduction',
+          'diagnosticsSummary',
+          'diagnosticsTitle',
           'oneAccountSession',
           'pageTitle',
           'passwordLabel',
@@ -404,6 +431,14 @@ describe('packed plugin', () => {
         'dashboardStaleTitle',
         'diagnosticDescription',
         'diagnosticOnly',
+        'diagnosticsAuthorized',
+        'diagnosticsComplete',
+        'diagnosticsEndReproduction',
+        'diagnosticsExpired',
+        'diagnosticsFailed',
+        'diagnosticsInactive',
+        'diagnosticsMissingEvidence',
+        'diagnosticsReproducing',
         'preferenceAudio',
         'preferenceRepresented',
         'preferenceSaveFailed',

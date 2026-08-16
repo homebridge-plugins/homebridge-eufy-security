@@ -12,6 +12,7 @@ import {
   type TemporaryAuthenticationInput,
 } from '../account/temporary-authentication.js';
 import { parseConfig } from '../configuration.js';
+import { GuidedDiagnostics, isDiagnosticsProfile, type DiagnosticsProfile } from '../diagnostics.js';
 import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
 import { RuntimeTracker } from '../runtime/tracker.js';
 import { resolveStorageRoot } from '../storage.js';
@@ -114,6 +115,17 @@ function parseRepresentationPreferences(value: unknown): Record<string, boolean>
   return { ...(preferences as Record<string, boolean>) };
 }
 
+function parseDiagnosticsProfile(value: unknown): DiagnosticsProfile {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RequestError('Invalid diagnostics request', { status: 400 });
+  }
+  const profile = (value as Record<string, unknown>).profile;
+  if (!isDiagnosticsProfile(profile)) {
+    throw new RequestError('Invalid diagnostics request', { status: 400 });
+  }
+  return profile;
+}
+
 /** Creates the production SDK client without enabling realtime ownership. */
 export const createTemporaryAuthenticationClient: TemporaryAuthenticationClientFactory = (options) =>
   temporaryClient(
@@ -145,6 +157,7 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
   private readonly ownership: AccountOwnership;
   private readonly persistence: AccountSessionPersistence;
   private readonly runtimeTracker: RuntimeTracker;
+  private readonly diagnostics: GuidedDiagnostics;
   private startPending = false;
   private flowGeneration = 0;
 
@@ -159,6 +172,7 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
     this.ownership = new AccountOwnership(join(root, 'ownership'));
     this.persistence = new AccountSessionPersistence(join(root, 'accounts'));
     this.runtimeTracker = new RuntimeTracker(join(root, 'tracker.json'));
+    this.diagnostics = new GuidedDiagnostics(root);
 
     this.onRequest('/auth/start', (payload) => this.startAuthentication(payload));
     this.onRequest('/auth/captcha', (payload) => this.continueCaptcha(payload));
@@ -167,6 +181,10 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
     this.onRequest('/dashboard', (payload) =>
       readDashboard(this.runtimeTracker, Date.now, parseRepresentationPreferences(payload)),
     );
+    this.onRequest('/diagnostics/status', () => this.diagnostics.status());
+    this.onRequest('/diagnostics/authorize', (payload) => this.diagnostics.authorize(parseDiagnosticsProfile(payload)));
+    this.onRequest('/diagnostics/reproduction/start', () => this.diagnostics.startReproduction());
+    this.onRequest('/diagnostics/reproduction/end', () => this.diagnostics.endReproduction());
     this.installCleanupHandlers();
     this.ready();
   }
