@@ -3,9 +3,8 @@
 Use **Debug diagnostics** in the plugin dashboard to choose one evidence profile, mark one reproduction
 interval, and review the generated manifest. The manifest shows each requested evidence class as
 included or missing and lists the classes that can never be collected. Confirm the review to download
-an encrypted `.eufysupport.txt` archive. The final `.txt` suffix allows the encrypted archive to be
-attached to a GitHub issue; its content remains the support-archive JSON envelope. Nothing is uploaded
-by the plugin.
+an encrypted `.eufysupport.gz` archive. The final `.gz` suffix allows the encrypted archive to be
+attached to a GitHub issue. Nothing is uploaded by the plugin.
 
 - Reproduce one issue at a time and end the interval promptly.
 - Review the manifest before confirming the export.
@@ -43,9 +42,9 @@ private key is revoked, and users are warned not to share archives carrying that
 
 ## Archive format
 
-The version 1 archive is a UTF-8 JSON envelope with media type
-`application/vnd.homebridge-eufy.support-archive+json`. `wrappedKey` is a random 256-bit content key
-wrapped with RSA-OAEP and SHA-256. `ciphertext` is gzip-compressed JSON encrypted with AES-256-GCM;
-`iv` is the 96-bit nonce and `authTag` is the GCM authentication tag. Binary fields use base64. The
-format, version, key identifier, algorithms, and encoding fields are authenticated as GCM additional
-data. The decrypted payload contains the reviewed manifest and generated allowlisted evidence records.
+The version 1 archive is a gzip container with media type `application/gzip`. Decompressing it yields a
+UTF-8 JSON encryption envelope. `wrappedKey` is a random 256-bit content key wrapped with RSA-OAEP and
+SHA-256. `ciphertext` is separately gzip-compressed JSON encrypted with AES-256-GCM; `iv` is the 96-bit
+nonce and `authTag` is the GCM authentication tag. Binary fields use base64. The format, version, key
+identifier, algorithms, and encoding fields are authenticated as GCM additional data. The decrypted
+payload contains the reviewed manifest and generated allowlisted evidence records.

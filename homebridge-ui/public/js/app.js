@@ -280,9 +280,7 @@ diagnosticsExport.addEventListener('click', async () => {
       12000,
     );
     const bytes = Uint8Array.from(atob(exported.archive), (character) => character.charCodeAt(0));
-    const url = URL.createObjectURL(
-      new Blob([bytes], { type: 'application/vnd.homebridge-eufy.support-archive+json' }),
-    );
+    const url = URL.createObjectURL(new Blob([bytes], { type: exported.mediaType }));
     const download = document.createElement('a');
     download.href = url;
     download.download = exported.filename;

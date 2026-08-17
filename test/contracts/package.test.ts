@@ -449,7 +449,7 @@ describe('packed plugin', () => {
       expect(document).not.toContain('homebridge-eufy-security/issues/1010');
       expect(script).toContain("'/diagnostics/archive/review'");
       expect(script).toContain("'/diagnostics/archive/export'");
-      expect(script).toContain('application/vnd.homebridge-eufy.support-archive+json');
+      expect(script).toContain('type: exported.mediaType');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
       expect(document).toContain('data-first-setup-continue');

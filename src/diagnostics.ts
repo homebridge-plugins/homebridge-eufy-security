@@ -117,7 +117,7 @@ export interface SupportArchiveReview {
 
 export interface EncryptedSupportArchive {
   filename: string;
-  mediaType: 'application/vnd.homebridge-eufy.support-archive+json';
+  mediaType: 'application/gzip';
   archive: Buffer;
 }
 
@@ -394,9 +394,9 @@ export class GuidedDiagnostics {
       ciphertext: ciphertext.toString('base64'),
     };
     return {
-      filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport.txt`,
-      mediaType: 'application/vnd.homebridge-eufy.support-archive+json',
-      archive: Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8'),
+      filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport.gz`,
+      mediaType: 'application/gzip',
+      archive: await gzip(Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8')),
     };
   }
 

@@ -2,7 +2,7 @@ import { constants, createDecipheriv, generateKeyPairSync, privateDecrypt } from
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -24,7 +24,7 @@ interface TestSupportArchiveEnvelope {
 }
 
 function decryptSupportArchive(value: Buffer, privateKey: string): Record<string, unknown> {
-  const envelope = JSON.parse(value.toString('utf8')) as TestSupportArchiveEnvelope;
+  const envelope = JSON.parse(gunzipSync(value).toString('utf8')) as TestSupportArchiveEnvelope;
   const key = privateDecrypt(
     {
       key: privateKey,
@@ -286,8 +286,8 @@ describe('guided diagnostics session', () => {
       await expect(diagnostics.exportSupportArchive('unreviewed')).rejects.toThrow('review');
 
       const exported = await diagnostics.exportSupportArchive(review.reviewId);
-      expect(exported.filename).toMatch(/^homebridge-eufy-support-[0-9a-f-]{36}\.eufysupport\.txt$/);
-      expect(exported.mediaType).toBe('application/vnd.homebridge-eufy.support-archive+json');
+      expect(exported.filename).toMatch(/^homebridge-eufy-support-[0-9a-f-]{36}\.eufysupport\.gz$/);
+      expect(exported.mediaType).toBe('application/gzip');
       expect(exported.archive.toString('utf8')).not.toContain(forbidden);
       expect(exported.archive.toString('utf8')).not.toContain('contact-state');
       await expect(diagnostics.exportSupportArchive(review.reviewId)).rejects.toThrow('review');
@@ -306,9 +306,9 @@ describe('guided diagnostics session', () => {
       expect(JSON.stringify(payload)).toContain('contact-state');
       expect(JSON.stringify(payload)).not.toContain(forbidden);
 
-      const tampered = JSON.parse(exported.archive.toString('utf8')) as TestSupportArchiveEnvelope;
+      const tampered = JSON.parse(gunzipSync(exported.archive).toString('utf8')) as TestSupportArchiveEnvelope;
       tampered.keyId = 'substituted-key';
-      expect(() => decryptSupportArchive(Buffer.from(JSON.stringify(tampered)), privateKey)).toThrow();
+      expect(() => decryptSupportArchive(gzipSync(JSON.stringify(tampered)), privateKey)).toThrow();
 
       const expiredReview = await diagnostics.reviewSupportArchive();
       now += 24 * HOUR_MS;
