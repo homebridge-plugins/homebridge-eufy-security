@@ -105,7 +105,7 @@
   "advancedTitle": "Réglages avancés",
   "closeAdvanced": "Retour aux appareils",
   "closeDiagnostics": "Retour aux appareils",
-  "dashboardMenuLabel": "Ouvrir le menu du tableau de bord",
+  "dashboardActionsLabel": "Actions du tableau de bord",
   "diagnosticsActionLabel": "Pendant l’intervalle",
   "diagnosticsArchiveExcluded": "Toujours exclus :",
   "diagnosticsArchiveExpires": "expire le {expiresAt}",

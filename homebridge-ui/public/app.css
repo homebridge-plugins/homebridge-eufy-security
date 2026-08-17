@@ -411,7 +411,7 @@ h2 {
   flex-wrap: wrap;
 }
 
-.dashboard-status > div:not(.dashboard-menu) {
+.dashboard-status > div:not(.dashboard-actions) {
   min-width: 0;
   flex: 1;
 }
@@ -420,63 +420,65 @@ h2 {
   flex: 0 0 auto;
 }
 
-.dashboard-menu {
+.dashboard-actions {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: 0 0 auto;
 }
 
-.dashboard-menu-trigger {
+.dashboard-action {
+  position: relative;
   display: grid;
   width: 38px;
+  height: 38px;
   min-height: 38px;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel);
-  color: var(--ink);
   padding: 0;
-  font-size: 13px;
-  letter-spacing: 0.08em;
 }
 
-.dashboard-menu-popover {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 7px);
-  right: 0;
-  width: min(230px, calc(100vw - 30px));
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-  padding: 5px;
-  box-shadow: 0 18px 45px rgb(15 23 42 / 20%);
-}
-
-.dashboard-menu-popover button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 40px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink);
-  padding: 8px 11px;
-  text-align: left;
-  font-size: 13px;
-}
-
-.dashboard-menu-popover img {
+.dashboard-action img {
   width: 19px;
   height: 19px;
   opacity: 0.72;
 }
 
-.dashboard-menu-popover button:hover,
-.dashboard-menu-popover button:focus-visible {
+.dashboard-action::after {
+  content: attr(aria-label);
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 7px);
+  right: 0;
+  width: max-content;
+  max-width: 190px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 5px 8px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 16%);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.dashboard-action:hover,
+.dashboard-action:focus-visible {
   background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+}
+
+.dashboard-action:hover::after,
+.dashboard-action:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .dashboard[data-state="degraded"] .status,
@@ -1362,6 +1364,7 @@ button:disabled {
 
 .shell[data-theme="dark"] .notice-icon,
 .shell[data-theme="dark"] .status-icon,
+.shell[data-theme="dark"] .dashboard-action img,
 .shell[data-theme="dark"] .device-class-icon {
   filter: invert(1);
 }

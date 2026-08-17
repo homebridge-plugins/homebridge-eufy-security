@@ -72,17 +72,6 @@ async function renderUi(
   const legacyNotice = { hidden: true };
   const legacySettings = { textContent: '' };
   const legacyAcknowledge = interactiveElement({});
-  const dashboardMenuTrigger = interactiveElement({
-    attributes: { 'aria-expanded': 'false' },
-    focused: false,
-    focus() {
-      this.focused = true;
-    },
-    setAttribute(name: string, value: string) {
-      this.attributes[name] = value;
-    },
-  });
-  const dashboardMenu = { hidden: true };
   const menuDiagnostics = interactiveElement({});
   const menuAdvanced = interactiveElement({});
   const diagnosticsPanel = { hidden: true, scrollIntoView() {} };
@@ -122,7 +111,10 @@ async function renderUi(
     'accountConnectionLabel',
     'closeAdvanced',
     'closeDiagnostics',
-    'dashboardMenuLabel',
+    'dashboardActionsLabel',
+    'menuAdvanced',
+    'menuDiagnostics',
+    'menuRelogin',
     'setupSequenceLabel',
   ].map((key) => ({
     attributes: { 'aria-label': '__untranslated__' },
@@ -166,8 +158,6 @@ async function renderUi(
           '[data-legacy-notice]': legacyNotice,
           '[data-legacy-settings]': legacySettings,
           '[data-legacy-acknowledge]': legacyAcknowledge,
-          '[data-dashboard-menu-trigger]': dashboardMenuTrigger,
-          '[data-dashboard-menu]': dashboardMenu,
           '[data-menu-diagnostics]': menuDiagnostics,
           '[data-menu-advanced]': menuAdvanced,
           '[data-diagnostics]': diagnosticsPanel,
@@ -255,8 +245,6 @@ async function renderUi(
     dashboardSummary,
     dashboardAuthenticate,
     dashboardTitle,
-    dashboardMenu,
-    dashboardMenuTrigger,
     deviceGroups,
     menuAdvanced,
     menuDiagnostics,
@@ -519,9 +507,6 @@ describe('packed plugin', () => {
           'legacyEyebrow',
           'legacySummary',
           'legacyTitle',
-          'menuAdvanced',
-          'menuDiagnostics',
-          'menuRelogin',
           'sessionDetails',
           'setupStatusEyebrow',
           'shareLink',
@@ -535,7 +520,10 @@ describe('packed plugin', () => {
         'accountConnectionLabel',
         'closeAdvanced',
         'closeDiagnostics',
-        'dashboardMenuLabel',
+        'dashboardActionsLabel',
+        'menuAdvanced',
+        'menuDiagnostics',
+        'menuRelogin',
         'setupSequenceLabel',
       ]);
       const expectedCatalogKeys = [
@@ -681,7 +669,10 @@ describe('packed plugin', () => {
         accountConnectionLabel: 'Informations sur la connexion du compte',
         closeAdvanced: 'Retour aux appareils',
         closeDiagnostics: 'Retour aux appareils',
-        dashboardMenuLabel: 'Ouvrir le menu du tableau de bord',
+        dashboardActionsLabel: 'Actions du tableau de bord',
+        menuAdvanced: 'Réglages avancés',
+        menuDiagnostics: 'Diagnostics de débogage',
+        menuRelogin: 'Se reconnecter ou remplacer le compte',
         setupSequenceLabel: 'Étapes de configuration',
       });
       const englishUi = await renderUi(script, [], catalogs, 'es', translationKeys);
@@ -708,12 +699,8 @@ describe('packed plugin', () => {
         ],
         catalogs,
       );
-      await menuUi.dashboardMenuTrigger.dispatch('click');
-      expect(menuUi.dashboardMenu).toMatchObject({ hidden: false });
-      expect(menuUi.dashboardMenuTrigger.attributes['aria-expanded']).toBe('true');
       await menuUi.menuDiagnostics.dispatch('click');
       expect(menuUi).toMatchObject({
-        dashboardMenu: { hidden: true },
         dashboardState: { hidden: true },
         dashboardSummary: { hidden: true },
         deviceGroups: { hidden: true },
@@ -734,7 +721,6 @@ describe('packed plugin', () => {
         dashboardSummary: { hidden: false },
         deviceGroups: { hidden: false },
       });
-      await menuUi.dashboardMenuTrigger.dispatch('click');
       await menuUi.menuAdvanced.dispatch('click');
       expect(menuUi).toMatchObject({
         advancedPanel: { hidden: false },

@@ -54,31 +54,21 @@
         <h2 id="dashboard-title" data-dashboard-title></h2>
       </div>
       <span class="status" data-dashboard-badge></span>
-      <div class="dashboard-menu">
+      <div class="dashboard-actions" role="group" data-i18n-aria-label="dashboardActionsLabel">
         <button
           type="button"
-          class="dashboard-menu-trigger"
-          data-dashboard-menu-trigger
-          aria-expanded="false"
-          aria-controls="dashboard-menu"
-          data-i18n-aria-label="dashboardMenuLabel"
+          class="dashboard-action"
+          data-dashboard-authenticate
+          data-i18n-aria-label="menuRelogin"
         >
-          <span aria-hidden="true">•••</span>
+          <img src="assets/icons/settings_backup_restore.svg" alt="" />
         </button>
-        <div id="dashboard-menu" class="dashboard-menu-popover" data-dashboard-menu hidden>
-          <button type="button" data-dashboard-authenticate>
-            <img src="assets/icons/settings_backup_restore.svg" alt="" />
-            <span data-i18n="menuRelogin"></span>
-          </button>
-          <button type="button" data-menu-diagnostics>
-            <img src="assets/icons/bug-report.svg" alt="" />
-            <span data-i18n="menuDiagnostics"></span>
-          </button>
-          <button type="button" data-menu-advanced>
-            <img src="assets/icons/settings.svg" alt="" />
-            <span data-i18n="menuAdvanced"></span>
-          </button>
-        </div>
+        <button type="button" class="dashboard-action" data-menu-diagnostics data-i18n-aria-label="menuDiagnostics">
+          <img src="assets/icons/bug-report.svg" alt="" />
+        </button>
+        <button type="button" class="dashboard-action" data-menu-advanced data-i18n-aria-label="menuAdvanced">
+          <img src="assets/icons/settings.svg" alt="" />
+        </button>
       </div>
     </div>
     <p class="summary" data-dashboard-summary></p>

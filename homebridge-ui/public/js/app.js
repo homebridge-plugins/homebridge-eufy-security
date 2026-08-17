@@ -27,8 +27,6 @@ const pageTitle = document.querySelector('[data-page-title]');
 const legacyNotice = document.querySelector('[data-legacy-notice]');
 const legacySettings = document.querySelector('[data-legacy-settings]');
 const legacyAcknowledge = document.querySelector('[data-legacy-acknowledge]');
-const dashboardMenuTrigger = document.querySelector('[data-dashboard-menu-trigger]');
-const dashboardMenu = document.querySelector('[data-dashboard-menu]');
 const menuDiagnostics = document.querySelector('[data-menu-diagnostics]');
 const menuAdvanced = document.querySelector('[data-menu-advanced]');
 const diagnosticsPanel = document.querySelector('[data-diagnostics]');
@@ -65,6 +63,7 @@ let legacyNames = [];
 let legacyAcknowledged = false;
 let diagnosticsState = { status: 'inactive', missingEvidence: [] };
 let diagnosticsReviewId = '';
+let dashboardPanelTrigger;
 const dashboardView = window.HomebridgeEufyDashboard;
 const legacySettingsView = window.HomebridgeEufyLegacySettings;
 const dashboardElements = {
@@ -337,13 +336,8 @@ diagnosticsReproduction.addEventListener('click', async () => {
   }
 });
 
-function closeDashboardMenu() {
-  dashboardMenu.hidden = true;
-  dashboardMenuTrigger.setAttribute('aria-expanded', 'false');
-}
-
-function openDashboardPanel(panel) {
-  closeDashboardMenu();
+function openDashboardPanel(panel, trigger) {
+  dashboardPanelTrigger = trigger;
   dashboardState.hidden = true;
   dashboardSummary.hidden = true;
   deviceGroups.hidden = true;
@@ -359,21 +353,15 @@ function closeDashboardPanel() {
   dashboardState.hidden = false;
   dashboardSummary.hidden = false;
   deviceGroups.hidden = false;
-  dashboardMenuTrigger.focus?.();
+  dashboardPanelTrigger?.focus?.();
 }
 
-dashboardMenuTrigger.addEventListener('click', () => {
-  const open = dashboardMenu.hidden;
-  dashboardMenu.hidden = !open;
-  dashboardMenuTrigger.setAttribute('aria-expanded', String(open));
-});
-
-menuDiagnostics.addEventListener('click', () => openDashboardPanel(diagnosticsPanel));
+menuDiagnostics.addEventListener('click', () => openDashboardPanel(diagnosticsPanel, menuDiagnostics));
 menuAdvanced.addEventListener('click', () => {
   const config = configuredBlock() ?? {};
   advancedPolling.value = String(config.pollingIntervalMinutes ?? 10);
   advancedFfmpeg.value = config.ffmpegPath ?? '';
-  openDashboardPanel(advancedPanel);
+  openDashboardPanel(advancedPanel, menuAdvanced);
 });
 diagnosticsClose.addEventListener('click', () => {
   closeDashboardPanel();
@@ -440,7 +428,6 @@ async function updateConfig(block) {
 dashboardView.bindPreferences(dashboardElements, configuredBlock, updateConfig, () => messages);
 
 dashboardAuthenticate.addEventListener('click', () => {
-  closeDashboardMenu();
   diagnosticsPanel.hidden = true;
   advancedPanel.hidden = true;
   dashboard.hidden = true;
