@@ -1,4 +1,4 @@
-import { constants, createDecipheriv, generateKeyPairSync, privateDecrypt } from 'node:crypto';
+import { constants, createDecipheriv, createHash, generateKeyPairSync, privateDecrypt } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -202,6 +202,7 @@ describe('guided diagnostics session', () => {
     const diagnostics = new GuidedDiagnostics(root, () => now, {
       keyId: 'test-support-key',
       publicKey,
+      sha256: createHash('sha256').update(publicKey).digest('hex'),
     });
 
     try {
@@ -313,6 +314,16 @@ describe('guided diagnostics session', () => {
       const expiredReview = await diagnostics.reviewSupportArchive();
       now += 24 * HOUR_MS;
       await expect(diagnostics.exportSupportArchive(expiredReview.reviewId)).rejects.toThrow('stale');
+
+      const invalidKeyDiagnostics = new GuidedDiagnostics(root, () => now - 24 * HOUR_MS, {
+        keyId: 'test-support-key',
+        publicKey,
+        sha256: '0'.repeat(64),
+      });
+      const invalidKeyReview = await invalidKeyDiagnostics.reviewSupportArchive();
+      await expect(invalidKeyDiagnostics.exportSupportArchive(invalidKeyReview.reviewId)).rejects.toThrow(
+        'key integrity',
+      );
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

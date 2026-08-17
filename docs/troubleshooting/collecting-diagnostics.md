@@ -33,7 +33,9 @@ that time.
 
 Archive key `support-2026-08-01` is a 4096-bit RSA support key. The embedded public key may only encrypt
 archives. The matching private key is held outside source control, CI, release artifacts, and
-Homebridge installations by the named project custodian, maintainer `@lenoxys`.
+Homebridge installations by the named project custodian, maintainer `@lenoxys`. Export verifies the
+embedded key's pinned SHA-256 fingerprint before use and erases each temporary content key after
+encryption.
 
 Key rotation assigns a new dated key identifier and ships its public key before new exports use it.
 The custodian retains a superseded private key for 90 days to finish active support cases, then destroys

@@ -1,4 +1,4 @@
-import { constants, createCipheriv, publicEncrypt, randomBytes, randomUUID } from 'node:crypto';
+import { constants, createCipheriv, createHash, publicEncrypt, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -124,6 +124,7 @@ export interface EncryptedSupportArchive {
 interface SupportArchiveKey {
   keyId: string;
   publicKey: string;
+  sha256: string;
 }
 
 interface SupportArchiveEvidence {
@@ -146,6 +147,7 @@ interface PendingSupportArchive {
 
 const SUPPORT_ARCHIVE_KEY: SupportArchiveKey = {
   keyId: 'support-2026-08-01',
+  sha256: 'e01d8a1c6c2b800772495b3f656b10899364ece0e82d846f7d33f61cdffbd451',
   publicKey: `-----BEGIN PUBLIC KEY-----
 MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEArho8/7NwaYsZ3r27Lzek
 mJXOdSOtjuxKLWHxS40Hf6MFskF/dSwY8om0NZ22Qa/cygStAiP4eAmL1fEuNqlS
@@ -361,43 +363,51 @@ export class GuidedDiagnostics {
     if (Date.parse(pending.manifest.archiveExpiresAt) <= this.now()) {
       throw new Error('Support archive manifest review is missing or stale');
     }
+    const keyFingerprint = createHash('sha256').update(this.supportArchiveKey.publicKey).digest('hex');
+    if (keyFingerprint !== this.supportArchiveKey.sha256) {
+      throw new Error('Support archive key integrity check failed');
+    }
     const compressed = await gzip(
       Buffer.from(JSON.stringify({ manifest: pending.manifest, evidence: pending.evidence }), 'utf8'),
     );
     const contentKey = randomBytes(32);
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', contentKey, iv);
-    const metadata = {
-      format: 'homebridge-eufy-support-archive',
-      version: 1,
-      keyId: this.supportArchiveKey.keyId,
-      keyWrapAlgorithm: 'RSA-OAEP-SHA256',
-      contentAlgorithm: 'AES-256-GCM',
-      contentEncoding: 'gzip+json',
-    } as const;
-    const authenticatedMetadata = Buffer.from(JSON.stringify(metadata), 'utf8');
-    cipher.setAAD(authenticatedMetadata);
-    const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
-    const wrappedKey = publicEncrypt(
-      {
-        key: this.supportArchiveKey.publicKey,
-        oaepHash: 'sha256',
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-      },
-      contentKey,
-    );
-    const envelope = {
-      ...metadata,
-      wrappedKey: wrappedKey.toString('base64'),
-      iv: iv.toString('base64'),
-      authTag: cipher.getAuthTag().toString('base64'),
-      ciphertext: ciphertext.toString('base64'),
-    };
-    return {
-      filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport.gz`,
-      mediaType: 'application/gzip',
-      archive: await gzip(Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8')),
-    };
+    try {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', contentKey, iv);
+      const metadata = {
+        format: 'homebridge-eufy-support-archive',
+        version: 1,
+        keyId: this.supportArchiveKey.keyId,
+        keyWrapAlgorithm: 'RSA-OAEP-SHA256',
+        contentAlgorithm: 'AES-256-GCM',
+        contentEncoding: 'gzip+json',
+      } as const;
+      const authenticatedMetadata = Buffer.from(JSON.stringify(metadata), 'utf8');
+      cipher.setAAD(authenticatedMetadata);
+      const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+      const wrappedKey = publicEncrypt(
+        {
+          key: this.supportArchiveKey.publicKey,
+          oaepHash: 'sha256',
+          padding: constants.RSA_PKCS1_OAEP_PADDING,
+        },
+        contentKey,
+      );
+      const envelope = {
+        ...metadata,
+        wrappedKey: wrappedKey.toString('base64'),
+        iv: iv.toString('base64'),
+        authTag: cipher.getAuthTag().toString('base64'),
+        ciphertext: ciphertext.toString('base64'),
+      };
+      return {
+        filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport.gz`,
+        mediaType: 'application/gzip',
+        archive: await gzip(Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8')),
+      };
+    } finally {
+      contentKey.fill(0);
+    }
   }
 
   private async collectSupportEvidence(session: PersistedDiagnosticsSession): Promise<SupportArchiveEvidence[]> {
