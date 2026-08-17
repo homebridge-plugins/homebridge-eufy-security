@@ -363,7 +363,7 @@ export class GuidedDiagnostics {
     if (Date.parse(pending.manifest.archiveExpiresAt) <= this.now()) {
       throw new Error('Support archive manifest review is missing or stale');
     }
-    const keyFingerprint = createHash('sha256').update(this.supportArchiveKey.publicKey).digest('hex');
+    const keyFingerprint = createHash('sha256').update(this.supportArchiveKey.publicKey.trim()).digest('hex');
     if (keyFingerprint !== this.supportArchiveKey.sha256) {
       throw new Error('Support archive key integrity check failed');
     }

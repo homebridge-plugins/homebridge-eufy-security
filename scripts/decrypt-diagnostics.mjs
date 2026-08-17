@@ -1,257 +1,360 @@
 #!/usr/bin/env node
 
 /**
- * Decrypt and extract an encrypted diagnostics archive produced by the plugin.
+ * Authenticates, decrypts, and extracts a V5 Homebridge Eufy support archive.
  *
  * Usage:
- *   node decrypt-diagnostics.mjs <encrypted-file.tar.gz> [private-key.pem]
- *
- * If the private key is omitted, the script looks for it in the keys/
- * directory next to itself (keys/diagnostics_private.pem).
- *
- * The archive is decrypted and extracted into a folder next to the input file,
- * named after the archive (e.g. diagnostics-2026-03-02-11-25-31/).
- *
- * File format (the .tar.gz is actually encrypted, not a plain gzip):
- *   [4 bytes]  – magic: "DIAG"
- *   [1 byte]   – format version (currently 0x01)
- *   [8 bytes]  – creation timestamp (BigUInt64BE, ms since Unix epoch)
- *   [2 bytes]  – big-endian uint16: length of the encrypted AES key
- *   [N bytes]  – RSA-OAEP encrypted AES-256 key
- *   [12 bytes] – AES-GCM initialisation vector
- *   [16 bytes] – AES-GCM authentication tag
- *   [rest]     – AES-256-GCM ciphertext
- *
- * AAD (Additional Authenticated Data) covers bytes 0 through the end of the
- * encrypted AES key.  GCM verifies this automatically during decryption.
+ *   node scripts/decrypt-diagnostics.mjs <archive.eufysupport.gz> [private-key.pem]
  */
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_KEY = path.join(__dirname, '..', 'keys', 'diagnostics_private.pem');
+const DEFAULT_KEY = path.join(
+  os.homedir(),
+  '.local',
+  'share',
+  'homebridge-eufy-support',
+  'keys',
+  'support-2026-08-01-private.pem',
+);
+const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
+const MAX_ENVELOPE_BYTES = 32 * 1024 * 1024;
+const MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
+const MAX_PRIVATE_KEY_BYTES = 64 * 1024;
+const ENVELOPE_FIELDS = new Set([
+  'format',
+  'version',
+  'keyId',
+  'keyWrapAlgorithm',
+  'contentAlgorithm',
+  'contentEncoding',
+  'wrappedKey',
+  'iv',
+  'authTag',
+  'ciphertext',
+]);
+const EVIDENCE_FILES = new Map([
+  ['environment', ['environment.json', 'application/json', 'operational']],
+  ['reproduction-markers', ['reproduction-markers.jsonl', 'application/x-ndjson', 'operational']],
+  ['plugin-log', ['plugin-log.jsonl', 'application/x-ndjson', 'diagnostic']],
+  ['sdk-log', ['sdk-log.jsonl', 'application/x-ndjson', 'diagnostic']],
+  ['homekit-log', ['homekit-log.jsonl', 'application/x-ndjson', 'diagnostic']],
+  ['ffmpeg-log', ['ffmpeg-log.jsonl', 'application/x-ndjson', 'diagnostic']],
+  ['ui-log', ['ui-log.jsonl', 'application/x-ndjson', 'diagnostic']],
+]);
+const KEY_FINGERPRINTS = new Map([
+  ['support-2026-08-01', 'e01d8a1c6c2b800772495b3f656b10899364ece0e82d846f7d33f61cdffbd451'],
+]);
+const PROFILES = new Set([
+  'startup-authentication',
+  'device-representation',
+  'control-state',
+  'live-media',
+  'hksv-recording',
+  'dashboard-ui',
+  'other',
+]);
+const PRIVACY_CLASSES = new Set(['diagnostic', 'operational', 'pseudonymous']);
+const EXCLUDED_CLASSES = new Set([
+  'credentials-and-authentication',
+  'tokens-cookies-and-authorization',
+  'session-and-push-stores',
+  'private-and-symmetric-keys',
+  'unconstrained-sdk-objects',
+  'camera-images-talkback-and-raw-media',
+]);
 
-/** Maximum allowed .enc file size (140 MB). */
-const MAX_ENC_SIZE = 140 * 1024 * 1024;
+function canonicalBase64(value, field) {
+  if (typeof value !== 'string') throw new Error(`Invalid envelope field: ${field}`);
+  const decoded = Buffer.from(value, 'base64');
+  if (decoded.toString('base64') !== value) throw new Error(`Invalid base64 field: ${field}`);
+  return decoded;
+}
 
-/** Maximum number of entries allowed in the archive. */
-const MAX_ENTRIES = 100;
+function outputDirectory(archivePath) {
+  const filename = path.basename(archivePath).replace(/\.eufysupport\.gz$/, '');
+  if (filename === path.basename(archivePath)) throw new Error('Archive filename must end in .eufysupport.gz');
+  return path.join(path.dirname(archivePath), filename);
+}
 
-/** Only these file extensions are expected in a legitimate diagnostics archive. */
-const ALLOWED_EXTENSIONS = new Set(['.log', '.gz', '.json']);
-
-/** Archives older than this are flagged with a warning (90 days). */
-const EXPIRY_MS = 90 * 24 * 60 * 60 * 1000;
-
-function main() {
-  const args = process.argv.slice(2);
-
-  if (args.length < 1) {
-    console.error('Usage: node decrypt-diagnostics.mjs <encrypted-file.tar.gz> [private-key.pem]');
-    process.exit(1);
-  }
-
-  const encFile = path.resolve(args[0]);
-  let keyFile = args[1] ? path.resolve(args[1]) : DEFAULT_KEY;
-
-  if (!fs.existsSync(keyFile)) {
-    console.error(`Private key not found: ${keyFile}`);
-    process.exit(1);
-  }
-
-  // Read inputs
-  const encBuffer = fs.readFileSync(encFile);
-
-  // Reject oversized files
-  if (encBuffer.length > MAX_ENC_SIZE) {
-    console.error(`File too large (${(encBuffer.length / 1024 / 1024).toFixed(1)} MB) — max allowed is ${MAX_ENC_SIZE / 1024 / 1024} MB.`);
-    process.exit(1);
-  }
-
-  const privateKey = fs.readFileSync(keyFile, 'utf-8');
-
-  // Validate minimum size: 4 (magic) + 1 (version) + 8 (timestamp) + 2 (keyLen) + 512 (RSA-4096 encrypted key) + 12 (IV) + 16 (tag) + 1 (min ciphertext)
-  const MIN_SIZE = 4 + 1 + 8 + 2 + 512 + 12 + 16 + 1;
-  if (encBuffer.length < MIN_SIZE) {
-    console.error(`File too small (${encBuffer.length} bytes) — not a valid encrypted diagnostics archive.`);
-    process.exit(1);
-  }
-
-  // Verify magic header and version
-  let offset = 0;
-
-  const magic = encBuffer.subarray(offset, offset + 4).toString();
-  offset += 4;
-  if (magic !== 'DIAG') {
-    console.error(`Invalid file — expected magic "DIAG", got "${magic}".`);
-    process.exit(1);
-  }
-
-  const version = encBuffer[offset];
-  offset += 1;
-  if (version !== 0x01) {
-    console.error(`Unsupported format version ${version} — this script supports version 1.`);
-    process.exit(1);
-  }
-
-  // Parse the envelope
-  const createdAtMs = Number(encBuffer.readBigUInt64BE(offset));
-  offset += 8;
-  const createdAt = new Date(createdAtMs);
-
-  if (Number.isNaN(createdAt.getTime())) {
-    console.error('Invalid timestamp in archive header — file may be corrupted or tampered.');
-    process.exit(1);
-  }
-
-  console.log(`Archive created: ${createdAt.toISOString()}`);
-
-  const ageMs = Date.now() - createdAtMs;
-  if (ageMs > EXPIRY_MS) {
-    const ageDays = Math.round(ageMs / (24 * 60 * 60 * 1000));
-    console.warn(`⚠️  WARNING: This archive is ${ageDays} days old (created ${createdAt.toISOString()}).`);
-  }
-  if (createdAtMs > Date.now() + 24 * 60 * 60 * 1000) {
-    console.warn('⚠️  WARNING: Archive timestamp is in the future — clock skew or tampering?');
-  }
-
-  const keyLen = encBuffer.readUInt16BE(offset);
-  offset += 2;
-
-  if (offset + keyLen + 12 + 16 > encBuffer.length) {
-    console.error('Malformed archive — encrypted key length exceeds file size.');
-    process.exit(1);
-  }
-
-  const encryptedKey = encBuffer.subarray(offset, offset + keyLen);
-  offset += keyLen;
-
-  // The AAD covers everything from byte 0 through the end of encryptedKey
-  // (magic + version + timestamp + keyLen + encryptedKey)
-  const aadEnd = 4 + 1 + 8 + 2 + keyLen;
-  const aad = encBuffer.subarray(0, aadEnd);
-
-  const iv = encBuffer.subarray(offset, offset + 12);
-  offset += 12;
-
-  const authTag = encBuffer.subarray(offset, offset + 16);
-  offset += 16;
-
-  const ciphertext = encBuffer.subarray(offset);
-
-  // Unwrap the AES key with the private RSA key
-  let aesKey;
+function readBoundedRegularFile(filePath, maximumBytes, label, checkPrivatePermissions = false) {
+  const descriptor = fs.openSync(filePath, 'r');
   try {
-    aesKey = crypto.privateDecrypt(
+    const stats = fs.fstatSync(descriptor);
+    if (!stats.isFile() || stats.size === 0 || stats.size > maximumBytes) {
+      throw new Error(`${label} must be a regular file within the size limit`);
+    }
+    if (checkPrivatePermissions && (stats.mode & 0o077) !== 0) {
+      throw new Error('Private key permissions must be 600 or stricter');
+    }
+    const buffer = Buffer.allocUnsafe(maximumBytes + 1);
+    let offset = 0;
+    while (offset <= maximumBytes) {
+      const bytesRead = fs.readSync(descriptor, buffer, offset, maximumBytes + 1 - offset, null);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > maximumBytes) throw new Error(`${label} exceeds the size limit`);
+    return buffer.subarray(0, offset);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function readEnvelope(archivePath) {
+  const archive = readBoundedRegularFile(archivePath, MAX_ARCHIVE_BYTES, 'Archive');
+  const envelope = JSON.parse(gunzipSync(archive, { maxOutputLength: MAX_ENVELOPE_BYTES }).toString('utf8'));
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+    throw new Error('Invalid support archive envelope');
+  }
+  const fields = Object.keys(envelope);
+  if (fields.length !== ENVELOPE_FIELDS.size || fields.some((field) => !ENVELOPE_FIELDS.has(field))) {
+    throw new Error('Unexpected support archive envelope fields');
+  }
+  if (
+    envelope.format !== 'homebridge-eufy-support-archive' ||
+    envelope.version !== 1 ||
+    typeof envelope.keyId !== 'string' ||
+    envelope.keyWrapAlgorithm !== 'RSA-OAEP-SHA256' ||
+    envelope.contentAlgorithm !== 'AES-256-GCM' ||
+    envelope.contentEncoding !== 'gzip+json'
+  ) {
+    throw new Error('Unsupported support archive format');
+  }
+  return envelope;
+}
+
+function readPrivateKey(keyPath, keyId) {
+  const privateKeyBytes = readBoundedRegularFile(keyPath, MAX_PRIVATE_KEY_BYTES, 'Private key', true);
+  let privateKey;
+  try {
+    privateKey = crypto.createPrivateKey(privateKeyBytes);
+  } finally {
+    privateKeyBytes.fill(0);
+  }
+  if (privateKey.asymmetricKeyType !== 'rsa') throw new Error('Support private key must be RSA');
+  const publicKey = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).trim();
+  const expectedFingerprint = KEY_FINGERPRINTS.get(keyId) ?? process.env.HOMEBRIDGE_EUFY_SUPPORT_KEY_SHA256;
+  if (!expectedFingerprint) throw new Error(`Unknown support key identifier: ${keyId}`);
+  const fingerprint = crypto.createHash('sha256').update(publicKey).digest('hex');
+  if (!/^[0-9a-f]{64}$/.test(expectedFingerprint) || fingerprint !== expectedFingerprint) {
+    throw new Error(`Private key does not match support key ${keyId}`);
+  }
+  return privateKey;
+}
+
+function decryptPayload(envelope, privateKey) {
+  const wrappedKey = canonicalBase64(envelope.wrappedKey, 'wrappedKey');
+  const iv = canonicalBase64(envelope.iv, 'iv');
+  const authTag = canonicalBase64(envelope.authTag, 'authTag');
+  const ciphertext = canonicalBase64(envelope.ciphertext, 'ciphertext');
+  const wrappedKeyBytes = privateKey.asymmetricKeyDetails?.modulusLength / 8;
+  if (wrappedKey.length !== wrappedKeyBytes || iv.length !== 12 || authTag.length !== 16 || ciphertext.length === 0) {
+    throw new Error('Invalid support archive cryptographic field length');
+  }
+
+  let contentKey;
+  try {
+    contentKey = crypto.privateDecrypt(
       {
         key: privateKey,
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: 'sha256',
       },
-      encryptedKey,
+      wrappedKey,
     );
-  } catch (err) {
-    console.error('Failed to decrypt AES key — wrong private key?', err.message);
-    process.exit(2);
+  } catch {
+    throw new Error('Archive authentication failed');
   }
-
-  // Decrypt the payload
-  const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
-  aesKey.fill(0); // scrub key from memory
-  decipher.setAAD(aad);
-  decipher.setAuthTag(authTag);
-
-  let decrypted;
   try {
-    decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  } catch (err) {
-    console.error('Decryption failed — data may be corrupted.', err.message);
-    process.exit(3);
-  }
-
-  // Determine output directory next to the .enc file
-  const encDir = path.dirname(encFile);
-  const baseName = path.basename(encFile)
-    .replace(/\.tar\.gz(?:\.enc)?$/, '');
-  const outDir = path.join(encDir, baseName);
-
-  // --- Safety: inspect tar contents before extracting (piped via stdin, no temp file) ---
-  const listResult = spawnSync('tar', ['tzf', '-'], { input: decrypted, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
-  if (listResult.status !== 0) {
-    console.error('Failed to list archive contents:', listResult.stderr?.trim() || 'unknown error');
-    process.exit(4);
-  }
-
-  const listing = listResult.stdout.trim().split('\n');
-
-  // Reject archives with too many entries (tar bomb protection)
-  if (listing.length > MAX_ENTRIES) {
-    console.error(`BLOCKED: archive contains ${listing.length} entries (max ${MAX_ENTRIES}).`);
-    console.error('This file may be a tar bomb. Aborting.');
-    process.exit(5);
-  }
-
-  for (const entry of listing) {
-    const normalised = path.normalize(entry);
-
-    // Path traversal / absolute path check
-    if (path.isAbsolute(normalised) || normalised.startsWith('..')) {
-      console.error(`BLOCKED: archive contains path-traversal entry: "${entry}"`);
-      console.error('This file may be maliciously crafted. Aborting.');
-      process.exit(5);
-    }
-
-    // Extension allowlist (skip directory entries ending with /)
-    if (!entry.endsWith('/')) {
-      const ext = path.extname(entry).toLowerCase();
-      // Handle compound extensions like .log.gz
-      const doubleExt = path.extname(entry.slice(0, -ext.length)).toLowerCase() + ext;
-      if (!ALLOWED_EXTENSIONS.has(ext) && !ALLOWED_EXTENSIONS.has(doubleExt)) {
-        console.error(`BLOCKED: archive contains file with disallowed extension: "${entry}"`);
-        console.error(`Only ${[...ALLOWED_EXTENSIONS].join(', ')} files are allowed.`);
-        process.exit(5);
-      }
-    }
-  }
-
-  // Check for symlinks inside the archive
-  const verboseResult = spawnSync('tar', ['tvzf', '-'], { input: decrypted, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
-  if (verboseResult.status === 0) {
-    for (const line of verboseResult.stdout.trim().split('\n')) {
-      if (line.startsWith('l') || line.includes(' -> ')) {
-        console.error(`BLOCKED: archive contains a symlink: "${line.trim()}"`);
-        console.error('This file may be maliciously crafted. Aborting.');
-        process.exit(5);
-      }
-    }
-  }
-
-  // --- Safe to extract (piped via stdin, no temp file on disk) ---
-  fs.mkdirSync(outDir, { recursive: true });
-  const extractResult = spawnSync('tar', ['xzf', '-', '-C', outDir], { input: decrypted, stdio: ['pipe', 'inherit', 'inherit'] });
-  if (extractResult.status !== 0) {
-    console.error('Failed to extract archive.');
-    process.exit(4);
-  }
-
-  // Strip execute permissions from all extracted files
-  const files = fs.readdirSync(outDir);
-  for (const f of files) {
-    const filePath = path.join(outDir, f);
+    if (contentKey.length !== 32) throw new Error('Invalid decrypted content key length');
+    const metadata = {
+      format: envelope.format,
+      version: envelope.version,
+      keyId: envelope.keyId,
+      keyWrapAlgorithm: envelope.keyWrapAlgorithm,
+      contentAlgorithm: envelope.contentAlgorithm,
+      contentEncoding: envelope.contentEncoding,
+    };
+    const decipher = crypto.createDecipheriv('aes-256-gcm', contentKey, iv);
+    decipher.setAAD(Buffer.from(JSON.stringify(metadata)));
+    decipher.setAuthTag(authTag);
+    let compressed;
     try {
-      fs.chmodSync(filePath, 0o644);
+      compressed = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } catch {
-      // Ignore permission errors on platforms that don't support chmod
+      throw new Error('Archive authentication failed');
     }
+    return JSON.parse(gunzipSync(compressed, { maxOutputLength: MAX_PAYLOAD_BYTES }).toString('utf8'));
+  } finally {
+    contentKey.fill(0);
+  }
+}
+
+function validatePayload(payload, envelope, archivePath) {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    Object.keys(payload).sort().join(',') !== 'evidence,manifest' ||
+    !payload.manifest ||
+    !Array.isArray(payload.evidence)
+  ) {
+    throw new Error('Invalid support archive payload');
+  }
+  const manifest = payload.manifest;
+  const supportCasePattern = /^support-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const createdAt = Date.parse(manifest.createdAt);
+  const expiresAt = Date.parse(manifest.archiveExpiresAt);
+  const reproductionStartedAt = Date.parse(manifest.reproductionStartedAt);
+  const reproductionEndedAt = Date.parse(manifest.reproductionEndedAt);
+  if (
+    Object.keys(manifest).sort().join(',') !==
+      'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionStartedAt,supportCaseId,version' ||
+    manifest.version !== 1 ||
+    manifest.archiveFormat !== envelope.format ||
+    manifest.keyId !== envelope.keyId ||
+    !supportCasePattern.test(manifest.supportCaseId) ||
+    path.basename(archivePath) !== `homebridge-eufy-${manifest.supportCaseId}.eufysupport.gz` ||
+    !PROFILES.has(manifest.profile) ||
+    !Number.isFinite(createdAt) ||
+    !Number.isFinite(expiresAt) ||
+    !Number.isFinite(reproductionStartedAt) ||
+    !Number.isFinite(reproductionEndedAt) ||
+    new Date(createdAt).toISOString() !== manifest.createdAt ||
+    new Date(expiresAt).toISOString() !== manifest.archiveExpiresAt ||
+    new Date(reproductionStartedAt).toISOString() !== manifest.reproductionStartedAt ||
+    new Date(reproductionEndedAt).toISOString() !== manifest.reproductionEndedAt ||
+    reproductionStartedAt > reproductionEndedAt ||
+    reproductionEndedAt > createdAt ||
+    expiresAt - createdAt !== 24 * 60 * 60 * 1_000 ||
+    !Array.isArray(manifest.evidence) ||
+    !Array.isArray(manifest.excludedClasses) ||
+    manifest.excludedClasses.length !== EXCLUDED_CLASSES.size ||
+    new Set(manifest.excludedClasses).size !== EXCLUDED_CLASSES.size ||
+    manifest.excludedClasses.some((entry) => !EXCLUDED_CLASSES.has(entry))
+  ) {
+    throw new Error('Support archive manifest does not match its envelope or filename');
   }
 
-  console.log(`Decrypted and extracted to: ${outDir}/`);
-  console.log(`${files.length} file(s):`);
-  files.forEach(f => console.log(`  ${f}`));
+  const manifestEvidence = new Map();
+  for (const item of manifest.evidence) {
+    const includedFields = new Set([
+      'evidence',
+      'privacyClass',
+      'status',
+      'contentType',
+      'bytes',
+      'fields',
+      'truncated',
+    ]);
+    const missingFields = new Set(['evidence', 'privacyClass', 'status', 'missingReason']);
+    const allowedFields = item?.status === 'included' ? includedFields : missingFields;
+    if (
+      !item ||
+      Object.keys(item).some((field) => !allowedFields.has(field)) ||
+      !EVIDENCE_FILES.has(item.evidence) ||
+      manifestEvidence.has(item.evidence) ||
+      item.privacyClass !== EVIDENCE_FILES.get(item.evidence)[2] ||
+      !['included', 'missing'].includes(item.status) ||
+      (item.truncated !== undefined && item.truncated !== true) ||
+      (item.status === 'included' &&
+        (typeof item.bytes !== 'number' ||
+          item.bytes < 0 ||
+          item.contentType !== EVIDENCE_FILES.get(item.evidence)[1] ||
+          !Array.isArray(item.fields) ||
+          item.fields.some(
+            (field) =>
+              !field ||
+              Object.keys(field).sort().join(',') !== 'field,privacyClass' ||
+              typeof field.field !== 'string' ||
+              !PRIVACY_CLASSES.has(field.privacyClass),
+          ))) ||
+      (item.status === 'missing' &&
+        (item.privacyClass !== 'diagnostic' || item.missingReason !== 'no-allowlisted-record-observed'))
+    ) {
+      throw new Error('Invalid or duplicate manifest evidence');
+    }
+    manifestEvidence.set(item.evidence, item);
+  }
+  const extracted = [];
+  const seen = new Set();
+  for (const item of payload.evidence) {
+    const definition = EVIDENCE_FILES.get(item?.evidence);
+    const allowedFields = new Set(['evidence', 'privacyClass', 'contentType', 'content', 'truncated', 'fields']);
+    if (
+      !definition ||
+      Object.keys(item).some((field) => !allowedFields.has(field)) ||
+      seen.has(item.evidence) ||
+      typeof item.content !== 'string' ||
+      item.privacyClass !== definition[2] ||
+      (item.truncated !== undefined && item.truncated !== true) ||
+      !Array.isArray(item.fields)
+    ) {
+      throw new Error('Invalid or duplicate support archive evidence');
+    }
+    const [filename, contentType] = definition;
+    const manifestItem = manifestEvidence.get(item.evidence);
+    if (
+      item.contentType !== contentType ||
+      manifestItem?.status !== 'included' ||
+      manifestItem.privacyClass !== item.privacyClass ||
+      manifestItem.bytes !== Buffer.byteLength(item.content) ||
+      manifestItem.contentType !== item.contentType ||
+      manifestItem.truncated !== item.truncated ||
+      JSON.stringify(manifestItem.fields) !== JSON.stringify(item.fields)
+    ) {
+      throw new Error(`Evidence does not match manifest: ${item.evidence}`);
+    }
+    seen.add(item.evidence);
+    extracted.push([filename, item.content]);
+  }
+  if ([...manifestEvidence.values()].some((item) => item.status === 'included' && !seen.has(item.evidence))) {
+    throw new Error('Manifest declares evidence that is absent from the payload');
+  }
+  if (expiresAt <= Date.now()) console.warn(`WARNING: support archive expired at ${manifest.archiveExpiresAt}`);
+  return { manifest, extracted };
+}
+
+function extract(archivePath, manifest, evidence) {
+  const directory = outputDirectory(archivePath);
+  fs.mkdirSync(directory, { mode: 0o700 });
+  fs.writeFileSync(path.join(directory, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, {
+    flag: 'wx',
+    mode: 0o600,
+  });
+  for (const [filename, content] of evidence) {
+    fs.writeFileSync(path.join(directory, filename), content, { flag: 'wx', mode: 0o600 });
+  }
+  return directory;
+}
+
+function main() {
+  const [archiveArgument, keyArgument] = process.argv.slice(2);
+  if (!archiveArgument) {
+    console.error('Usage: node scripts/decrypt-diagnostics.mjs <archive.eufysupport.gz> [private-key.pem]');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const archivePath = path.resolve(archiveArgument);
+    const keyPath = path.resolve(keyArgument ?? DEFAULT_KEY);
+    const envelope = readEnvelope(archivePath);
+    const privateKey = readPrivateKey(keyPath, envelope.keyId);
+    const payload = decryptPayload(envelope, privateKey);
+    const { manifest, extracted } = validatePayload(payload, envelope, archivePath);
+    const directory = extract(archivePath, manifest, extracted);
+    console.log(`Authenticated V5 support archive encrypted to ${envelope.keyId}.`);
+    console.log(`Decrypted and extracted to: ${directory}/`);
+    console.log(`${extracted.length + 1} file(s): manifest.json, ${extracted.map(([name]) => name).join(', ')}`);
+  } catch (error) {
+    console.error(`Failed to decrypt V5 support archive: ${error.message}`);
+    process.exitCode = 1;
+  }
 }
 
 main();

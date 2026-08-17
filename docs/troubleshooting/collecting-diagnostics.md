@@ -50,3 +50,16 @@ SHA-256. `ciphertext` is separately gzip-compressed JSON encrypted with AES-256-
 nonce and `authTag` is the GCM authentication tag. Binary fields use base64. The format, version, key
 identifier, algorithms, and encoding fields are authenticated as GCM additional data. The decrypted
 payload contains the reviewed manifest and generated allowlisted evidence records.
+
+## Maintainer decryption
+
+Keep the private key at
+`~/.local/share/homebridge-eufy-support/keys/support-2026-08-01-private.pem` with mode `600`, then run:
+
+```bash
+node scripts/decrypt-diagnostics.mjs /path/to/archive.eufysupport.gz
+```
+
+The V5-only decryptor verifies key permissions and fingerprint, authenticates the envelope, checks the
+manifest against each evidence item, and writes owner-only `manifest.json`, JSON, and JSONL files beside
+the archive. Treat that output as sensitive and delete it after the support case is complete.

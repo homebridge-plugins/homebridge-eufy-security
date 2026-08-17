@@ -1,7 +1,9 @@
 import { constants, createDecipheriv, createHash, generateKeyPairSync, privateDecrypt } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -198,11 +200,12 @@ describe('guided diagnostics session', () => {
       publicKeyEncoding: { type: 'spki', format: 'pem' },
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
     });
-    let now = Date.parse('2026-08-16T08:00:00.000Z');
+    const testKeyFingerprint = createHash('sha256').update(publicKey.trim()).digest('hex');
+    let now = Date.parse('2026-08-17T08:00:00.000Z');
     const diagnostics = new GuidedDiagnostics(root, () => now, {
       keyId: 'test-support-key',
       publicKey,
-      sha256: createHash('sha256').update(publicKey).digest('hex'),
+      sha256: testKeyFingerprint,
     });
 
     try {
@@ -269,7 +272,7 @@ describe('guided diagnostics session', () => {
         ],
       });
       expect(review.manifest.excludedClasses).toContain('credentials-and-authentication');
-      expect(review.manifest.archiveExpiresAt).toBe('2026-08-17T08:00:05.000Z');
+      expect(review.manifest.archiveExpiresAt).toBe('2026-08-18T08:00:05.000Z');
       expect(review.manifest.evidence[0]).toMatchObject({
         fields: [
           { field: 'version', privacyClass: 'operational' },
@@ -306,6 +309,29 @@ describe('guided diagnostics session', () => {
       });
       expect(JSON.stringify(payload)).toContain('contact-state');
       expect(JSON.stringify(payload)).not.toContain(forbidden);
+
+      const archivePath = join(root, exported.filename);
+      const privateKeyPath = join(root, 'test-private.pem');
+      writeFileSync(archivePath, exported.archive, { mode: 0o600 });
+      writeFileSync(privateKeyPath, privateKey, { mode: 0o600 });
+      const decryptor = fileURLToPath(new URL('../../scripts/decrypt-diagnostics.mjs', import.meta.url));
+      const decryptorSource = readFileSync(decryptor, 'utf8');
+      expect(decryptorSource).not.toMatch(/node:(?:http|https|net|tls|dgram|child_process)/);
+      expect(decryptorSource).not.toMatch(/\b(?:fetch|eval)\s*\(/);
+      expect(() =>
+        execFileSync(process.execPath, [decryptor, archivePath, privateKeyPath], {
+          stdio: ['ignore', 'ignore', 'ignore'],
+        }),
+      ).toThrow();
+      const decryptOutput = execFileSync(process.execPath, [decryptor, archivePath, privateKeyPath], {
+        encoding: 'utf8',
+        env: { ...process.env, HOMEBRIDGE_EUFY_SUPPORT_KEY_SHA256: testKeyFingerprint },
+      });
+      const extracted = archivePath.replace(/\.eufysupport\.gz$/, '');
+      expect(decryptOutput).toContain('Authenticated V5 support archive');
+      expect(JSON.parse(readFileSync(join(extracted, 'manifest.json'), 'utf8'))).toEqual(review.manifest);
+      expect(readFileSync(join(extracted, 'homekit-log.jsonl'), 'utf8')).toContain('contact-state');
+      expect(() => readFileSync(join(extracted, 'raw-media.json'), 'utf8')).toThrow();
 
       const tampered = JSON.parse(gunzipSync(exported.archive).toString('utf8')) as TestSupportArchiveEnvelope;
       tampered.keyId = 'substituted-key';
