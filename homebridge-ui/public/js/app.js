@@ -279,13 +279,12 @@ diagnosticsExport.addEventListener('click', async () => {
       { reviewId: diagnosticsReviewId },
       12000,
     );
-    const bytes = Uint8Array.from(atob(exported.archive), (character) => character.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: exported.mediaType }));
     const download = document.createElement('a');
-    download.href = url;
+    download.href = `data:${exported.mediaType};base64,${exported.archive}`;
     download.download = exported.filename;
+    document.body.appendChild(download);
     download.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(download);
     diagnosticsReviewId = '';
     diagnosticsReviewConfirm.checked = false;
   } catch {

@@ -328,10 +328,7 @@ h2 {
   gap: 8px;
   margin-top: 12px;
   font-size: 12px;
-}
-
-.diagnostics-review-confirm input {
-  margin-top: 2px;
+  cursor: pointer;
 }
 
 .advanced-fields {
@@ -1025,20 +1022,24 @@ h2 {
   cursor: pointer;
 }
 
-.first-setup-confirmation input {
+.first-setup-confirmation input,
+.diagnostics-review-confirm input {
   appearance: none;
   display: grid;
   place-content: center;
   width: 18px;
+  min-height: 18px;
   height: 18px;
   flex: 0 0 auto;
   margin-top: 2px;
   border: 2px solid var(--accent-ink);
   border-radius: 4px;
   background: var(--panel);
+  padding: 0;
 }
 
-.first-setup-confirmation input::before {
+.first-setup-confirmation input::before,
+.diagnostics-review-confirm input::before {
   content: "";
   width: 8px;
   height: 4px;
@@ -1047,16 +1048,19 @@ h2 {
   transform: rotate(-45deg) scale(0);
 }
 
-.first-setup-confirmation input:checked {
+.first-setup-confirmation input:checked,
+.diagnostics-review-confirm input:checked {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.first-setup-confirmation input:checked::before {
+.first-setup-confirmation input:checked::before,
+.diagnostics-review-confirm input:checked::before {
   transform: rotate(-45deg) scale(1);
 }
 
-.first-setup-confirmation input:focus-visible {
+.first-setup-confirmation input:focus-visible,
+.diagnostics-review-confirm input:focus-visible {
   outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
