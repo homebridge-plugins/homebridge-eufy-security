@@ -76,18 +76,72 @@ async function renderUi(
   const menuAdvanced = interactiveElement({});
   const diagnosticsPanel = { hidden: true, scrollIntoView() {} };
   const diagnosticsClose = interactiveElement({ focus() {} });
-  const diagnosticsProfile = interactiveElement({ disabled: false, value: 'startup-authentication' });
+  const diagnosticsWizardPanel = { hidden: false };
+  const diagnosticsQuestion = { hidden: false };
+  const diagnosticsQuestionText = {
+    focused: false,
+    textContent: '',
+    focus() {
+      this.focused = true;
+    },
+  };
+  const diagnosticsYes = interactiveElement({});
+  const diagnosticsNo = interactiveElement({});
+  const diagnosticsDirect = interactiveElement({});
+  const diagnosticsDirectPanel = { hidden: true };
+  const diagnosticsDirectChoose = interactiveElement({});
+  const diagnosticsDirectBack = interactiveElement({});
+  const diagnosticsMatch = { hidden: true };
+  const diagnosticsReject = interactiveElement({});
+  const diagnosticsProfile = interactiveElement({ disabled: false, value: 'startup-authentication', focus() {} });
   const diagnosticsAuthorize = interactiveElement({ disabled: false, textContent: '' });
   const diagnosticsReproduction = interactiveElement({ disabled: true, textContent: '' });
   const diagnosticsStatus = { textContent: '' };
   const diagnosticsIssue = { hidden: true, href: '' };
   const diagnosticsResult = { hidden: true };
   const diagnosticsSteps = { dataset: {} as Record<string, string> };
-  const diagnosticsGuidanceTitle = { textContent: '' };
+  const diagnosticsActions = { hidden: true };
+  const diagnosticsGuidanceTitle = {
+    focused: false,
+    textContent: '',
+    focus() {
+      this.focused = true;
+    },
+  };
   const diagnosticsGuidanceSummary = { textContent: '' };
+  const diagnosticsGuidance = {
+    focused: false,
+    hidden: true,
+    focus() {
+      this.focused = true;
+    },
+  };
+  const diagnosticsPhaseTitle = { textContent: '' };
+  const diagnosticsGuidanceBeforeSection = { hidden: false };
   const diagnosticsGuidanceBefore = { textContent: '' };
   const diagnosticsGuidanceAction = { textContent: '' };
   const diagnosticsCase = { hidden: true, textContent: '' };
+  const diagnosticsReview = interactiveElement({ disabled: false, hidden: true });
+  const diagnosticsManifest = {
+    hidden: true,
+    children: [] as unknown[],
+    replaceChildren() {
+      this.children = [];
+    },
+    append(...children: unknown[]) {
+      this.children.push(...children);
+    },
+  };
+  const diagnosticsReviewConfirm = interactiveElement({ checked: false });
+  const diagnosticsReviewConfirmLabel = { hidden: true };
+  const diagnosticsExport = interactiveElement({ disabled: true, hidden: true });
+  const diagnosticsResultHeading = {
+    focused: false,
+    focus() {
+      this.focused = true;
+    },
+  };
+  const diagnosticsStartAnother = interactiveElement({});
   const advancedPanel = { hidden: true, scrollIntoView() {} };
   const advancedClose = interactiveElement({ focus() {} });
   const advancedPolling = interactiveElement({
@@ -162,6 +216,17 @@ async function renderUi(
           '[data-menu-advanced]': menuAdvanced,
           '[data-diagnostics]': diagnosticsPanel,
           '[data-diagnostics-close]': diagnosticsClose,
+          '[data-diagnostics-wizard]': diagnosticsWizardPanel,
+          '[data-diagnostics-question]': diagnosticsQuestion,
+          '[data-diagnostics-question-text]': diagnosticsQuestionText,
+          '[data-diagnostics-answer="yes"]': diagnosticsYes,
+          '[data-diagnostics-answer="no"]': diagnosticsNo,
+          '[data-diagnostics-direct]': diagnosticsDirect,
+          '[data-diagnostics-direct-panel]': diagnosticsDirectPanel,
+          '[data-diagnostics-direct-choose]': diagnosticsDirectChoose,
+          '[data-diagnostics-direct-back]': diagnosticsDirectBack,
+          '[data-diagnostics-match]': diagnosticsMatch,
+          '[data-diagnostics-reject]': diagnosticsReject,
           '[data-diagnostics-profile]': diagnosticsProfile,
           '[data-diagnostics-authorize]': diagnosticsAuthorize,
           '[data-diagnostics-reproduction]': diagnosticsReproduction,
@@ -169,11 +234,22 @@ async function renderUi(
           '[data-diagnostics-issue]': diagnosticsIssue,
           '[data-diagnostics-result]': diagnosticsResult,
           '[data-diagnostics-steps]': diagnosticsSteps,
+          '[data-diagnostics-actions]': diagnosticsActions,
           '[data-diagnostics-guidance-title]': diagnosticsGuidanceTitle,
           '[data-diagnostics-guidance-summary]': diagnosticsGuidanceSummary,
+          '[data-diagnostics-guidance]': diagnosticsGuidance,
+          '[data-diagnostics-phase-title]': diagnosticsPhaseTitle,
+          '[data-diagnostics-guidance-before-section]': diagnosticsGuidanceBeforeSection,
           '[data-diagnostics-guidance-before]': diagnosticsGuidanceBefore,
           '[data-diagnostics-guidance-action]': diagnosticsGuidanceAction,
           '[data-diagnostics-case]': diagnosticsCase,
+          '[data-diagnostics-review]': diagnosticsReview,
+          '[data-diagnostics-manifest]': diagnosticsManifest,
+          '[data-diagnostics-review-confirm]': diagnosticsReviewConfirm,
+          '[data-diagnostics-review-confirm-label]': diagnosticsReviewConfirmLabel,
+          '[data-diagnostics-export]': diagnosticsExport,
+          '[data-diagnostics-result-heading]': diagnosticsResultHeading,
+          '[data-diagnostics-start-another]': diagnosticsStartAnother,
           '[data-advanced-settings]': advancedPanel,
           '[data-advanced-close]': advancedClose,
           '[data-advanced-polling]': advancedPolling,
@@ -184,6 +260,18 @@ async function renderUi(
       querySelectorAll(selector: string) {
         return selector === '[data-i18n]' ? translatedNodes : translatedLabels;
       },
+      createElement() {
+        return {
+          children: [] as unknown[],
+          append(...children: unknown[]) {
+            this.children.push(...children);
+          },
+          click() {},
+          hidden: false,
+          textContent: '',
+        };
+      },
+      body: { appendChild() {}, removeChild() {} },
     },
     fetch: async (path: string) => ({
       json: async () => catalogs[path],
@@ -211,6 +299,61 @@ async function renderUi(
         requests.push({ path, body });
         if (path === '/auth/start') return authenticationStart;
         if (path === '/dashboard') return dashboardSnapshot;
+        if (path === '/diagnostics/authorize') {
+          return {
+            status: 'authorized',
+            profile: (body as { profile?: string })?.profile,
+            supportCaseId: 'support-00000000-0000-4000-8000-000000000001',
+            expiresAt: '2026-08-20T10:18:42.832Z',
+            missingEvidence: [],
+            partialExportAvailable: false,
+          };
+        }
+        if (path === '/diagnostics/reproduction/start') {
+          return {
+            status: 'reproducing',
+            profile: 'control-state',
+            missingEvidence: [],
+            partialExportAvailable: false,
+          };
+        }
+        if (path === '/diagnostics/reproduction/end') {
+          return {
+            status: 'complete',
+            profile: 'control-state',
+            missingEvidence: [],
+            partialExportAvailable: true,
+            issueUrl: 'https://example.invalid/issue',
+          };
+        }
+        if (path === '/diagnostics/archive/review') {
+          return {
+            reviewId: 'review-synthetic',
+            manifest: {
+              archiveFormat: 'synthetic',
+              version: 1,
+              keyId: 'synthetic-key',
+              archiveExpiresAt: '2026-08-20T10:18:42.832Z',
+              evidence: [
+                {
+                  evidence: 'plugin-log',
+                  privacyClass: 'diagnostic',
+                  status: 'included',
+                  bytes: 42,
+                  fields: [{ field: 'event', privacyClass: 'diagnostic' }],
+                },
+              ],
+              excludedClasses: ['credentials-and-authentication'],
+            },
+          };
+        }
+        if (path === '/diagnostics/archive/export') {
+          return {
+            archive: 'c3ludGhldGlj',
+            filename: 'synthetic.age',
+            mediaType: 'application/octet-stream',
+          };
+        }
         return { status: 'restart-required' };
       },
       savePluginConfig: async () => {
@@ -250,16 +393,38 @@ async function renderUi(
     menuDiagnostics,
     diagnosticsPanel,
     diagnosticsClose,
+    diagnosticsWizardPanel,
+    diagnosticsQuestion,
+    diagnosticsQuestionText,
+    diagnosticsYes,
+    diagnosticsNo,
+    diagnosticsDirect,
+    diagnosticsDirectPanel,
+    diagnosticsDirectChoose,
+    diagnosticsDirectBack,
+    diagnosticsMatch,
+    diagnosticsReject,
     diagnosticsProfile,
     diagnosticsAuthorize,
     diagnosticsReproduction,
     diagnosticsStatus,
     diagnosticsIssue,
     diagnosticsResult,
-    diagnosticsGuidanceAction,
-    diagnosticsGuidanceBefore,
+    diagnosticsActions,
     diagnosticsGuidanceSummary,
     diagnosticsGuidanceTitle,
+    diagnosticsGuidance,
+    diagnosticsPhaseTitle,
+    diagnosticsGuidanceBeforeSection,
+    diagnosticsGuidanceBefore,
+    diagnosticsGuidanceAction,
+    diagnosticsReview,
+    diagnosticsManifest,
+    diagnosticsReviewConfirm,
+    diagnosticsReviewConfirmLabel,
+    diagnosticsExport,
+    diagnosticsResultHeading,
+    diagnosticsStartAnother,
     diagnosticsSteps,
     advancedPanel,
     advancedClose,
@@ -350,7 +515,7 @@ describe('packed plugin', () => {
         customUi?: boolean;
       };
       const document = readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'index.html'), 'utf8');
-      const script = ['dashboard.js', 'legacy-settings.js', 'app.js']
+      const script = ['dashboard.js', 'legacy-settings.js', 'profile-wizard.js', 'app.js']
         .map((file) => readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'js', file), 'utf8'))
         .join('\n');
       const server = readFileSync(join(packageDirectory, 'homebridge-ui', 'server.js'), 'utf8');
@@ -407,6 +572,7 @@ describe('packed plugin', () => {
         'homebridge-ui/public/index.html',
         'homebridge-ui/public/js/app.js',
         'homebridge-ui/public/js/dashboard.js',
+        'homebridge-ui/public/js/profile-wizard.js',
         'homebridge-ui/public/js/legacy-settings.js',
         'homebridge-ui/server.js',
       ]);
@@ -421,6 +587,7 @@ describe('packed plugin', () => {
       expect(document).toContain('href="app.css"');
       expect(document).toContain('src="js/app.js"');
       expect(document).toContain('src="js/dashboard.js"');
+      expect(document).toContain('src="js/profile-wizard.js"');
       expect(document).toContain('src="js/legacy-settings.js"');
       expect(document).toContain('src="assets/logo.svg"');
       expect(document).toContain('src="assets/logo-dark.svg"');
@@ -476,16 +643,17 @@ describe('packed plugin', () => {
           'continueAuthentication',
           'countryLabel',
           'devicesEyebrow',
-          'diagnosticsAuthorize',
-          'diagnosticsActionLabel',
           'diagnosticsArchiveExport',
           'diagnosticsArchiveReview',
           'diagnosticsArchiveReviewConfirm',
           'diagnosticsArchiveReviewIntro',
-          'diagnosticsBeforeLabel',
+          'diagnosticsBackToQuestions',
+          'diagnosticsBestMatch',
+          'diagnosticsChooseDirectly',
           'diagnosticsEvidenceReady',
           'diagnosticsEyebrow',
           'diagnosticsOpenIssue',
+          'diagnosticsNo',
           'diagnosticsProfileControl',
           'diagnosticsProfileDashboard',
           'diagnosticsProfileDevices',
@@ -495,12 +663,15 @@ describe('packed plugin', () => {
           'diagnosticsProfileRecording',
           'diagnosticsProfileStartup',
           'diagnosticsPrivacy',
+          'diagnosticsStartMatch',
+          'diagnosticsStartAnother',
           'diagnosticsStartReproduction',
           'diagnosticsStepChoose',
           'diagnosticsStepReproduce',
           'diagnosticsStepReview',
-          'diagnosticsSummary',
           'diagnosticsTitle',
+          'diagnosticsUseProfile',
+          'diagnosticsYes',
           'oneAccountSession',
           'pageTitle',
           'passwordLabel',
@@ -566,10 +737,13 @@ describe('packed plugin', () => {
         'diagnosticDescription',
         'diagnosticOnly',
         'diagnosticsAuthorized',
+        'diagnosticsAuthorize',
+        'diagnosticsActionLabel',
         'diagnosticsArchiveExcluded',
         'diagnosticsArchiveExpires',
         'diagnosticsArchiveFields',
         'diagnosticsArchiveTruncated',
+        'diagnosticsBeforeLabel',
         'diagnosticsCase',
         'diagnosticsComplete',
         'diagnosticsControlAction',
@@ -593,6 +767,12 @@ describe('packed plugin', () => {
         'diagnosticsOtherBefore',
         'diagnosticsOtherSummary',
         'diagnosticsProfileChanged',
+        'diagnosticsQuestionControl',
+        'diagnosticsQuestionDashboard',
+        'diagnosticsQuestionDevices',
+        'diagnosticsQuestionLiveMedia',
+        'diagnosticsQuestionRecording',
+        'diagnosticsQuestionStartup',
         'diagnosticsReauthorize',
         'diagnosticsRecordingAction',
         'diagnosticsRecordingBefore',
@@ -601,6 +781,7 @@ describe('packed plugin', () => {
         'diagnosticsStartupAction',
         'diagnosticsStartupBefore',
         'diagnosticsStartupSummary',
+        'diagnosticsSummary',
         'preferenceAudio',
         'preferenceRepresented',
         'preferenceSaveFailed',
@@ -708,12 +889,57 @@ describe('packed plugin', () => {
         diagnosticsIssue: { hidden: true },
         diagnosticsResult: { hidden: true },
         diagnosticsSteps: { dataset: { phase: 'choose' } },
-        diagnosticsGuidanceTitle: { textContent: catalogs['i18n/en.json'].diagnosticsProfileStartup },
-        diagnosticsGuidanceSummary: { textContent: catalogs['i18n/en.json'].diagnosticsStartupSummary },
+        diagnosticsQuestion: { hidden: false },
+        diagnosticsQuestionText: { textContent: catalogs['i18n/en.json'].diagnosticsQuestionStartup },
+        diagnosticsDirectPanel: { hidden: true },
+        diagnosticsMatch: { hidden: true },
+        diagnosticsActions: { hidden: true },
+      });
+      await menuUi.diagnosticsNo.dispatch('click');
+      expect(menuUi.diagnosticsQuestionText.textContent).toBe(catalogs['i18n/en.json'].diagnosticsQuestionDevices);
+      expect(menuUi.diagnosticsQuestionText.focused).toBe(true);
+      await menuUi.diagnosticsDirect.dispatch('click');
+      expect(menuUi).toMatchObject({
+        diagnosticsQuestion: { hidden: true },
+        diagnosticsDirectPanel: { hidden: false },
       });
       menuUi.diagnosticsProfile.value = 'control-state';
-      await menuUi.diagnosticsProfile.dispatch('change');
-      expect(menuUi.diagnosticsGuidanceAction.textContent).toBe(catalogs['i18n/en.json'].diagnosticsControlAction);
+      await menuUi.diagnosticsDirectChoose.dispatch('click');
+      expect(menuUi).toMatchObject({
+        diagnosticsDirectPanel: { hidden: true },
+        diagnosticsMatch: { hidden: false },
+        diagnosticsGuidanceTitle: { textContent: catalogs['i18n/en.json'].diagnosticsProfileControl },
+        diagnosticsGuidanceSummary: { textContent: catalogs['i18n/en.json'].diagnosticsControlSummary },
+      });
+      expect(menuUi.diagnosticsGuidanceTitle.focused).toBe(true);
+      await menuUi.diagnosticsReject.dispatch('click');
+      expect(menuUi.diagnosticsDirectPanel.hidden).toBe(false);
+      menuUi.diagnosticsProfile.value = 'control-state';
+      await menuUi.diagnosticsDirectChoose.dispatch('click');
+      await menuUi.diagnosticsAuthorize.dispatch('click');
+      expect(menuUi.requests).toContainEqual({
+        path: '/diagnostics/authorize',
+        body: { profile: 'control-state' },
+      });
+      expect(menuUi).toMatchObject({
+        diagnosticsWizardPanel: { hidden: true },
+        diagnosticsGuidance: { focused: true, hidden: false },
+        diagnosticsGuidanceBeforeSection: { hidden: false },
+        diagnosticsGuidanceBefore: { textContent: catalogs['i18n/en.json'].diagnosticsControlBefore },
+        diagnosticsGuidanceAction: { textContent: catalogs['i18n/en.json'].diagnosticsControlAction },
+        diagnosticsActions: { hidden: false },
+      });
+      await menuUi.diagnosticsReproduction.dispatch('click');
+      expect(menuUi).toMatchObject({
+        diagnosticsGuidanceBeforeSection: { hidden: true },
+        diagnosticsReproduction: { textContent: catalogs['i18n/en.json'].diagnosticsEndReproduction },
+      });
+      await menuUi.diagnosticsReproduction.dispatch('click');
+      expect(menuUi).toMatchObject({
+        diagnosticsResult: { hidden: false },
+        diagnosticsWizardPanel: { hidden: true },
+        diagnosticsResultHeading: { focused: true },
+      });
       await menuUi.diagnosticsClose.dispatch('click');
       expect(menuUi.diagnosticsPanel.hidden).toBe(true);
       expect(menuUi).toMatchObject({
@@ -763,6 +989,66 @@ describe('packed plugin', () => {
         diagnosticsSteps: { dataset: { phase: 'review' } },
         diagnosticsIssue: { hidden: false, href: 'https://example.invalid/issue' },
         diagnosticsResult: { hidden: false },
+        diagnosticsWizardPanel: { hidden: true },
+      });
+      await completedDiagnosticsUi.diagnosticsReview.dispatch('click');
+      expect(completedDiagnosticsUi).toMatchObject({
+        diagnosticsManifest: { hidden: false },
+        diagnosticsReviewConfirmLabel: { hidden: false },
+        diagnosticsExport: { disabled: true, hidden: false },
+      });
+      const manifestChildren = completedDiagnosticsUi.diagnosticsManifest.children as Array<{
+        children?: Array<{ textContent: string }>;
+        textContent: string;
+      }>;
+      expect(manifestChildren[0].textContent).toContain('synthetic v1');
+      expect(manifestChildren[1].children?.[0].textContent).toContain('plugin-log · diagnostic · included');
+      expect(manifestChildren[1].children?.[0].textContent).toContain('event: diagnostic');
+      expect(manifestChildren[2].textContent).toContain('credentials-and-authentication');
+      completedDiagnosticsUi.diagnosticsReviewConfirm.checked = true;
+      await completedDiagnosticsUi.diagnosticsReviewConfirm.dispatch('change');
+      expect(completedDiagnosticsUi.diagnosticsExport.disabled).toBe(false);
+      await completedDiagnosticsUi.diagnosticsExport.dispatch('click');
+      expect(completedDiagnosticsUi.requests).toContainEqual({
+        path: '/diagnostics/archive/export',
+        body: { reviewId: 'review-synthetic' },
+      });
+      await completedDiagnosticsUi.diagnosticsStartAnother.dispatch('click');
+      expect(completedDiagnosticsUi).toMatchObject({
+        diagnosticsResult: { hidden: true },
+        diagnosticsWizardPanel: { hidden: false },
+        diagnosticsQuestion: { hidden: false },
+        diagnosticsQuestionText: { focused: true },
+        diagnosticsSteps: { dataset: { phase: 'choose' } },
+      });
+      await completedDiagnosticsUi.diagnosticsClose.dispatch('click');
+      await completedDiagnosticsUi.menuDiagnostics.dispatch('click');
+      expect(completedDiagnosticsUi).toMatchObject({
+        diagnosticsResult: { hidden: false },
+        diagnosticsWizardPanel: { hidden: true },
+        diagnosticsSteps: { dataset: { phase: 'review' } },
+      });
+
+      const expiredCompletedDiagnosticsUi = await renderUi(
+        script,
+        [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        undefined,
+        {
+          status: 'expired',
+          profile: 'live-media',
+          missingEvidence: [],
+          partialExportAvailable: true,
+          issueUrl: 'https://example.invalid/expired-issue',
+        },
+      );
+      expect(expiredCompletedDiagnosticsUi).toMatchObject({
+        diagnosticsResult: { hidden: false },
+        diagnosticsWizardPanel: { hidden: true },
+        diagnosticsSteps: { dataset: { phase: 'review' } },
       });
 
       englishUi.account.value = 'guest@example.invalid';

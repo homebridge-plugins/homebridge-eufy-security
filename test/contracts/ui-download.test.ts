@@ -14,8 +14,12 @@ describe('custom UI downloads', () => {
     expect(document).not.toContain('dashboard-menu-popover');
     expect(script).not.toContain('dashboardMenuTrigger');
     expect(script).not.toContain('dashboardMenu');
+    expect(script).toMatch(
+      /menuDiagnostics\.addEventListener\('click',[\s\S]*requestWithinDeadline\('\/diagnostics\/status'/,
+    );
     expect(stylesheet).toContain('.dashboard-actions');
     expect(stylesheet).toContain('.shell[data-theme="dark"] .dashboard-action img');
+    expect(stylesheet).toContain('.shell[data-theme="dark"] .dashboard-page-icon');
   });
 
   it('uses a CSP-compatible data link for encrypted support archives', () => {
@@ -33,5 +37,25 @@ describe('custom UI downloads', () => {
 
     expect(stylesheet).toContain('.first-setup-confirmation input,\n.diagnostics-review-confirm input');
     expect(stylesheet).toContain('width: 18px;\n  min-height: 18px;\n  height: 18px;\n  flex: 0 0 auto;');
+  });
+
+  it('progressively discloses diagnostics while retaining direct profile selection', () => {
+    const document = readFileSync(new URL('../../homebridge-ui/public/index.html', import.meta.url), 'utf8');
+
+    expect(document).toContain('data-diagnostics-question');
+    expect(document).toContain('data-diagnostics-answer="yes"');
+    expect(document).toContain('data-diagnostics-answer="no"');
+    expect(document).toContain('data-diagnostics-direct');
+    expect(document).toMatch(/data-diagnostics-direct-panel hidden/);
+    expect(document).toMatch(/data-diagnostics-match hidden/);
+    expect(document).toMatch(/data-diagnostics-actions hidden/);
+    expect(document).toMatch(/data-diagnostics-result hidden/);
+    expect(document).toMatch(/data-diagnostics-guidance[^>]+hidden/);
+    expect(document).toContain('data-diagnostics-start-another');
+    expect(document).toContain('tabindex="-1" data-diagnostics-question-text');
+    expect(document).toContain('tabindex="-1" data-diagnostics-guidance-title');
+    expect(document).toContain('aria-labelledby="diagnostics-question-heading"');
+    expect(document).toContain('aria-labelledby="diagnostics-match-heading"');
+    expect(document).toContain('src="js/profile-wizard.js"');
   });
 });

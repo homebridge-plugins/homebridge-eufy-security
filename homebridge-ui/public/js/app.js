@@ -31,6 +31,17 @@ const menuDiagnostics = document.querySelector('[data-menu-diagnostics]');
 const menuAdvanced = document.querySelector('[data-menu-advanced]');
 const diagnosticsPanel = document.querySelector('[data-diagnostics]');
 const diagnosticsClose = document.querySelector('[data-diagnostics-close]');
+const diagnosticsWizardPanel = document.querySelector('[data-diagnostics-wizard]');
+const diagnosticsQuestion = document.querySelector('[data-diagnostics-question]');
+const diagnosticsQuestionText = document.querySelector('[data-diagnostics-question-text]');
+const diagnosticsYes = document.querySelector('[data-diagnostics-answer="yes"]');
+const diagnosticsNo = document.querySelector('[data-diagnostics-answer="no"]');
+const diagnosticsDirect = document.querySelector('[data-diagnostics-direct]');
+const diagnosticsDirectPanel = document.querySelector('[data-diagnostics-direct-panel]');
+const diagnosticsDirectChoose = document.querySelector('[data-diagnostics-direct-choose]');
+const diagnosticsDirectBack = document.querySelector('[data-diagnostics-direct-back]');
+const diagnosticsMatch = document.querySelector('[data-diagnostics-match]');
+const diagnosticsReject = document.querySelector('[data-diagnostics-reject]');
 const diagnosticsProfile = document.querySelector('[data-diagnostics-profile]');
 const diagnosticsAuthorize = document.querySelector('[data-diagnostics-authorize]');
 const diagnosticsReproduction = document.querySelector('[data-diagnostics-reproduction]');
@@ -38,8 +49,12 @@ const diagnosticsStatus = document.querySelector('[data-diagnostics-status]');
 const diagnosticsIssue = document.querySelector('[data-diagnostics-issue]');
 const diagnosticsResult = document.querySelector('[data-diagnostics-result]');
 const diagnosticsSteps = document.querySelector('[data-diagnostics-steps]');
+const diagnosticsActions = document.querySelector('[data-diagnostics-actions]');
 const diagnosticsGuidanceTitle = document.querySelector('[data-diagnostics-guidance-title]');
 const diagnosticsGuidanceSummary = document.querySelector('[data-diagnostics-guidance-summary]');
+const diagnosticsGuidance = document.querySelector('[data-diagnostics-guidance]');
+const diagnosticsPhaseTitle = document.querySelector('[data-diagnostics-phase-title]');
+const diagnosticsGuidanceBeforeSection = document.querySelector('[data-diagnostics-guidance-before-section]');
 const diagnosticsGuidanceBefore = document.querySelector('[data-diagnostics-guidance-before]');
 const diagnosticsGuidanceAction = document.querySelector('[data-diagnostics-guidance-action]');
 const diagnosticsCase = document.querySelector('[data-diagnostics-case]');
@@ -48,6 +63,8 @@ const diagnosticsManifest = document.querySelector('[data-diagnostics-manifest]'
 const diagnosticsReviewConfirm = document.querySelector('[data-diagnostics-review-confirm]');
 const diagnosticsReviewConfirmLabel = document.querySelector('[data-diagnostics-review-confirm-label]');
 const diagnosticsExport = document.querySelector('[data-diagnostics-export]');
+const diagnosticsResultHeading = document.querySelector('[data-diagnostics-result-heading]');
+const diagnosticsStartAnother = document.querySelector('[data-diagnostics-start-another]');
 const advancedPanel = document.querySelector('[data-advanced-settings]');
 const advancedClose = document.querySelector('[data-advanced-close]');
 const advancedPolling = document.querySelector('[data-advanced-polling]');
@@ -63,9 +80,12 @@ let legacyNames = [];
 let legacyAcknowledged = false;
 let diagnosticsState = { status: 'inactive', missingEvidence: [] };
 let diagnosticsReviewId = '';
+let diagnosticsStartingAnother = false;
 let dashboardPanelTrigger;
 const dashboardView = window.HomebridgeEufyDashboard;
 const legacySettingsView = window.HomebridgeEufyLegacySettings;
+const diagnosticsWizard = window.HomebridgeEufyDiagnosticsWizard;
+let diagnosticsWizardState = diagnosticsWizard.start();
 const dashboardElements = {
   dashboard,
   title: dashboardTitle,
@@ -177,31 +197,47 @@ const diagnosticsProfiles = {
   },
 };
 
-function renderDiagnosticsGuidance() {
-  const guidance = diagnosticsProfiles[diagnosticsProfile.value] ?? diagnosticsProfiles.other;
+function renderDiagnosticsGuidance(profile) {
+  const guidance = diagnosticsProfiles[profile] ?? diagnosticsProfiles.other;
   diagnosticsGuidanceTitle.textContent = messages[guidance.title] ?? '';
   diagnosticsGuidanceSummary.textContent = messages[guidance.summary] ?? '';
+  diagnosticsPhaseTitle.textContent = messages[guidance.title] ?? '';
   diagnosticsGuidanceBefore.textContent = messages[guidance.before] ?? '';
   diagnosticsGuidanceAction.textContent = messages[guidance.action] ?? '';
 }
 
+function renderDiagnosticsWizard() {
+  diagnosticsQuestion.hidden = diagnosticsWizardState.mode !== 'questions';
+  diagnosticsDirectPanel.hidden = diagnosticsWizardState.mode !== 'direct';
+  diagnosticsMatch.hidden = diagnosticsWizardState.mode !== 'match';
+  if (diagnosticsWizardState.mode === 'questions') {
+    const question = diagnosticsWizard.questions[diagnosticsWizardState.questionIndex];
+    diagnosticsQuestionText.textContent = messages[question.message] ?? '';
+  }
+  if (diagnosticsWizardState.mode === 'match') {
+    diagnosticsProfile.value = diagnosticsWizardState.profile;
+    renderDiagnosticsGuidance(diagnosticsWizardState.profile);
+  }
+}
+
 function renderDiagnostics(state) {
   diagnosticsState = state;
-  const phase = state.partialExportAvailable
-    ? 'review'
-    : state.status === 'authorized' || state.status === 'reproducing'
-      ? 'reproduce'
-      : 'choose';
+  const screen = diagnosticsWizard.screen(state, diagnosticsStartingAnother);
+  const phase = screen === 'review' ? 'review' : screen === 'reproduce' ? 'reproduce' : 'choose';
   diagnosticsSteps.dataset.phase = phase;
-  diagnosticsProfile.disabled = state.status === 'reproducing';
-  diagnosticsAuthorize.disabled = state.status === 'reproducing';
+  const choosing = screen === 'choose';
+  const reviewing = screen === 'review';
+  diagnosticsWizardPanel.hidden = !choosing;
+  diagnosticsGuidance.hidden = screen !== 'reproduce';
+  diagnosticsGuidanceBeforeSection.hidden = state.status === 'reproducing';
+  diagnosticsActions.hidden = screen !== 'reproduce';
   diagnosticsReproduction.disabled = !['authorized', 'reproducing'].includes(state.status);
   diagnosticsReproduction.textContent =
     state.status === 'reproducing' ? messages.diagnosticsEndReproduction : messages.diagnosticsStartReproduction;
-  diagnosticsIssue.hidden = !state.partialExportAvailable;
+  diagnosticsIssue.hidden = !reviewing;
   diagnosticsIssue.href = state.issueUrl ?? '';
-  diagnosticsResult.hidden = !state.partialExportAvailable;
-  diagnosticsReview.hidden = !state.partialExportAvailable;
+  diagnosticsResult.hidden = !reviewing;
+  diagnosticsReview.hidden = !reviewing;
   diagnosticsManifest.hidden = true;
   diagnosticsReviewConfirmLabel.hidden = true;
   diagnosticsReviewConfirm.checked = false;
@@ -209,25 +245,28 @@ function renderDiagnostics(state) {
   diagnosticsExport.disabled = true;
   diagnosticsReviewId = '';
   if (state.profile) diagnosticsProfile.value = state.profile;
-  renderDiagnosticsGuidance();
-  diagnosticsAuthorize.textContent = state.status === 'inactive' ? messages.diagnosticsAuthorize : messages.diagnosticsReauthorize;
-  diagnosticsCase.hidden = !state.supportCaseId;
+  if (screen === 'reproduce') renderDiagnosticsGuidance(state.profile);
+  if (choosing) renderDiagnosticsWizard();
+  diagnosticsCase.hidden = diagnosticsStartingAnother || !state.supportCaseId;
   diagnosticsCase.textContent = state.supportCaseId
     ? (messages.diagnosticsCase ?? '')
         .replace('{caseId}', state.supportCaseId)
         .replace('{expiresAt}', new Date(state.expiresAt).toLocaleString(shell.lang || 'en'))
     : '';
-  const statusKey = {
-    inactive: 'diagnosticsInactive',
-    authorized: 'diagnosticsAuthorized',
-    reproducing: 'diagnosticsReproducing',
-    complete: state.missingEvidence?.length ? 'diagnosticsMissingEvidence' : 'diagnosticsComplete',
-    expired: 'diagnosticsExpired',
-  }[state.status];
-  diagnosticsStatus.textContent = (messages[statusKey] ?? '').replace(
-    '{evidence}',
-    state.missingEvidence?.join(', ') ?? '',
-  );
+  const statusKey = reviewing
+    ? state.missingEvidence?.length
+      ? 'diagnosticsMissingEvidence'
+      : 'diagnosticsComplete'
+    : {
+        inactive: 'diagnosticsInactive',
+        authorized: 'diagnosticsAuthorized',
+        reproducing: 'diagnosticsReproducing',
+        complete: state.missingEvidence?.length ? 'diagnosticsMissingEvidence' : 'diagnosticsComplete',
+        expired: 'diagnosticsExpired',
+      }[state.status];
+  diagnosticsStatus.textContent = (
+    choosing && (state.status === 'inactive' || diagnosticsStartingAnother) ? '' : (messages[statusKey] ?? '')
+  ).replace('{evidence}', state.missingEvidence?.join(', ') ?? '');
 }
 
 function renderArchiveManifest(manifest) {
@@ -259,7 +298,12 @@ diagnosticsReview.addEventListener('click', async () => {
     diagnosticsReviewConfirmLabel.hidden = false;
     diagnosticsExport.hidden = false;
   } catch {
-    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    try {
+      renderDiagnostics(await requestWithinDeadline('/diagnostics/status', undefined, 12000));
+      diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    } catch {
+      diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    }
   } finally {
     diagnosticsReview.disabled = false;
   }
@@ -293,31 +337,84 @@ diagnosticsExport.addEventListener('click', async () => {
 
 diagnosticsAuthorize.addEventListener('click', async () => {
   diagnosticsAuthorize.disabled = true;
+  let focusAuthorizeAfter = false;
+  const previousStatus = diagnosticsState.status;
   try {
-    renderDiagnostics(await requestWithinDeadline('/diagnostics/authorize', { profile: diagnosticsProfile.value }, 12000));
+    const authorized = await requestWithinDeadline(
+      '/diagnostics/authorize',
+      { profile: diagnosticsWizardState.profile },
+      12000,
+    );
+    diagnosticsStartingAnother = false;
+    renderDiagnostics(authorized);
+    if (diagnosticsState.status === 'authorized') diagnosticsGuidance.focus?.();
   } catch {
-    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    try {
+      const refreshed = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
+      if (refreshed.status !== previousStatus) diagnosticsStartingAnother = false;
+      renderDiagnostics(refreshed);
+      if (refreshed.status === previousStatus) {
+        diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+        focusAuthorizeAfter = true;
+      }
+      else if (refreshed.status === 'authorized') diagnosticsGuidance.focus?.();
+    } catch {
+      diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    }
   } finally {
-    diagnosticsAuthorize.disabled = diagnosticsState.status === 'reproducing';
+    diagnosticsAuthorize.disabled = false;
+    if (focusAuthorizeAfter) diagnosticsAuthorize.focus?.();
   }
 });
 
-diagnosticsProfile.addEventListener('change', () => {
-  renderDiagnosticsGuidance();
-  if (diagnosticsProfile.value !== diagnosticsState.profile) {
-    diagnosticsReproduction.disabled = true;
-    diagnosticsResult.hidden = true;
-    diagnosticsIssue.hidden = true;
-    diagnosticsCase.hidden = true;
-    diagnosticsSteps.dataset.phase = 'choose';
-    diagnosticsStatus.textContent = messages.diagnosticsProfileChanged ?? '';
-  } else {
-    renderDiagnostics(diagnosticsState);
-  }
+diagnosticsYes.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.answer(diagnosticsWizardState, true);
+  renderDiagnosticsWizard();
+  diagnosticsGuidanceTitle.focus?.();
+});
+
+diagnosticsNo.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.answer(diagnosticsWizardState, false);
+  renderDiagnosticsWizard();
+  if (diagnosticsWizardState.mode === 'match') diagnosticsGuidanceTitle.focus?.();
+  else diagnosticsQuestionText.focus?.();
+});
+
+diagnosticsDirect.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.direct();
+  renderDiagnosticsWizard();
+  diagnosticsProfile.focus?.();
+});
+
+diagnosticsDirectChoose.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.selectDirect(diagnosticsWizardState, diagnosticsProfile.value);
+  renderDiagnosticsWizard();
+  diagnosticsGuidanceTitle.focus?.();
+});
+
+diagnosticsDirectBack.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.start();
+  renderDiagnosticsWizard();
+  diagnosticsQuestionText.focus?.();
+});
+
+diagnosticsReject.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.reject(diagnosticsWizardState);
+  renderDiagnosticsWizard();
+  if (diagnosticsWizardState.mode === 'direct') diagnosticsProfile.focus?.();
+  else diagnosticsQuestionText.focus?.();
+});
+
+diagnosticsStartAnother.addEventListener('click', () => {
+  diagnosticsStartingAnother = true;
+  diagnosticsWizardState = diagnosticsWizard.start();
+  renderDiagnostics(diagnosticsState);
+  diagnosticsQuestionText.focus?.();
 });
 
 diagnosticsReproduction.addEventListener('click', async () => {
   diagnosticsReproduction.disabled = true;
+  const previousStatus = diagnosticsState.status;
   const path =
     diagnosticsState.status === 'reproducing'
       ? '/diagnostics/reproduction/end'
@@ -329,8 +426,17 @@ diagnosticsReproduction.addEventListener('click', async () => {
       state = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
     }
     renderDiagnostics(state);
+    if (state.status === 'complete' || state.partialExportAvailable) diagnosticsResultHeading.focus?.();
   } catch {
-    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    try {
+      const refreshed = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
+      renderDiagnostics(refreshed);
+      if (refreshed.status === previousStatus) diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+      if (refreshed.status === 'complete' || refreshed.partialExportAvailable) diagnosticsResultHeading.focus?.();
+      else if (refreshed.status === 'authorized' || refreshed.status === 'reproducing') diagnosticsGuidance.focus?.();
+    } catch {
+      diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    }
   } finally {
     diagnosticsReproduction.disabled = !['authorized', 'reproducing'].includes(diagnosticsState.status);
   }
@@ -356,7 +462,14 @@ function closeDashboardPanel() {
   dashboardPanelTrigger?.focus?.();
 }
 
-menuDiagnostics.addEventListener('click', () => openDashboardPanel(diagnosticsPanel, menuDiagnostics));
+menuDiagnostics.addEventListener('click', async () => {
+  openDashboardPanel(diagnosticsPanel, menuDiagnostics);
+  try {
+    renderDiagnostics(await requestWithinDeadline('/diagnostics/status', undefined, 12000));
+  } catch {
+    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+  }
+});
 menuAdvanced.addEventListener('click', () => {
   const config = configuredBlock() ?? {};
   advancedPolling.value = String(config.pollingIntervalMinutes ?? 10);
@@ -364,6 +477,8 @@ menuAdvanced.addEventListener('click', () => {
   openDashboardPanel(advancedPanel, menuAdvanced);
 });
 diagnosticsClose.addEventListener('click', () => {
+  diagnosticsStartingAnother = false;
+  renderDiagnostics(diagnosticsState);
   closeDashboardPanel();
 });
 advancedClose.addEventListener('click', () => {
