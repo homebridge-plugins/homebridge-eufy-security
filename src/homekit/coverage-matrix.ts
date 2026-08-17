@@ -82,25 +82,6 @@ function defer(rows: readonly string[], issue: string, risk: string): void {
   }
 }
 
-defer(
-  [
-    'camera.enabled.read',
-    'camera.statusLed.read',
-    'camera.statusLed.persistent-operation',
-    'light.isOn.read',
-    'light.isOn.persistent-operation',
-    'light.brightness.read',
-    'light.brightness.persistent-operation',
-    'audio.microphone.read',
-    'audio.microphone.persistent-operation',
-    'audio.speaker.read',
-    'audio.speaker.persistent-operation',
-    'audio.volume.read',
-    'audio.volume.persistent-operation',
-  ],
-  '#996',
-  'requires the camera and audio bundle contracts',
-);
 defer(['camera.live.momentary-action'], '#997', 'requires negotiated live media adaptation');
 defer(['camera.recordFragments.momentary-action'], '#999', 'requires negotiated HKSV adaptation');
 defer(

@@ -135,6 +135,28 @@ function smartLightManifest(serial: string): DeviceManifest {
   };
 }
 
+function cameraControlsManifest(serial: string): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic camera',
+    modelName: 'Synthetic camera family',
+    codec: 'camera',
+    source: 'security',
+    bound: true,
+    capabilities: ['camera'],
+    details: [
+      {
+        capability: 'camera',
+        accessor: 'camera',
+        reads: [{ accessor: 'enabled', property: 'synthetic_camera_enabled', type: 'bool', writable: true }],
+        actions: [{ name: 'setEnabled', form: 'stateful', reflects: 'enabled' }],
+        undescribedActions: [],
+        events: [],
+      },
+    ],
+  };
+}
+
 function armingManifest(serial: string): DeviceManifest {
   return {
     sn: serial,
@@ -257,6 +279,12 @@ function smartLightDevice(power = false, brightness = 50): Device {
       setBrightness: vi.fn(async () => undefined),
       setColor: vi.fn(async () => undefined),
     }),
+  } as unknown as Device;
+}
+
+function cameraControlsDevice(enabled = true): Device {
+  return {
+    camera: () => ({ enabled }),
   } as unknown as Device;
 }
 
@@ -578,6 +606,34 @@ describe('HomeKit registry reconciliation', () => {
 
     source.publish(registryView(2, new Map(), snapshot()));
     expect(recording.unregisterPlatformAccessories).toHaveBeenCalledWith([accessory]);
+  });
+
+  it('admits camera controls only from exact enabled-member evidence', () => {
+    const serial = 'synthetic-camera-controls';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn()).start();
+
+    source.publish(
+      registryView(1, new Map([[serial, cameraControlsDevice()]]), snapshot(cameraControlsManifest(serial))),
+    );
+
+    expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
+    expect(accessory.getServiceById(Service.Switch, 'camera.enabled')).toBeDefined();
+
+    for (const evidence of [
+      { type: 'string' as const, writable: true },
+      { type: 'bool' as const, writable: false },
+    ]) {
+      const nearMiss = cameraControlsManifest(`synthetic-camera-controls-${evidence.type}-${evidence.writable}`);
+      Object.assign(nearMiss.details[0]!.reads[0]!, evidence);
+      const nearMissSource = new RegistrySource();
+      const nearMissRecording = recordingApi();
+      new HomeKitReconciler(nearMissSource, nearMissRecording.api, vi.fn()).start();
+      nearMissSource.publish(registryView(1, new Map([[nearMiss.sn, cameraControlsDevice()]]), snapshot(nearMiss)));
+      expect(nearMissRecording.registerPlatformAccessories).not.toHaveBeenCalled();
+    }
   });
 
   it('routes arming events and withdraws the stable Security System service only from complete evidence', () => {

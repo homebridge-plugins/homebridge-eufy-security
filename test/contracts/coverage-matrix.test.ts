@@ -127,6 +127,28 @@ describe('SDK/HAP coverage matrix', () => {
     );
     expect(representedSmartLight.every(({ followUp }) => followUp === undefined)).toBe(true);
 
+    const representedCameraControls = SDK_HAP_COVERAGE_MATRIX.rows.filter(
+      ({ adapter }) => adapter === 'camera.controls',
+    );
+    expect(representedCameraControls.map(({ id }) => id).sort()).toEqual(
+      [
+        'camera.enabled.read',
+        'camera.statusLed.read',
+        'camera.statusLed.persistent-operation',
+        'light.isOn.read',
+        'light.isOn.persistent-operation',
+        'light.brightness.read',
+        'light.brightness.persistent-operation',
+        'audio.microphone.read',
+        'audio.microphone.persistent-operation',
+        'audio.speaker.read',
+        'audio.speaker.persistent-operation',
+        'audio.volume.read',
+        'audio.volume.persistent-operation',
+      ].sort(),
+    );
+    expect(representedCameraControls.every(({ followUp }) => followUp === undefined)).toBe(true);
+
     const representedLock = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'lock.mechanism');
     expect(representedLock.map(({ id }) => id).sort()).toEqual(
       ['lock.lock.momentary-action', 'lock.unlock.momentary-action'].sort(),
