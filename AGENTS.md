@@ -71,6 +71,20 @@ import typed public SDK capabilities, but never an SDK transport, deep package p
   do not import past that seam merely to exercise private structure.
 - Internal import cycles are forbidden.
 
+## Reuse before abstraction
+
+1. **Search before creating.** Before adding a helper, type, adapter primitive, operation coordinator,
+   or serializer, search the repository by operation and data shape, including the SDK public surface
+   and Homebridge APIs it uses. Finish when every new primitive either reuses an existing owner or has
+   a distinct contract or authority.
+2. **Preserve ownership and contract.** Reuse or extend an existing primitive when it owns the same
+   operation and satisfies the required semantics. Introduce an abstraction only when it simplifies
+   current callers under that same ownership. Keep trust-boundary validation, independently
+   authoritative declarations, and self-hosted capability-adapter behavior local.
+3. **Reduce after green.** After focused tests and typechecking pass, inspect the diff for
+   same-contract helpers, value shapes, operation lifetimes, and test setup already owned elsewhere.
+   Resolve every match before running the full verification gate.
+
 ## Capability adapters
 
 The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).

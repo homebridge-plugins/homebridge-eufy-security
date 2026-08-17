@@ -97,6 +97,8 @@ const CAMERA_CONTROL_ROWS = [
   AUDIO_VOLUME_WRITE,
 ] as const;
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
+
+/** Operation lifetime retained by the stable enabled service across adapter replacement. */
 interface CameraControlsState {
   owner: symbol;
   activeOperations: Map<string, Promise<void>>;
