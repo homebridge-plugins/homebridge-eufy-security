@@ -128,6 +128,11 @@ Behavior is tested through public module seams in `test/contracts/`. Tests stay 
 private helper structure and use synthetic typed SDK fakes, real HAP definitions where relevant, and no
 account or network access.
 
+`diagnostics.ts` also owns support archive collection and encryption. It reads only its fixed log and
+reproduction-marker paths, snapshots the exact evidence shown in a versioned review manifest, and
+permits one export of that reviewed snapshot. The UI receives evidence only as an RSA-OAEP-wrapped,
+AES-256-GCM encrypted envelope; it has no plaintext evidence export or upload route.
+
 ## Ownership boundaries
 
 - The SDK owns verified device capabilities, observations, operations, events, and transport behavior.

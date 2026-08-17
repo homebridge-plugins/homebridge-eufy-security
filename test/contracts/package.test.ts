@@ -442,7 +442,14 @@ describe('packed plugin', () => {
       expect(document).toContain('src="assets/icons/warning.svg"');
       expect(document.match(/class="dashboard-page-back"/g)).toHaveLength(2);
       expect(document.match(/aria-hidden="true">←<\/span>/g)).toHaveLength(2);
-      expect(document).toContain('homebridge-eufy-security/issues/1010');
+      expect(document).toContain('data-diagnostics-review');
+      expect(document).toContain('data-diagnostics-manifest');
+      expect(document).toContain('data-diagnostics-review-confirm');
+      expect(document).toContain('data-diagnostics-export');
+      expect(document).not.toContain('homebridge-eufy-security/issues/1010');
+      expect(script).toContain("'/diagnostics/archive/review'");
+      expect(script).toContain("'/diagnostics/archive/export'");
+      expect(script).toContain('application/vnd.homebridge-eufy.support-archive+json');
       expect(document).toContain('data-first-setup hidden');
       expect(document).toContain('data-first-setup-ack');
       expect(document).toContain('data-first-setup-continue');
@@ -482,8 +489,10 @@ describe('packed plugin', () => {
           'devicesEyebrow',
           'diagnosticsAuthorize',
           'diagnosticsActionLabel',
-          'diagnosticsArchivePlan',
-          'diagnosticsArchiveUnavailable',
+          'diagnosticsArchiveExport',
+          'diagnosticsArchiveReview',
+          'diagnosticsArchiveReviewConfirm',
+          'diagnosticsArchiveReviewIntro',
           'diagnosticsBeforeLabel',
           'diagnosticsEvidenceReady',
           'diagnosticsEyebrow',
@@ -568,6 +577,10 @@ describe('packed plugin', () => {
         'diagnosticDescription',
         'diagnosticOnly',
         'diagnosticsAuthorized',
+        'diagnosticsArchiveExcluded',
+        'diagnosticsArchiveExpires',
+        'diagnosticsArchiveFields',
+        'diagnosticsArchiveTruncated',
         'diagnosticsCase',
         'diagnosticsComplete',
         'diagnosticsControlAction',

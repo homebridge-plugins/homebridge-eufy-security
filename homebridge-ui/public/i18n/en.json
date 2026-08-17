@@ -107,7 +107,14 @@
   "closeDiagnostics": "Back to devices",
   "dashboardMenuLabel": "Open dashboard menu",
   "diagnosticsActionLabel": "During the interval",
-  "diagnosticsArchiveUnavailable": "No diagnostics file was created. Encrypted archive download is planned separately in issue #1010 and is not available in this build. You can still prepare an issue with this support case.",
+  "diagnosticsArchiveExcluded": "Always excluded:",
+  "diagnosticsArchiveExpires": "expires {expiresAt}",
+  "diagnosticsArchiveExport": "Download encrypted archive",
+  "diagnosticsArchiveFields": "fields:",
+  "diagnosticsArchiveReview": "Review archive manifest",
+  "diagnosticsArchiveReviewConfirm": "I reviewed this manifest and want to create this encrypted archive.",
+  "diagnosticsArchiveReviewIntro": "Review the evidence classes and permanent exclusions before creating an encrypted local download. Nothing is uploaded.",
+  "diagnosticsArchiveTruncated": "newest records retained at the archive limit",
   "diagnosticsBeforeLabel": "Before you start",
   "diagnosticsCase": "Support case {caseId} · authorization expires {expiresAt}",
   "diagnosticsControlAction": "Perform the intended control once, then wait for the device state to settle before ending the interval. The plugin will not repeat the action automatically.",
@@ -141,7 +148,6 @@
   "menuDiagnostics": "Debug diagnostics",
   "menuRelogin": "Relogin or replace account",
   "advancedPollingInvalid": "Enter a whole number of minutes greater than or equal to zero.",
-  "diagnosticsArchivePlan": "Track encrypted archive export in issue #1010",
   "diagnosticsProfileChanged": "Start a new diagnostics session to use this profile.",
   "twoFactorLabel": "Verification code"
 }

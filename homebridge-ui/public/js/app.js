@@ -45,6 +45,11 @@ const diagnosticsGuidanceSummary = document.querySelector('[data-diagnostics-gui
 const diagnosticsGuidanceBefore = document.querySelector('[data-diagnostics-guidance-before]');
 const diagnosticsGuidanceAction = document.querySelector('[data-diagnostics-guidance-action]');
 const diagnosticsCase = document.querySelector('[data-diagnostics-case]');
+const diagnosticsReview = document.querySelector('[data-diagnostics-review]');
+const diagnosticsManifest = document.querySelector('[data-diagnostics-manifest]');
+const diagnosticsReviewConfirm = document.querySelector('[data-diagnostics-review-confirm]');
+const diagnosticsReviewConfirmLabel = document.querySelector('[data-diagnostics-review-confirm-label]');
+const diagnosticsExport = document.querySelector('[data-diagnostics-export]');
 const advancedPanel = document.querySelector('[data-advanced-settings]');
 const advancedClose = document.querySelector('[data-advanced-close]');
 const advancedPolling = document.querySelector('[data-advanced-polling]');
@@ -59,6 +64,7 @@ let challenge = '';
 let legacyNames = [];
 let legacyAcknowledged = false;
 let diagnosticsState = { status: 'inactive', missingEvidence: [] };
+let diagnosticsReviewId = '';
 const dashboardView = window.HomebridgeEufyDashboard;
 const legacySettingsView = window.HomebridgeEufyLegacySettings;
 const dashboardElements = {
@@ -196,6 +202,13 @@ function renderDiagnostics(state) {
   diagnosticsIssue.hidden = !state.partialExportAvailable;
   diagnosticsIssue.href = state.issueUrl ?? '';
   diagnosticsResult.hidden = !state.partialExportAvailable;
+  diagnosticsReview.hidden = !state.partialExportAvailable;
+  diagnosticsManifest.hidden = true;
+  diagnosticsReviewConfirmLabel.hidden = true;
+  diagnosticsReviewConfirm.checked = false;
+  diagnosticsExport.hidden = true;
+  diagnosticsExport.disabled = true;
+  diagnosticsReviewId = '';
   if (state.profile) diagnosticsProfile.value = state.profile;
   renderDiagnosticsGuidance();
   diagnosticsAuthorize.textContent = state.status === 'inactive' ? messages.diagnosticsAuthorize : messages.diagnosticsReauthorize;
@@ -217,6 +230,70 @@ function renderDiagnostics(state) {
     state.missingEvidence?.join(', ') ?? '',
   );
 }
+
+function renderArchiveManifest(manifest) {
+  diagnosticsManifest.replaceChildren();
+  const summary = document.createElement('p');
+  summary.textContent = `${manifest.archiveFormat} v${manifest.version} · ${manifest.keyId} · ${(messages.diagnosticsArchiveExpires ?? '').replace('{expiresAt}', new Date(manifest.archiveExpiresAt).toLocaleString(shell.lang || 'en'))}`;
+  const evidence = document.createElement('ul');
+  for (const item of manifest.evidence ?? []) {
+    const row = document.createElement('li');
+    const size = item.bytes === undefined ? '' : ` · ${item.bytes} B`;
+    const truncated = item.truncated ? ` · ${messages.diagnosticsArchiveTruncated ?? ''}` : '';
+    const missing = item.missingReason ? ` · ${item.missingReason}` : '';
+    const fields = (item.fields ?? []).map((field) => `${field.field}: ${field.privacyClass}`).join(', ');
+    row.textContent = `${item.evidence} · ${item.privacyClass} · ${item.status}${missing}${size}${truncated}${fields ? ` · ${messages.diagnosticsArchiveFields ?? ''} ${fields}` : ''}`;
+    evidence.append(row);
+  }
+  const exclusions = document.createElement('p');
+  exclusions.textContent = `${messages.diagnosticsArchiveExcluded ?? ''} ${(manifest.excludedClasses ?? []).join(', ')}`;
+  diagnosticsManifest.append(summary, evidence, exclusions);
+  diagnosticsManifest.hidden = false;
+}
+
+diagnosticsReview.addEventListener('click', async () => {
+  diagnosticsReview.disabled = true;
+  try {
+    const review = await requestWithinDeadline('/diagnostics/archive/review', undefined, 12000);
+    diagnosticsReviewId = review.reviewId;
+    renderArchiveManifest(review.manifest);
+    diagnosticsReviewConfirmLabel.hidden = false;
+    diagnosticsExport.hidden = false;
+  } catch {
+    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+  } finally {
+    diagnosticsReview.disabled = false;
+  }
+});
+
+diagnosticsReviewConfirm.addEventListener('change', () => {
+  diagnosticsExport.disabled = !diagnosticsReviewConfirm.checked || !diagnosticsReviewId;
+});
+
+diagnosticsExport.addEventListener('click', async () => {
+  if (!diagnosticsReviewConfirm.checked || !diagnosticsReviewId) return;
+  diagnosticsExport.disabled = true;
+  try {
+    const exported = await requestWithinDeadline(
+      '/diagnostics/archive/export',
+      { reviewId: diagnosticsReviewId },
+      12000,
+    );
+    const bytes = Uint8Array.from(atob(exported.archive), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(
+      new Blob([bytes], { type: 'application/vnd.homebridge-eufy.support-archive+json' }),
+    );
+    const download = document.createElement('a');
+    download.href = url;
+    download.download = exported.filename;
+    download.click();
+    URL.revokeObjectURL(url);
+    diagnosticsReviewId = '';
+    diagnosticsReviewConfirm.checked = false;
+  } catch {
+    diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+  }
+});
 
 diagnosticsAuthorize.addEventListener('click', async () => {
   diagnosticsAuthorize.disabled = true;

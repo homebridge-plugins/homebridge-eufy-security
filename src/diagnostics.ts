@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { constants, createCipheriv, publicEncrypt, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { gzip as gzipCallback } from 'node:zlib';
+import { gunzip as gunzipCallback, gzip as gzipCallback } from 'node:zlib';
 
 import type { Logger } from '@mega-yfue/eufy-sdk';
 
@@ -35,6 +35,9 @@ const MAX_LOG_RECORD_BYTES = 64 * 1024;
 const MAX_CURRENT_LOG_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_LOG_BYTES = 200 * 1024 * 1024;
 const MAX_QUEUED_LOG_BYTES = 1024 * 1024;
+const MAX_SUPPORT_ARCHIVE_LOG_BYTES = 16 * 1024 * 1024;
+const MAX_SUPPORT_ARCHIVE_MARKER_BYTES = 1024 * 1024;
+const SUPPORT_ARCHIVE_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const LOG_ROTATIONS = 3;
 const LOG_DIRECTORY = 'logs';
 const LOG_FILE = 'homebridge-eufy.jsonl';
@@ -43,6 +46,7 @@ const GUIDED_SESSION_FILE = 'session.json';
 const REPRODUCTION_MARKERS_FILE = 'reproduction-markers.jsonl';
 const DEBUG_AUTHORIZATION_MS = 72 * 60 * 60 * 1_000;
 const gzip = promisify(gzipCallback);
+const gunzip = promisify(gunzipCallback);
 const SDK_SUBSYSTEMS = new Set(['device', 'mega', 'mqtt', 'p2p', 'push', 'webrtc', 'sdk']);
 const SDK_EVENT_KEYS = new Set([
   'client-warning',
@@ -79,6 +83,93 @@ export type DiagnosticsProfile =
   | 'other';
 
 export type DiagnosticEvidence = 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log' | 'ui-log';
+
+export interface SupportArchiveManifest {
+  version: 1;
+  archiveFormat: 'homebridge-eufy-support-archive';
+  keyId: string;
+  supportCaseId: string;
+  profile: DiagnosticsProfile;
+  createdAt: string;
+  archiveExpiresAt: string;
+  reproductionStartedAt: string;
+  reproductionEndedAt: string;
+  evidence: readonly {
+    evidence: DiagnosticEvidence | 'environment' | 'reproduction-markers';
+    privacyClass: 'diagnostic' | 'operational';
+    status: 'included' | 'missing';
+    contentType?: 'application/json' | 'application/x-ndjson';
+    bytes?: number;
+    truncated?: true;
+    missingReason?: 'no-allowlisted-record-observed';
+    fields?: readonly {
+      field: string;
+      privacyClass: 'diagnostic' | 'operational' | 'pseudonymous';
+    }[];
+  }[];
+  excludedClasses: readonly string[];
+}
+
+export interface SupportArchiveReview {
+  reviewId: string;
+  manifest: SupportArchiveManifest;
+}
+
+export interface EncryptedSupportArchive {
+  filename: string;
+  mediaType: 'application/vnd.homebridge-eufy.support-archive+json';
+  archive: Buffer;
+}
+
+interface SupportArchiveKey {
+  keyId: string;
+  publicKey: string;
+}
+
+interface SupportArchiveEvidence {
+  evidence: DiagnosticEvidence | 'environment' | 'reproduction-markers';
+  privacyClass: 'diagnostic' | 'operational';
+  contentType: 'application/json' | 'application/x-ndjson';
+  content: string;
+  truncated?: true;
+  fields: readonly {
+    field: string;
+    privacyClass: 'diagnostic' | 'operational' | 'pseudonymous';
+  }[];
+}
+
+interface PendingSupportArchive {
+  reviewId: string;
+  manifest: SupportArchiveManifest;
+  evidence: readonly SupportArchiveEvidence[];
+}
+
+const SUPPORT_ARCHIVE_KEY: SupportArchiveKey = {
+  keyId: 'support-2026-08-01',
+  publicKey: `-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEArho8/7NwaYsZ3r27Lzek
+mJXOdSOtjuxKLWHxS40Hf6MFskF/dSwY8om0NZ22Qa/cygStAiP4eAmL1fEuNqlS
+JnoFgCtg6myFQVfeep9FWAJruR7EGp4WgiXopq8pvxSkJixZaYin2cch7CwUA5g9
+b2AcErlfAmZM6F0Sd9v5Q7rHF68x3MINi3BTDKsz/3KqkoJoxyosKjMNDNATEn/T
+y/yAF1/kELg7SJgnheWRoFK6130DEPzbym+TTxSZZOHeAtw27ALXoYGmnv09uq0K
+Bks4wOrvW8gWQpbMOfpbc3XeWsP7bOuIXr/fs3kXgHIZoJSiLW7JlsivL9z5NDl6
+UBxRyR0KOnK07Cx2xvl5pXfAOxQnc8F1JtjclzCHG6Q5sfq7isoMcpPuxDlEepgm
+FNkJi71G4+lWgTotQr/fTVeZ46IxXrtnq89pb0fE20WYMaHnXkz0FMCIjMjuQWEP
+R0zjeaRO8wZ3sqMgWSy2TldFsh709GqVUiS0YRUoVT1oExc27P47EFUNh57qI7bI
+tcEIHVhBqyawK+WrIC+vgBgAPg6w5klxVhUaWGltubIFSm86BxNDTGx7C6rllcRU
+pirqSQAW3PgOCg6d3lfkGLHVRsC+j6xsv1xC6clR6MKzklp7qz6uuOmf9GIdu+qE
+9U0RwKqGYSp/N8TF5n3p3s0CAwEAAQ==
+-----END PUBLIC KEY-----`,
+};
+
+const SUPPORT_ARCHIVE_EXCLUDED_CLASSES = [
+  'credentials-and-authentication',
+  'tokens-cookies-and-authorization',
+  'session-and-push-stores',
+  'private-and-symmetric-keys',
+  'unconstrained-sdk-objects',
+  'camera-images-talkback-and-raw-media',
+] as const;
 
 const DIAGNOSTICS_PROFILES: Readonly<Record<DiagnosticsProfile, readonly DiagnosticEvidence[]>> = {
   'startup-authentication': ['plugin-log', 'sdk-log'],
@@ -163,9 +254,12 @@ function evidenceForEvent(event: Readonly<Record<string, unknown>>): DiagnosticE
 
 /** Owns persisted, user-authorized diagnostic evidence windows and identity-free reproduction markers. */
 export class GuidedDiagnostics {
+  private pendingSupportArchive?: PendingSupportArchive;
+
   constructor(
     private readonly storageRoot: string,
     private readonly now: () => number = Date.now,
+    private readonly supportArchiveKey: SupportArchiveKey = SUPPORT_ARCHIVE_KEY,
   ) {}
 
   async authorize(profile: DiagnosticsProfile): Promise<GuidedDiagnosticsStatus> {
@@ -210,6 +304,246 @@ export class GuidedDiagnostics {
     }
     await this.ensureMarker(session, 'reproduction-ended', session.reproductionEndedAt);
     return this.project(session);
+  }
+
+  /** Prepares the exact manifest and evidence snapshot that one subsequent export may encrypt. */
+  async reviewSupportArchive(): Promise<SupportArchiveReview> {
+    const session = readDiagnosticsSession(this.storageRoot);
+    if (!session?.reproductionStartedAt || !session.reproductionEndedAt) {
+      throw new Error('A completed reproduction is required before archive review');
+    }
+    const collected = await this.collectSupportEvidence(session);
+    const selected = DIAGNOSTICS_PROFILES[session.profile];
+    const createdAt = this.now();
+    const manifest: SupportArchiveManifest = {
+      version: 1,
+      archiveFormat: 'homebridge-eufy-support-archive',
+      keyId: this.supportArchiveKey.keyId,
+      supportCaseId: session.supportCaseId,
+      profile: session.profile,
+      createdAt: new Date(createdAt).toISOString(),
+      archiveExpiresAt: new Date(createdAt + SUPPORT_ARCHIVE_RETENTION_MS).toISOString(),
+      reproductionStartedAt: session.reproductionStartedAt,
+      reproductionEndedAt: session.reproductionEndedAt,
+      evidence: [
+        ...collected.map(({ evidence, privacyClass, contentType, content, truncated, fields }) => ({
+          evidence,
+          privacyClass,
+          status: 'included' as const,
+          contentType,
+          bytes: Buffer.byteLength(content),
+          fields,
+          ...(truncated ? { truncated: true as const } : {}),
+        })),
+        ...selected
+          .filter((evidence) => !collected.some((candidate) => candidate.evidence === evidence))
+          .map((evidence) => ({
+            evidence,
+            privacyClass: 'diagnostic' as const,
+            status: 'missing' as const,
+            missingReason: 'no-allowlisted-record-observed' as const,
+          })),
+      ],
+      excludedClasses: SUPPORT_ARCHIVE_EXCLUDED_CLASSES,
+    };
+    const reviewId = randomUUID();
+    this.pendingSupportArchive = { reviewId, manifest, evidence: collected };
+    return { reviewId, manifest };
+  }
+
+  /** Consumes one reviewed snapshot and returns an encrypted envelope without writing plaintext or an archive to disk. */
+  async exportSupportArchive(reviewId: string): Promise<EncryptedSupportArchive> {
+    const pending = this.pendingSupportArchive;
+    if (!pending || pending.reviewId !== reviewId) {
+      throw new Error('Support archive manifest review is missing or stale');
+    }
+    this.pendingSupportArchive = undefined;
+    if (Date.parse(pending.manifest.archiveExpiresAt) <= this.now()) {
+      throw new Error('Support archive manifest review is missing or stale');
+    }
+    const compressed = await gzip(
+      Buffer.from(JSON.stringify({ manifest: pending.manifest, evidence: pending.evidence }), 'utf8'),
+    );
+    const contentKey = randomBytes(32);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', contentKey, iv);
+    const metadata = {
+      format: 'homebridge-eufy-support-archive',
+      version: 1,
+      keyId: this.supportArchiveKey.keyId,
+      keyWrapAlgorithm: 'RSA-OAEP-SHA256',
+      contentAlgorithm: 'AES-256-GCM',
+      contentEncoding: 'gzip+json',
+    } as const;
+    const authenticatedMetadata = Buffer.from(JSON.stringify(metadata), 'utf8');
+    cipher.setAAD(authenticatedMetadata);
+    const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+    const wrappedKey = publicEncrypt(
+      {
+        key: this.supportArchiveKey.publicKey,
+        oaepHash: 'sha256',
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+      },
+      contentKey,
+    );
+    const envelope = {
+      ...metadata,
+      wrappedKey: wrappedKey.toString('base64'),
+      iv: iv.toString('base64'),
+      authTag: cipher.getAuthTag().toString('base64'),
+      ciphertext: ciphertext.toString('base64'),
+    };
+    return {
+      filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport`,
+      mediaType: 'application/vnd.homebridge-eufy.support-archive+json',
+      archive: Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8'),
+    };
+  }
+
+  private async collectSupportEvidence(session: PersistedDiagnosticsSession): Promise<SupportArchiveEvidence[]> {
+    const evidence: SupportArchiveEvidence[] = [
+      {
+        evidence: 'environment',
+        privacyClass: 'operational',
+        contentType: 'application/json',
+        content: `${JSON.stringify({ version: 1, node: process.version, platform: process.platform, arch: process.arch })}\n`,
+        fields: ['version', 'node', 'platform', 'arch'].map((field) => ({ field, privacyClass: 'operational' })),
+      },
+    ];
+    const markers = await this.readReproductionMarkers(session.supportCaseId);
+    if (markers) {
+      evidence.push({
+        evidence: 'reproduction-markers',
+        privacyClass: 'operational',
+        contentType: 'application/x-ndjson',
+        content: markers,
+        fields: [
+          { field: 'version', privacyClass: 'operational' },
+          { field: 'supportCaseId', privacyClass: 'pseudonymous' },
+          { field: 'event', privacyClass: 'operational' },
+          { field: 'timestamp', privacyClass: 'operational' },
+        ],
+      });
+    }
+    const log = await this.readReproductionLog(session.reproductionStartedAt!, session.reproductionEndedAt!);
+    const scopes: Readonly<Record<Extract<DiagnosticEvidence, 'plugin-log' | 'sdk-log' | 'homekit-log'>, string>> = {
+      'plugin-log': 'plugin',
+      'sdk-log': 'sdk',
+      'homekit-log': 'homekit',
+    };
+    for (const selected of DIAGNOSTICS_PROFILES[session.profile]) {
+      if (!(selected in scopes)) continue;
+      const scope = scopes[selected as keyof typeof scopes];
+      const selectedRecords = log.records.filter((record) =>
+        scope === 'plugin' ? record.scope !== 'sdk' && record.scope !== 'homekit' : record.scope === scope,
+      );
+      const content = selectedRecords.map((record) => JSON.stringify(record)).join('\n');
+      if (content) {
+        evidence.push({
+          evidence: selected,
+          privacyClass: 'diagnostic',
+          contentType: 'application/x-ndjson',
+          content: `${content}\n`,
+          ...(log.truncated ? { truncated: true } : {}),
+          fields: [...new Set(selectedRecords.flatMap((record) => Object.keys(record)))].sort().map((field) => ({
+            field,
+            privacyClass:
+              field === 'accessoryAliases' ? 'pseudonymous' : field === 'timestamp' ? 'operational' : 'diagnostic',
+          })),
+        });
+      }
+    }
+    return evidence;
+  }
+
+  private async readReproductionMarkers(supportCaseId: string): Promise<string> {
+    try {
+      const path = join(this.storageRoot, DIAGNOSTICS_DIRECTORY, REPRODUCTION_MARKERS_FILE);
+      const lines = (await this.readFileTail(path, MAX_SUPPORT_ARCHIVE_MARKER_BYTES))
+        .trim()
+        .split('\n')
+        .filter((line) => {
+          try {
+            return (JSON.parse(line) as { supportCaseId?: unknown }).supportCaseId === supportCaseId;
+          } catch {
+            return false;
+          }
+        });
+      return lines.length ? `${lines.join('\n')}\n` : '';
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw error;
+    }
+  }
+
+  private async readReproductionLog(
+    startedAt: string,
+    endedAt: string,
+  ): Promise<{ records: Record<string, unknown>[]; truncated: boolean }> {
+    const directory = join(this.storageRoot, LOG_DIRECTORY);
+    const paths = [
+      join(directory, LOG_FILE),
+      ...Array.from({ length: LOG_ROTATIONS }, (_, index) => join(directory, `${LOG_FILE}.${index + 1}.gz`)),
+    ];
+    const started = Date.parse(startedAt);
+    const ended = Date.parse(endedAt);
+    const records: Record<string, unknown>[] = [];
+    let retainedBytes = 0;
+    let truncated = false;
+    let budgetExhausted = false;
+    for (const path of paths) {
+      try {
+        const file = await stat(path);
+        if (file.size > MAX_CURRENT_LOG_BYTES) {
+          truncated = true;
+          continue;
+        }
+        const content = path.endsWith('.gz')
+          ? (
+              await gunzip(await readFile(path), {
+                maxOutputLength: MAX_CURRENT_LOG_BYTES + MAX_LOG_RECORD_BYTES,
+              })
+            ).toString('utf8')
+          : await readFile(path, 'utf8');
+        const lines = content.trim().split('\n');
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          const line = lines[index]!;
+          try {
+            const record = JSON.parse(line) as Record<string, unknown>;
+            const timestamp = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : Number.NaN;
+            if (timestamp < started || timestamp > ended) continue;
+            const bytes = Buffer.byteLength(line) + 1;
+            if (retainedBytes + bytes > MAX_SUPPORT_ARCHIVE_LOG_BYTES) {
+              truncated = true;
+              budgetExhausted = true;
+              break;
+            }
+            retainedBytes += bytes;
+            records.push(record);
+          } catch {
+            continue;
+          }
+        }
+        if (budgetExhausted || retainedBytes >= MAX_SUPPORT_ARCHIVE_LOG_BYTES) break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return { records: records.reverse(), truncated };
+  }
+
+  private async readFileTail(path: string, maximumBytes: number): Promise<string> {
+    const file = await open(path, 'r');
+    try {
+      const size = (await file.stat()).size;
+      const bytes = Math.min(size, maximumBytes);
+      const buffer = Buffer.alloc(bytes);
+      await file.read(buffer, 0, bytes, size - bytes);
+      const content = buffer.toString('utf8');
+      return size > maximumBytes ? content.slice(content.indexOf('\n') + 1) : content;
+    } finally {
+      await file.close();
+    }
   }
 
   private requireAuthorized(): PersistedDiagnosticsSession {
@@ -339,6 +673,7 @@ class JsonLineLog {
   constructor(
     storageRoot: string,
     private readonly onError: () => void,
+    private readonly now: () => number,
   ) {
     this.directory = join(storageRoot, LOG_DIRECTORY);
     this.path = join(this.directory, LOG_FILE);
@@ -410,7 +745,10 @@ class JsonLineLog {
     return this.pending;
   }
 
-  private serialize(payload: Readonly<Record<string, unknown>>, timestamp = new Date().toISOString()): string {
+  private serialize(
+    payload: Readonly<Record<string, unknown>>,
+    timestamp = new Date(this.now()).toISOString(),
+  ): string {
     return `${JSON.stringify({ ...payload, timestamp })}\n`;
   }
 
@@ -521,7 +859,7 @@ export function createDiagnosticLogger(
       target.warn(`[diagnostic-log-write-failed] ${formatMessage(catalog, 'log.diagnosticFileFailed')}`);
     }
   };
-  const file = storageRoot ? new JsonLineLog(storageRoot, reportFileFailure) : undefined;
+  const file = storageRoot ? new JsonLineLog(storageRoot, reportFileFailure, now) : undefined;
   const debug = file
     ? (message: string): void => {
         const event = sanitizeStructuredEvent(message);

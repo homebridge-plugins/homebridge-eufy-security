@@ -107,7 +107,14 @@
   "closeDiagnostics": "Retour aux appareils",
   "dashboardMenuLabel": "Ouvrir le menu du tableau de bord",
   "diagnosticsActionLabel": "Pendant l’intervalle",
-  "diagnosticsArchiveUnavailable": "Aucun fichier de diagnostic n’a été créé. Le téléchargement d’une archive chiffrée est prévu séparément dans le ticket nº 1010 et n’est pas disponible dans cette version. Vous pouvez néanmoins préparer un ticket avec ce dossier d’assistance.",
+  "diagnosticsArchiveExcluded": "Toujours exclus :",
+  "diagnosticsArchiveExpires": "expire le {expiresAt}",
+  "diagnosticsArchiveExport": "Télécharger l’archive chiffrée",
+  "diagnosticsArchiveFields": "champs :",
+  "diagnosticsArchiveReview": "Examiner le manifeste de l’archive",
+  "diagnosticsArchiveReviewConfirm": "J’ai examiné ce manifeste et je souhaite créer cette archive chiffrée.",
+  "diagnosticsArchiveReviewIntro": "Examinez les catégories de preuves et les exclusions permanentes avant de créer un téléchargement local chiffré. Rien n’est envoyé.",
+  "diagnosticsArchiveTruncated": "enregistrements les plus récents conservés à la limite de l’archive",
   "diagnosticsBeforeLabel": "Avant de commencer",
   "diagnosticsCase": "Dossier d’assistance {caseId} · autorisation valable jusqu’au {expiresAt}",
   "diagnosticsControlAction": "Effectuez une fois la commande voulue, puis attendez que l’état de l’appareil se stabilise avant de terminer l’intervalle. Le plugin ne répétera pas automatiquement l’action.",
@@ -141,7 +148,6 @@
   "menuDiagnostics": "Diagnostics de débogage",
   "menuRelogin": "Se reconnecter ou remplacer le compte",
   "advancedPollingInvalid": "Saisissez un nombre entier de minutes supérieur ou égal à zéro.",
-  "diagnosticsArchivePlan": "Suivre l’exportation de l’archive chiffrée dans le ticket nº 1010",
   "diagnosticsProfileChanged": "Démarrez une nouvelle session de diagnostic pour utiliser ce profil.",
   "twoFactorLabel": "Code de vérification"
 }

@@ -305,6 +305,35 @@ h2 {
   font-weight: 750;
 }
 
+.diagnostics-result button {
+  width: auto;
+  margin-top: 10px;
+}
+
+.diagnostics-manifest {
+  margin-top: 12px;
+  border-block: 1px solid var(--line);
+  padding-block: 8px;
+  font-size: 12px;
+}
+
+.diagnostics-manifest ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.diagnostics-review-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.diagnostics-review-confirm input {
+  margin-top: 2px;
+}
+
 .advanced-fields {
   display: grid;
   grid-template-columns: minmax(140px, 0.7fr) minmax(220px, 1.3fr);

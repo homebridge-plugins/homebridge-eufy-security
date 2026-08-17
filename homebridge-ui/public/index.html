@@ -141,13 +141,14 @@
       <p class="diagnostics-status" role="status" aria-live="polite" data-diagnostics-status></p>
       <div class="diagnostics-result" data-diagnostics-result hidden>
         <strong data-i18n="diagnosticsEvidenceReady"></strong>
-        <p data-i18n="diagnosticsArchiveUnavailable"></p>
-        <a
-          href="https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1010"
-          target="_blank"
-          rel="noopener noreferrer"
-          data-i18n="diagnosticsArchivePlan"
-        ></a>
+        <p data-i18n="diagnosticsArchiveReviewIntro"></p>
+        <button type="button" data-diagnostics-review data-i18n="diagnosticsArchiveReview"></button>
+        <div class="diagnostics-manifest" data-diagnostics-manifest hidden></div>
+        <label class="diagnostics-review-confirm" data-diagnostics-review-confirm-label hidden>
+          <input type="checkbox" data-diagnostics-review-confirm />
+          <span data-i18n="diagnosticsArchiveReviewConfirm"></span>
+        </label>
+        <button type="button" data-diagnostics-export disabled hidden data-i18n="diagnosticsArchiveExport"></button>
         <a data-diagnostics-issue hidden target="_blank" rel="noopener noreferrer" data-i18n="diagnosticsOpenIssue"></a>
       </div>
     </section>

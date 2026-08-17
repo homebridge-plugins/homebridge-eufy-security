@@ -126,6 +126,17 @@ function parseDiagnosticsProfile(value: unknown): DiagnosticsProfile {
   return profile;
 }
 
+function parseArchiveReview(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RequestError('Invalid support archive request', { status: 400 });
+  }
+  const reviewId = requiredString((value as Record<string, unknown>).reviewId, 36);
+  if (!reviewId?.match(/^[0-9a-f-]{36}$/)) {
+    throw new RequestError('Invalid support archive request', { status: 400 });
+  }
+  return reviewId;
+}
+
 /** Creates the production SDK client without enabling realtime ownership. */
 export const createTemporaryAuthenticationClient: TemporaryAuthenticationClientFactory = (options) =>
   temporaryClient(
@@ -185,6 +196,11 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
     this.onRequest('/diagnostics/authorize', (payload) => this.diagnostics.authorize(parseDiagnosticsProfile(payload)));
     this.onRequest('/diagnostics/reproduction/start', () => this.diagnostics.startReproduction());
     this.onRequest('/diagnostics/reproduction/end', () => this.diagnostics.endReproduction());
+    this.onRequest('/diagnostics/archive/review', () => this.diagnostics.reviewSupportArchive());
+    this.onRequest('/diagnostics/archive/export', async (payload) => {
+      const exported = await this.diagnostics.exportSupportArchive(parseArchiveReview(payload));
+      return { ...exported, archive: exported.archive.toString('base64') };
+    });
     this.installCleanupHandlers();
     this.ready();
   }
