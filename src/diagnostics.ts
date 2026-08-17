@@ -394,7 +394,7 @@ export class GuidedDiagnostics {
       ciphertext: ciphertext.toString('base64'),
     };
     return {
-      filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport`,
+      filename: `homebridge-eufy-${pending.manifest.supportCaseId}.eufysupport.txt`,
       mediaType: 'application/vnd.homebridge-eufy.support-archive+json',
       archive: Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8'),
     };

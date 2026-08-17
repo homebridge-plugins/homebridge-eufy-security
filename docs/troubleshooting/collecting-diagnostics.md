@@ -3,7 +3,9 @@
 Use **Debug diagnostics** in the plugin dashboard to choose one evidence profile, mark one reproduction
 interval, and review the generated manifest. The manifest shows each requested evidence class as
 included or missing and lists the classes that can never be collected. Confirm the review to download
-an encrypted `.eufysupport` archive. Nothing is uploaded by the plugin.
+an encrypted `.eufysupport.txt` archive. The final `.txt` suffix allows the encrypted archive to be
+attached to a GitHub issue; its content remains the support-archive JSON envelope. Nothing is uploaded
+by the plugin.
 
 - Reproduce one issue at a time and end the interval promptly.
 - Review the manifest before confirming the export.

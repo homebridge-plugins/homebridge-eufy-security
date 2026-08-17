@@ -286,7 +286,7 @@ describe('guided diagnostics session', () => {
       await expect(diagnostics.exportSupportArchive('unreviewed')).rejects.toThrow('review');
 
       const exported = await diagnostics.exportSupportArchive(review.reviewId);
-      expect(exported.filename).toMatch(/^homebridge-eufy-support-[0-9a-f-]{36}\.eufysupport$/);
+      expect(exported.filename).toMatch(/^homebridge-eufy-support-[0-9a-f-]{36}\.eufysupport\.txt$/);
       expect(exported.mediaType).toBe('application/vnd.homebridge-eufy.support-archive+json');
       expect(exported.archive.toString('utf8')).not.toContain(forbidden);
       expect(exported.archive.toString('utf8')).not.toContain('contact-state');
