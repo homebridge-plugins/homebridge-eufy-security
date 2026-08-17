@@ -12,6 +12,7 @@ Start with one reproducible failure and the smallest relevant evidence.
 - [Discovery and runtime problems](/troubleshooting/discovery-runtime)
 - [Node.js compatibility](/troubleshooting/node-compatibility)
 - [Collecting diagnostics safely](/troubleshooting/collecting-diagnostics)
+- [Validating a local plugin build](/troubleshooting/live-plugin-validation)
 
 Legacy debug buttons, separate plugin/library logs, camera presets, and reset screenshots do not
 describe V5.

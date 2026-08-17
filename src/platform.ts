@@ -9,6 +9,7 @@ import {
   type PlatformLogger,
 } from './diagnostics.js';
 import { HomeKitReconciler, type HomeKitAccessoryStore } from './homekit/reconciler.js';
+import { FfmpegLiveMedia } from './media/live-stream.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -51,6 +52,7 @@ export function createEufyPlatform(
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       const diagnosticLog = createDiagnosticLogger(log, storageRoot);
       const diagnostics = new DiagnosticConditions(diagnosticLog);
+      const liveMedia = configuredConfig.ffmpegPath ? new FfmpegLiveMedia(configuredConfig.ffmpegPath) : undefined;
       if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
         reportDiscardedV4Settings(diagnosticLog);
       }
@@ -84,6 +86,7 @@ export function createEufyPlatform(
             this.cachedAccessories,
             (trace) => reportHomeKitEvent(diagnosticLog, trace),
             configuredConfig.entityPreferences,
+            liveMedia,
           );
           this.reconciler.start();
         }

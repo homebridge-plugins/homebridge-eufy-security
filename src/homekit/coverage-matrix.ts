@@ -82,7 +82,6 @@ function defer(rows: readonly string[], issue: string, risk: string): void {
   }
 }
 
-defer(['camera.live.momentary-action'], '#997', 'requires negotiated live media adaptation');
 defer(['camera.recordFragments.momentary-action'], '#999', 'requires negotiated HKSV adaptation');
 defer(
   ['camera.snapshotStored.momentary-action', 'camera.snapshotLive.momentary-action'],

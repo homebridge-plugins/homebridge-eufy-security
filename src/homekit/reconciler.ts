@@ -3,7 +3,13 @@ import type { PlatformAccessory } from 'homebridge';
 
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
 import { indexDeviceEvidence } from '../device/member-evidence.js';
-import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
+import type {
+  AdapterDiagnostic,
+  AdapterEventTrace,
+  AttachedAdapter,
+  HomeKitDefinitions,
+  LiveMediaAdapter,
+} from './adapter.js';
 import { admittedHomeKitAdapters } from './representation.js';
 
 /** One complete canonical registry and snapshot published from the same discovery pass. */
@@ -52,7 +58,7 @@ export interface HomeKitEventTrace {
 
 export type HomeKitEventTraceSink = (trace: HomeKitEventTrace) => void;
 
-export type HomeKitEntityPreferences = Readonly<Record<string, { represented?: boolean }>>;
+export type HomeKitEntityPreferences = Readonly<Record<string, { represented?: boolean; audio?: boolean }>>;
 
 interface AccessoryContext {
   homebridgeEufy?: {
@@ -89,6 +95,7 @@ export class HomeKitReconciler {
     cachedAccessories: readonly PlatformAccessory[] = [],
     private readonly trace?: HomeKitEventTraceSink,
     private readonly entityPreferences: HomeKitEntityPreferences = {},
+    private readonly liveMedia?: LiveMediaAdapter,
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -171,6 +178,8 @@ export class HomeKitReconciler {
           evidence: evidence.members,
           accessory,
           hap: this.store.hap,
+          liveMedia: this.liveMedia,
+          audioEnabled: this.entityPreferences[serial]?.audio !== false,
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
           persist: () => this.store.update([accessory]),

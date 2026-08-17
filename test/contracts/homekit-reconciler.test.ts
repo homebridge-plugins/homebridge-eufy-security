@@ -1,5 +1,17 @@
 import type { AnyDeviceEvent, Device, DeviceManifest } from '@mega-yfue/eufy-sdk';
-import { Accessory, Characteristic, HAPStatus, Service, uuid } from '@homebridge/hap-nodejs';
+import {
+  Accessory,
+  AudioStreamingCodecType,
+  AudioStreamingSamplerate,
+  CameraController,
+  Characteristic,
+  H264Level,
+  H264Profile,
+  HAPStatus,
+  Service,
+  SRTPCryptoSuites,
+  uuid,
+} from '@homebridge/hap-nodejs';
 import type { PlatformAccessory } from 'homebridge';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -150,6 +162,28 @@ function cameraControlsManifest(serial: string): DeviceManifest {
         accessor: 'camera',
         reads: [{ accessor: 'enabled', property: 'synthetic_camera_enabled', type: 'bool', writable: true }],
         actions: [{ name: 'setEnabled', form: 'stateful', reflects: 'enabled' }],
+        undescribedActions: [],
+        events: [],
+      },
+    ],
+  };
+}
+
+function cameraLiveManifest(serial: string): DeviceManifest {
+  return {
+    sn: serial,
+    name: 'Synthetic live camera',
+    modelName: 'Synthetic camera family',
+    codec: 'camera',
+    source: 'security',
+    bound: true,
+    capabilities: ['camera'],
+    details: [
+      {
+        capability: 'camera',
+        accessor: 'camera',
+        reads: [],
+        actions: [{ name: 'live', form: 'momentary' }],
         undescribedActions: [],
         events: [],
       },
@@ -373,6 +407,12 @@ function recordingApi() {
         Characteristic,
         HAPStatus,
         HapStatusError: class extends Error {},
+        CameraController,
+        H264Profile,
+        H264Level,
+        AudioStreamingCodecType,
+        AudioStreamingSamplerate,
+        SRTPCryptoSuites,
       },
       generateUuid(input: string): string {
         uuidInputs.push(input);
@@ -839,6 +879,32 @@ describe('HomeKit registry reconciliation', () => {
     source.publish(registryView(1, new Map([[manifest.sn, contactDevice(false)]]), snapshot(manifest)));
 
     expect(recording.registerPlatformAccessories).not.toHaveBeenCalled();
+  });
+
+  it('admits a camera controller only from exact live momentary-action evidence', () => {
+    const serial = 'synthetic-live-camera';
+    const media = { prepare: vi.fn() };
+    const makeDevice = () => ({ camera: () => ({ live: async () => ({}) }) }) as unknown as Device;
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn(), [], undefined, {}, media as never).start();
+
+    source.publish(registryView(1, new Map([[serial, makeDevice()]]), snapshot(cameraLiveManifest(serial))));
+
+    expect(recording.registerPlatformAccessories).toHaveBeenCalledOnce();
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]![0][0] as PlatformAccessory;
+    expect(
+      accessory.services.filter((service) => service.UUID === Service.CameraRTPStreamManagement.UUID),
+    ).toHaveLength(2);
+
+    const nearMiss = cameraLiveManifest('synthetic-live-near-miss');
+    nearMiss.details[0]!.actions[0]!.form = 'stateful';
+    const nearMissSource = new RegistrySource();
+    const nearMissRecording = recordingApi();
+    new HomeKitReconciler(nearMissSource, nearMissRecording.api, vi.fn(), [], undefined, {}, media as never).start();
+    nearMissSource.publish(registryView(1, new Map([[nearMiss.sn, makeDevice()]]), snapshot(nearMiss)));
+
+    expect(nearMissRecording.registerPlatformAccessories).not.toHaveBeenCalled();
   });
 
   it('withdraws a historically owned cached accessory only from a later complete snapshot', () => {

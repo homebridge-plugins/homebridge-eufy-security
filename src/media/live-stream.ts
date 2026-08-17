@@ -1,0 +1,436 @@
+import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame } from '@mega-yfue/eufy-sdk';
+import { createSocket } from 'node:dgram';
+import { spawn } from 'node:child_process';
+import type { Readable, Writable } from 'node:stream';
+
+const PROCESS_STOP_GRACE_MS = 2_000;
+const INITIAL_RTCP_GRACE_MS = 15_000;
+const VIDEO_START_DEADLINE_MS = 10_000;
+const VIDEO_START_TIMEOUT = Symbol('video-start-timeout');
+
+export interface LiveMediaProcess {
+  readonly stdin: Writable;
+  readonly stderr: Readable;
+  on(event: 'error', listener: (error: Error) => void): unknown;
+  on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  kill(signal?: NodeJS.Signals): boolean;
+}
+
+export interface ReservedMediaPort {
+  readonly port: number;
+  onMessage(listener: () => void): void;
+  close(): void;
+}
+
+export type LiveMediaProcessFactory = (executable: string, args: readonly string[]) => LiveMediaProcess;
+export type MediaPortFactory = (addressVersion: 'ipv4' | 'ipv6') => Promise<ReservedMediaPort>;
+
+export interface LiveMediaTransport {
+  readonly addressVersion: 'ipv4' | 'ipv6';
+  readonly targetAddress: string;
+  readonly video: LiveMediaTarget;
+  readonly audio?: LiveMediaTarget;
+  readonly onVideoFailure?: () => void;
+}
+
+export interface LiveMediaTarget {
+  readonly port: number;
+  readonly srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' | 'AES_CM_256_HMAC_SHA1_80';
+  readonly srtpKey: Buffer;
+  readonly srtpSalt: Buffer;
+}
+
+export interface NegotiatedLiveMedia {
+  readonly video: NegotiatedLiveVideo;
+  readonly audio?: NegotiatedLiveAudio;
+}
+
+export interface NegotiatedLiveVideo {
+  readonly width: number;
+  readonly height: number;
+  readonly fps: number;
+  readonly maxBitRate: number;
+  readonly profile: 'baseline' | 'main' | 'high';
+  readonly level: '3.1' | '3.2' | '4.0';
+  readonly payloadType: number;
+  readonly ssrc: number;
+  readonly mtu: number;
+  readonly rtcpInterval: number;
+}
+
+export interface NegotiatedLiveAudio {
+  readonly codec: 'AAC-eld';
+  readonly channels: number;
+  readonly sampleRate: 16 | 24;
+  readonly maxBitRate: number;
+  readonly payloadType: number;
+  readonly ssrc: number;
+}
+
+export interface PreparedLiveMedia {
+  readonly videoPort: number;
+  readonly audioPort?: number;
+  start(source: { live(): Promise<LiveStreamHandle> }, negotiated: NegotiatedLiveMedia): Promise<void>;
+  reconfigure(video: NegotiatedLiveVideo): void;
+  stop(): void;
+}
+
+/** Adapts separate SDK elementary streams into independently failing HomeKit SRTP outputs. */
+export class FfmpegLiveMedia {
+  constructor(
+    private readonly executable: string,
+    private readonly createProcess: LiveMediaProcessFactory = spawnLiveMediaProcess,
+    private readonly reservePort: MediaPortFactory = reserveMediaPort,
+  ) {}
+
+  async prepare(transport: LiveMediaTransport): Promise<PreparedLiveMedia> {
+    const videoPort = await this.reservePort(transport.addressVersion);
+    const targetAddress = transport.addressVersion === 'ipv6' ? `[${transport.targetAddress}]` : transport.targetAddress;
+    let audioPort: ReservedMediaPort | undefined;
+    try {
+      audioPort = transport.audio ? await this.reservePort(transport.addressVersion) : undefined;
+    } catch (error) {
+      videoPort.close();
+      throw error;
+    }
+
+    let source: LiveStreamHandle | undefined;
+    let videoProcess: LiveMediaProcess | undefined;
+    let audioProcess: LiveMediaProcess | undefined;
+    let negotiated: NegotiatedLiveMedia | undefined;
+    let stopped = false;
+    let receivedVideoKeyframe = false;
+    let videoInput: Pick<LiveVideoFrame, 'codec' | 'width' | 'height'> | undefined;
+    let audioInputCodec: LiveAudioFrame['codec'] | undefined;
+    let rtcpDeadline: ReturnType<typeof setTimeout> | undefined;
+    let initialRtcpGrace: ReturnType<typeof setTimeout> | undefined;
+    let videoStartDeadline: ReturnType<typeof setTimeout> | undefined;
+    let videoFailed = false;
+    const stoppingProcesses = new WeakSet<object>();
+
+    const stopProcess = (process: LiveMediaProcess | undefined): void => {
+      if (!process) {
+        return;
+      }
+      stoppingProcesses.add(process);
+      process.stdin.destroy();
+      process.kill('SIGTERM');
+      const killDeadline = setTimeout(() => process.kill('SIGKILL'), PROCESS_STOP_GRACE_MS);
+      killDeadline.unref?.();
+      process.on('exit', () => clearTimeout(killDeadline));
+    };
+    const stop = (): void => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearTimeout(rtcpDeadline);
+      clearTimeout(initialRtcpGrace);
+      clearTimeout(videoStartDeadline);
+      stopProcess(videoProcess);
+      stopProcess(audioProcess);
+      source?.stop();
+      videoPort.close();
+      audioPort?.close();
+    };
+    const failVideo = (): void => {
+      if (stopped || videoFailed) {
+        return;
+      }
+      videoFailed = true;
+      stop();
+      transport.onVideoFailure?.();
+    };
+    const resetRtcpDeadline = (): void => {
+      clearTimeout(initialRtcpGrace);
+      clearTimeout(rtcpDeadline);
+      const interval = Math.max(negotiated?.video.rtcpInterval ?? 1, 1) * 5_000;
+      rtcpDeadline = setTimeout(failVideo, interval);
+      rtcpDeadline.unref?.();
+    };
+    videoPort.onMessage(resetRtcpDeadline);
+
+    const writeVideo = (frame: LiveVideoFrame): void => {
+      if (stopped || !negotiated) {
+        return;
+      }
+      if (!receivedVideoKeyframe) {
+        if (!frame.keyframe) {
+          return;
+        }
+        receivedVideoKeyframe = true;
+      }
+      if (
+        videoProcess &&
+        (videoInput?.codec !== frame.codec || videoInput.width !== frame.width || videoInput.height !== frame.height)
+      ) {
+        if (!frame.keyframe) {
+          return;
+        }
+        stopProcess(videoProcess);
+        videoProcess = undefined;
+      }
+      if (!videoProcess) {
+        videoInput = { codec: frame.codec, width: frame.width, height: frame.height };
+        const child = this.createProcess(
+          this.executable,
+          videoArguments(frame, negotiated.video, targetAddress, transport.video),
+        );
+        videoProcess = child;
+        let progressRemainder = '';
+        child.stderr.on('data', (chunk: Buffer) => {
+          const lines = `${progressRemainder}${chunk.toString()}`.split(/\r?\n/);
+          progressRemainder = lines.pop()?.slice(-64) ?? '';
+          if (lines.some((line) => line.startsWith('progress='))) {
+            clearTimeout(videoStartDeadline);
+          }
+        });
+        child.stdin.on('error', () => {
+          if (!stoppingProcesses.has(child)) {
+            failVideo();
+          }
+        });
+        child.on('error', () => {
+          if (!stoppingProcesses.has(child)) {
+            failVideo();
+          }
+        });
+        child.on('exit', () => {
+          if (!stopped && !stoppingProcesses.has(child)) {
+            failVideo();
+          }
+        });
+      }
+      videoProcess.stdin.write(frame.data);
+    };
+    const writeAudio = (frame: LiveAudioFrame): void => {
+      if (stopped || !negotiated?.audio || !transport.audio || !audioPort) {
+        return;
+      }
+      if (!audioProcess) {
+        audioInputCodec = frame.codec;
+        const child = this.createProcess(
+          this.executable,
+          audioArguments(frame, negotiated.audio, targetAddress, transport.audio),
+        );
+        audioProcess = child;
+        child.stderr.resume();
+        const clearChild = (): void => {
+          if (audioProcess === child) {
+            audioProcess = undefined;
+          }
+        };
+        child.stdin.on('error', () => {
+          stopProcess(child);
+          clearChild();
+        });
+        child.on('error', () => {
+          stopProcess(child);
+          clearChild();
+        });
+        child.on('exit', clearChild);
+      }
+      if (audioInputCodec !== frame.codec) {
+        stopProcess(audioProcess);
+        audioProcess = undefined;
+        audioInputCodec = undefined;
+        writeAudio(frame);
+        return;
+      }
+      audioProcess.stdin.write(frame.data);
+    };
+
+    return {
+      videoPort: videoPort.port,
+      ...(audioPort ? { audioPort: audioPort.port } : {}),
+      async start(camera, selection): Promise<void> {
+        if (stopped) {
+          throw new Error('live media session is already stopped');
+        }
+        negotiated = selection;
+        let sourcePromise: Promise<LiveStreamHandle>;
+        let acquisitionDeadline: ReturnType<typeof setTimeout> | undefined;
+        try {
+          sourcePromise = camera.live();
+          void sourcePromise.then(
+            (lateSource) => {
+              if (stopped && source !== lateSource) {
+                lateSource.stop();
+              }
+            },
+            () => undefined,
+          );
+          source = await Promise.race([
+            sourcePromise,
+            new Promise<never>((_, reject) => {
+              acquisitionDeadline = setTimeout(() => reject(VIDEO_START_TIMEOUT), VIDEO_START_DEADLINE_MS);
+              acquisitionDeadline.unref?.();
+            }),
+          ]);
+        } catch (error) {
+          failVideo();
+          throw error === VIDEO_START_TIMEOUT ? new Error('live media source acquisition timed out') : error;
+        } finally {
+          clearTimeout(acquisitionDeadline);
+        }
+        if (stopped) {
+          source.stop();
+          return;
+        }
+        videoStartDeadline = setTimeout(failVideo, VIDEO_START_DEADLINE_MS);
+        videoStartDeadline.unref?.();
+        initialRtcpGrace = setTimeout(failVideo, INITIAL_RTCP_GRACE_MS);
+        initialRtcpGrace.unref?.();
+        source.on('video', writeVideo);
+        source.on('audio', writeAudio);
+        source.on('budget', (notice) => {
+          if (!stopped) {
+            notice.extend();
+          }
+        });
+        source.on('error', failVideo);
+        source.on('stop', failVideo);
+      },
+      reconfigure(video): void {
+        if (!negotiated) {
+          return;
+        }
+        negotiated = { ...negotiated, video };
+        stopProcess(videoProcess);
+        videoProcess = undefined;
+        videoInput = undefined;
+        receivedVideoKeyframe = false;
+        clearTimeout(videoStartDeadline);
+        videoStartDeadline = setTimeout(failVideo, VIDEO_START_DEADLINE_MS);
+        videoStartDeadline.unref?.();
+      },
+      stop,
+    };
+  }
+}
+
+function commonArguments(inputFormat: string, inputOptions: readonly string[] = []): string[] {
+  return [
+    '-hide_banner',
+    '-loglevel',
+    'warning',
+    '-fflags',
+    '+genpts+nobuffer',
+    '-progress',
+    'pipe:2',
+    '-nostats',
+    '-f',
+    inputFormat,
+    ...inputOptions,
+    '-i',
+    'pipe:0',
+  ];
+}
+
+function outputArguments(
+  targetAddress: string,
+  target: LiveMediaTarget,
+  payloadType: number,
+  ssrc: number,
+  packetSize: number,
+): string[] {
+  return [
+    '-payload_type',
+    String(payloadType),
+    '-ssrc',
+    String(ssrc),
+    '-f',
+    'rtp',
+    '-srtp_out_suite',
+    target.srtpCryptoSuite,
+    '-srtp_out_params',
+    Buffer.concat([target.srtpKey, target.srtpSalt]).toString('base64'),
+    `srtp://${targetAddress}:${target.port}?rtcpport=${target.port}&pkt_size=${packetSize}`,
+  ];
+}
+
+/** Raw SDK frames cannot prove profile, level, frame rate, and bitrate, so negotiated video is transcoded. */
+function videoArguments(
+  frame: LiveVideoFrame,
+  selection: NegotiatedLiveVideo,
+  targetAddress: string,
+  target: LiveMediaTarget,
+): string[] {
+  return [
+    ...commonArguments(frame.codec === 'h265' ? 'hevc' : frame.codec),
+    '-an',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-tune',
+    'zerolatency',
+    '-profile:v',
+    selection.profile,
+    '-level:v',
+    selection.level,
+    '-pix_fmt',
+    'yuv420p',
+    '-vf',
+    `scale=${selection.width}:${selection.height}:force_original_aspect_ratio=decrease,pad=${selection.width}:${selection.height}:(ow-iw)/2:(oh-ih)/2`,
+    '-r',
+    String(selection.fps),
+    '-g',
+    String(selection.fps * 2),
+    '-keyint_min',
+    String(selection.fps * 2),
+    '-sc_threshold',
+    '0',
+    '-b:v',
+    `${selection.maxBitRate}k`,
+    '-maxrate',
+    `${selection.maxBitRate}k`,
+    '-bufsize',
+    `${selection.maxBitRate * 2}k`,
+    ...outputArguments(targetAddress, target, selection.payloadType, selection.ssrc, selection.mtu),
+  ];
+}
+
+function audioArguments(
+  frame: LiveAudioFrame,
+  selection: NegotiatedLiveAudio,
+  targetAddress: string,
+  target: LiveMediaTarget,
+): string[] {
+  const inputFormat = frame.codec === 'g711a' ? 'alaw' : 'aac';
+  return [
+    ...commonArguments(inputFormat, ['-ar', '16k', '-ac', '1']),
+    '-vn',
+    '-c:a',
+    'libfdk_aac',
+    '-profile:a',
+    'aac_eld',
+    '-ar',
+    `${selection.sampleRate}k`,
+    '-ac',
+    String(selection.channels),
+    '-b:a',
+    `${selection.maxBitRate}k`,
+    ...outputArguments(targetAddress, target, selection.payloadType, selection.ssrc, 188),
+  ];
+}
+
+function spawnLiveMediaProcess(executable: string, args: readonly string[]): LiveMediaProcess {
+  return spawn(executable, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+}
+
+function reserveMediaPort(addressVersion: 'ipv4' | 'ipv6'): Promise<ReservedMediaPort> {
+  return new Promise((resolve, reject) => {
+    const socket = createSocket(addressVersion === 'ipv6' ? 'udp6' : 'udp4');
+    socket.once('error', reject);
+    socket.bind(0, () => {
+      const address = socket.address();
+      socket.removeListener('error', reject);
+      resolve({
+        port: address.port,
+        onMessage: (listener) => socket.on('message', listener),
+        close: () => socket.close(),
+      });
+    });
+  });
+}

@@ -1,5 +1,5 @@
-import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
-import type { Characteristic, HapStatusError, PlatformAccessory, Service } from 'homebridge';
+import type { AnyDeviceEvent, Device, LiveStreamHandle } from '@mega-yfue/eufy-sdk';
+import type { Characteristic, HAP, HapStatusError, PlatformAccessory, Service } from 'homebridge';
 
 import type {
   DeviceMemberEvidence,
@@ -17,6 +17,64 @@ export interface HomeKitDefinitions {
     readonly NOT_ALLOWED_IN_CURRENT_STATE: number;
   };
   readonly HapStatusError: typeof HapStatusError;
+  readonly CameraController: HAP['CameraController'];
+  readonly H264Profile: HAP['H264Profile'];
+  readonly H264Level: HAP['H264Level'];
+  readonly AudioStreamingCodecType: HAP['AudioStreamingCodecType'];
+  readonly AudioStreamingSamplerate: HAP['AudioStreamingSamplerate'];
+  readonly SRTPCryptoSuites: HAP['SRTPCryptoSuites'];
+}
+
+export interface LiveMediaTarget {
+  readonly port: number;
+  readonly srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' | 'AES_CM_256_HMAC_SHA1_80';
+  readonly srtpKey: Buffer;
+  readonly srtpSalt: Buffer;
+}
+
+export interface NegotiatedLiveVideo {
+  readonly width: number;
+  readonly height: number;
+  readonly fps: number;
+  readonly maxBitRate: number;
+  readonly profile: 'baseline' | 'main' | 'high';
+  readonly level: '3.1' | '3.2' | '4.0';
+  readonly payloadType: number;
+  readonly ssrc: number;
+  readonly mtu: number;
+  readonly rtcpInterval: number;
+}
+
+export interface PreparedLiveMedia {
+  readonly videoPort: number;
+  readonly audioPort?: number;
+  start(
+    source: { live(): Promise<LiveStreamHandle> },
+    negotiated: {
+      video: NegotiatedLiveVideo;
+      audio?: {
+        codec: 'AAC-eld';
+        channels: number;
+        sampleRate: 16 | 24;
+        maxBitRate: number;
+        payloadType: number;
+        ssrc: number;
+      };
+    },
+  ): Promise<void>;
+  reconfigure(video: NegotiatedLiveVideo): void;
+  stop(): void;
+}
+
+/** Camera-owned media adaptation requested without exposing its concrete FFmpeg implementation. */
+export interface LiveMediaAdapter {
+  prepare(transport: {
+    addressVersion: 'ipv4' | 'ipv6';
+    targetAddress: string;
+    video: LiveMediaTarget;
+    audio?: LiveMediaTarget;
+    onVideoFailure?(): void;
+  }): Promise<PreparedLiveMedia>;
 }
 
 /** An allowlisted capability condition emitted without physical-device identity. */
@@ -40,6 +98,8 @@ export interface AdapterAttachmentContext {
   readonly evidence: ReadonlyMap<string, DeviceMemberEvidence>;
   readonly accessory: PlatformAccessory;
   readonly hap: HomeKitDefinitions;
+  readonly liveMedia?: LiveMediaAdapter;
+  readonly audioEnabled?: boolean;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;
   persist(): void;

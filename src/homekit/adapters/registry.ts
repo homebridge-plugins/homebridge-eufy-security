@@ -1,5 +1,6 @@
 import { BATTERY_ADAPTER, BATTERY_ADAPTER_KEY } from './battery.js';
 import { CAMERA_CONTROLS_ADAPTER, CAMERA_CONTROLS_ADAPTER_KEY } from './camera-controls.js';
+import { CAMERA_STREAMING_ADAPTER, CAMERA_STREAMING_ADAPTER_KEY } from './camera-streaming.js';
 import { CONTACT_ADAPTER, CONTACT_ADAPTER_KEY } from './contact.js';
 import { DOORBELL_ADAPTER, DOORBELL_ADAPTER_KEY } from './doorbell.js';
 import { INFORMATION_ADAPTER, INFORMATION_ADAPTER_KEY } from './information.js';
@@ -12,6 +13,7 @@ import type { HomeKitAdapter } from '../adapter.js';
 
 export { BATTERY_ADAPTER_KEY } from './battery.js';
 export { CAMERA_CONTROLS_ADAPTER_KEY } from './camera-controls.js';
+export { CAMERA_STREAMING_ADAPTER_KEY } from './camera-streaming.js';
 export { CONTACT_ADAPTER_KEY } from './contact.js';
 export { DOORBELL_ADAPTER_KEY } from './doorbell.js';
 export { INFORMATION_ADAPTER_KEY } from './information.js';
@@ -25,6 +27,7 @@ export { SMART_LIGHT_ADAPTER_KEY } from './smart-light.js';
 export const ADAPTER_REGISTRY = {
   [BATTERY_ADAPTER_KEY]: BATTERY_ADAPTER,
   [CAMERA_CONTROLS_ADAPTER_KEY]: CAMERA_CONTROLS_ADAPTER,
+  [CAMERA_STREAMING_ADAPTER_KEY]: CAMERA_STREAMING_ADAPTER,
   [CONTACT_ADAPTER_KEY]: CONTACT_ADAPTER,
   [DOORBELL_ADAPTER_KEY]: DOORBELL_ADAPTER,
   [INFORMATION_ADAPTER_KEY]: INFORMATION_ADAPTER,
