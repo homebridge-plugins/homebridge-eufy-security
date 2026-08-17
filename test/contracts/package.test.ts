@@ -91,6 +91,16 @@ async function renderUi(
   const diagnosticsDirectPanel = { hidden: true };
   const diagnosticsDirectChoose = interactiveElement({});
   const diagnosticsDirectBack = interactiveElement({});
+  const diagnosticsFrequency = { hidden: true };
+  const diagnosticsFrequencyHeading = {
+    focused: false,
+    focus() {
+      this.focused = true;
+    },
+  };
+  const diagnosticsFrequencyNow = interactiveElement({});
+  const diagnosticsFrequencyIntermittent = interactiveElement({});
+  const diagnosticsFrequencyBack = interactiveElement({});
   const diagnosticsMatch = { hidden: true };
   const diagnosticsReject = interactiveElement({});
   const diagnosticsProfile = interactiveElement({ disabled: false, value: 'startup-authentication', focus() {} });
@@ -99,7 +109,6 @@ async function renderUi(
   const diagnosticsStatus = { textContent: '' };
   const diagnosticsIssue = { hidden: true, href: '' };
   const diagnosticsResult = { hidden: true };
-  const diagnosticsSteps = { dataset: {} as Record<string, string> };
   const diagnosticsActions = { hidden: true };
   const diagnosticsGuidanceTitle = {
     focused: false,
@@ -108,7 +117,7 @@ async function renderUi(
       this.focused = true;
     },
   };
-  const diagnosticsGuidanceSummary = { textContent: '' };
+  const diagnosticsModeSummary = { textContent: '' };
   const diagnosticsGuidance = {
     focused: false,
     hidden: true,
@@ -120,7 +129,6 @@ async function renderUi(
   const diagnosticsGuidanceBeforeSection = { hidden: false };
   const diagnosticsGuidanceBefore = { textContent: '' };
   const diagnosticsGuidanceAction = { textContent: '' };
-  const diagnosticsCase = { hidden: true, textContent: '' };
   const diagnosticsReview = interactiveElement({ disabled: false, hidden: true });
   const diagnosticsManifest = {
     hidden: true,
@@ -142,6 +150,7 @@ async function renderUi(
     },
   };
   const diagnosticsStartAnother = interactiveElement({});
+  const diagnosticsBackgroundAction = interactiveElement({ disabled: false, hidden: true });
   const advancedPanel = { hidden: true, scrollIntoView() {} };
   const advancedClose = interactiveElement({ focus() {} });
   const advancedPolling = interactiveElement({
@@ -160,12 +169,15 @@ async function renderUi(
   let saves = 0;
   let saveButtonDisables = 0;
   let saveButtonEnables = 0;
+  let diagnosticsReproductionMode = 'now';
+  let diagnosticsSelectedProfile = 'control-state';
   const translatedNodes = translationKeys.map((key) => ({ dataset: { i18n: key }, textContent: '__untranslated__' }));
   const translatedLabels = [
     'accountConnectionLabel',
     'closeAdvanced',
     'closeDiagnostics',
     'dashboardActionsLabel',
+    'diagnosticsBackgroundIssueVisible',
     'menuAdvanced',
     'menuDiagnostics',
     'menuRelogin',
@@ -225,6 +237,11 @@ async function renderUi(
           '[data-diagnostics-direct-panel]': diagnosticsDirectPanel,
           '[data-diagnostics-direct-choose]': diagnosticsDirectChoose,
           '[data-diagnostics-direct-back]': diagnosticsDirectBack,
+          '[data-diagnostics-frequency]': diagnosticsFrequency,
+          '#diagnostics-frequency-heading': diagnosticsFrequencyHeading,
+          '[data-diagnostics-frequency-answer="now"]': diagnosticsFrequencyNow,
+          '[data-diagnostics-frequency-answer="intermittent"]': diagnosticsFrequencyIntermittent,
+          '[data-diagnostics-frequency-back]': diagnosticsFrequencyBack,
           '[data-diagnostics-match]': diagnosticsMatch,
           '[data-diagnostics-reject]': diagnosticsReject,
           '[data-diagnostics-profile]': diagnosticsProfile,
@@ -233,16 +250,14 @@ async function renderUi(
           '[data-diagnostics-status]': diagnosticsStatus,
           '[data-diagnostics-issue]': diagnosticsIssue,
           '[data-diagnostics-result]': diagnosticsResult,
-          '[data-diagnostics-steps]': diagnosticsSteps,
           '[data-diagnostics-actions]': diagnosticsActions,
           '[data-diagnostics-guidance-title]': diagnosticsGuidanceTitle,
-          '[data-diagnostics-guidance-summary]': diagnosticsGuidanceSummary,
+          '[data-diagnostics-mode-summary]': diagnosticsModeSummary,
           '[data-diagnostics-guidance]': diagnosticsGuidance,
           '[data-diagnostics-phase-title]': diagnosticsPhaseTitle,
           '[data-diagnostics-guidance-before-section]': diagnosticsGuidanceBeforeSection,
           '[data-diagnostics-guidance-before]': diagnosticsGuidanceBefore,
           '[data-diagnostics-guidance-action]': diagnosticsGuidanceAction,
-          '[data-diagnostics-case]': diagnosticsCase,
           '[data-diagnostics-review]': diagnosticsReview,
           '[data-diagnostics-manifest]': diagnosticsManifest,
           '[data-diagnostics-review-confirm]': diagnosticsReviewConfirm,
@@ -250,6 +265,7 @@ async function renderUi(
           '[data-diagnostics-export]': diagnosticsExport,
           '[data-diagnostics-result-heading]': diagnosticsResultHeading,
           '[data-diagnostics-start-another]': diagnosticsStartAnother,
+          '[data-diagnostics-background-action]': diagnosticsBackgroundAction,
           '[data-advanced-settings]': advancedPanel,
           '[data-advanced-close]': advancedClose,
           '[data-advanced-polling]': advancedPolling,
@@ -300,9 +316,32 @@ async function renderUi(
         if (path === '/auth/start') return authenticationStart;
         if (path === '/dashboard') return dashboardSnapshot;
         if (path === '/diagnostics/authorize') {
+          const payload = body as { profile?: unknown; reproductionMode?: unknown };
+          const fields =
+            body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body).sort().join(',') : '';
+          const profiles = new Set([
+            'startup-authentication',
+            'device-representation',
+            'control-state',
+            'live-media',
+            'hksv-recording',
+            'dashboard-ui',
+            'other',
+          ]);
+          const mode = fields === 'profile' ? 'now' : payload?.reproductionMode;
+          if (
+            (fields !== 'profile' && fields !== 'profile,reproductionMode') ||
+            !profiles.has(String(payload?.profile)) ||
+            !['now', 'intermittent'].includes(String(mode))
+          ) {
+            throw new Error('Invalid diagnostics request');
+          }
+          diagnosticsReproductionMode = String(mode);
+          diagnosticsSelectedProfile = String(payload.profile);
           return {
             status: 'authorized',
-            profile: (body as { profile?: string })?.profile,
+            profile: diagnosticsSelectedProfile,
+            reproductionMode: diagnosticsReproductionMode,
             supportCaseId: 'support-00000000-0000-4000-8000-000000000001',
             expiresAt: '2026-08-20T10:18:42.832Z',
             missingEvidence: [],
@@ -312,7 +351,8 @@ async function renderUi(
         if (path === '/diagnostics/reproduction/start') {
           return {
             status: 'reproducing',
-            profile: 'control-state',
+            profile: diagnosticsSelectedProfile,
+            reproductionMode: diagnosticsReproductionMode,
             missingEvidence: [],
             partialExportAvailable: false,
           };
@@ -320,7 +360,8 @@ async function renderUi(
         if (path === '/diagnostics/reproduction/end') {
           return {
             status: 'complete',
-            profile: 'control-state',
+            profile: diagnosticsSelectedProfile,
+            reproductionMode: diagnosticsReproductionMode,
             missingEvidence: [],
             partialExportAvailable: true,
             issueUrl: 'https://example.invalid/issue',
@@ -333,6 +374,7 @@ async function renderUi(
               archiveFormat: 'synthetic',
               version: 1,
               keyId: 'synthetic-key',
+              reproductionMode: diagnosticsReproductionMode,
               archiveExpiresAt: '2026-08-20T10:18:42.832Z',
               evidence: [
                 {
@@ -347,6 +389,7 @@ async function renderUi(
             },
           };
         }
+        if (path === '/diagnostics/ui-event') return undefined;
         if (path === '/diagnostics/archive/export') {
           return {
             archive: 'c3ludGhldGlj',
@@ -402,6 +445,11 @@ async function renderUi(
     diagnosticsDirectPanel,
     diagnosticsDirectChoose,
     diagnosticsDirectBack,
+    diagnosticsFrequency,
+    diagnosticsFrequencyHeading,
+    diagnosticsFrequencyNow,
+    diagnosticsFrequencyIntermittent,
+    diagnosticsFrequencyBack,
     diagnosticsMatch,
     diagnosticsReject,
     diagnosticsProfile,
@@ -411,7 +459,7 @@ async function renderUi(
     diagnosticsIssue,
     diagnosticsResult,
     diagnosticsActions,
-    diagnosticsGuidanceSummary,
+    diagnosticsModeSummary,
     diagnosticsGuidanceTitle,
     diagnosticsGuidance,
     diagnosticsPhaseTitle,
@@ -425,7 +473,7 @@ async function renderUi(
     diagnosticsExport,
     diagnosticsResultHeading,
     diagnosticsStartAnother,
-    diagnosticsSteps,
+    diagnosticsBackgroundAction,
     advancedPanel,
     advancedClose,
     advancedPolling,
@@ -506,7 +554,6 @@ describe('packed plugin', () => {
       execFileSync('tar', ['-xzf', join(directory, result.filename), '-C', directory]);
 
       const entryPoint = pathToFileURL(join(directory, 'package', 'dist', 'index.js'));
-      const plugin = (await import(entryPoint.href)) as { default: unknown };
       const packageDirectory = join(directory, 'package');
       const packedPackage = JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as {
         name: string;
@@ -534,7 +581,7 @@ describe('packed plugin', () => {
       const logos = ['logo.svg', 'logo-dark.svg'].map((file) =>
         readFileSync(join(packageDirectory, 'homebridge-ui', 'public', 'assets', file), 'utf8'),
       );
-      const darkTheme = stylesheet.match(/\.shell\[data-theme="dark"\] \{(?<declarations>[^}]+)\}/)?.groups
+      const darkTheme = stylesheet.match(/\.shell\[data-theme=['"]dark['"]\] \{(?<declarations>[^}]+)\}/)?.groups
         ?.declarations;
       const translationKeys = [
         ...new Set([...document.matchAll(/data-i18n="([^"]+)"/g)].map((match) => match[1])),
@@ -549,7 +596,6 @@ describe('packed plugin', () => {
       const deviceArtworkFiles = uiFiles.filter((path) => path.startsWith('homebridge-ui/public/assets/devices/'));
       const uiShellFiles = uiFiles.filter((path) => !path.startsWith('homebridge-ui/public/assets/devices/'));
 
-      expect(plugin.default).toBeTypeOf('function');
       expect(packedPackage.name).toBe('@homebridge-plugins/homebridge-eufy-security');
       expect(schema.customUi).toBe(true);
       expect(result.files.map((file) => file.path)).toContain('dist/ui/server.js');
@@ -572,8 +618,8 @@ describe('packed plugin', () => {
         'homebridge-ui/public/index.html',
         'homebridge-ui/public/js/app.js',
         'homebridge-ui/public/js/dashboard.js',
-        'homebridge-ui/public/js/profile-wizard.js',
         'homebridge-ui/public/js/legacy-settings.js',
+        'homebridge-ui/public/js/profile-wizard.js',
         'homebridge-ui/server.js',
       ]);
       expect(deviceArtworkFiles).toHaveLength(153);
@@ -601,6 +647,8 @@ describe('packed plugin', () => {
       expect(document).toContain('data-diagnostics-manifest');
       expect(document).toContain('data-diagnostics-review-confirm');
       expect(document).toContain('data-diagnostics-export');
+      expect(document).not.toContain('diagnostics-steps');
+      expect(document).not.toContain('data-diagnostics-case');
       expect(document).not.toContain('homebridge-eufy-security/issues/1010');
       expect(script).toContain("'/diagnostics/archive/review'");
       expect(script).toContain("'/diagnostics/archive/export'");
@@ -643,11 +691,13 @@ describe('packed plugin', () => {
           'continueAuthentication',
           'countryLabel',
           'devicesEyebrow',
+          'diagnosticsActionLabel',
           'diagnosticsArchiveExport',
           'diagnosticsArchiveReview',
           'diagnosticsArchiveReviewConfirm',
           'diagnosticsArchiveReviewIntro',
           'diagnosticsBackToQuestions',
+          'diagnosticsBeforeLabel',
           'diagnosticsBestMatch',
           'diagnosticsChooseDirectly',
           'diagnosticsEvidenceReady',
@@ -663,12 +713,11 @@ describe('packed plugin', () => {
           'diagnosticsProfileRecording',
           'diagnosticsProfileStartup',
           'diagnosticsPrivacy',
-          'diagnosticsStartMatch',
+          'diagnosticsFrequencyBack',
+          'diagnosticsQuestionReproduceNow',
+          'diagnosticsStartCollection',
+          'diagnosticsChangeAnswers',
           'diagnosticsStartAnother',
-          'diagnosticsStartReproduction',
-          'diagnosticsStepChoose',
-          'diagnosticsStepReproduce',
-          'diagnosticsStepReview',
           'diagnosticsTitle',
           'diagnosticsUseProfile',
           'diagnosticsYes',
@@ -692,6 +741,7 @@ describe('packed plugin', () => {
         'closeAdvanced',
         'closeDiagnostics',
         'dashboardActionsLabel',
+        'diagnosticsBackgroundIssueVisible',
         'menuAdvanced',
         'menuDiagnostics',
         'menuRelogin',
@@ -738,13 +788,12 @@ describe('packed plugin', () => {
         'diagnosticOnly',
         'diagnosticsAuthorized',
         'diagnosticsAuthorize',
-        'diagnosticsActionLabel',
         'diagnosticsArchiveExcluded',
         'diagnosticsArchiveExpires',
         'diagnosticsArchiveFields',
+        'diagnosticsArchiveMode',
         'diagnosticsArchiveTruncated',
-        'diagnosticsBeforeLabel',
-        'diagnosticsCase',
+        'diagnosticsBackgroundActive',
         'diagnosticsComplete',
         'diagnosticsControlAction',
         'diagnosticsControlBefore',
@@ -759,10 +808,21 @@ describe('packed plugin', () => {
         'diagnosticsExpired',
         'diagnosticsFailed',
         'diagnosticsInactive',
+        'diagnosticsIntermittentAuthorized',
+        'diagnosticsIntermittentIssueHappened',
+        'diagnosticsIntermittentReadyGuidance',
+        'diagnosticsIntermittentReproducing',
+        'diagnosticsIntermittentStartWaiting',
+        'diagnosticsIntermittentWaitingGuidance',
         'diagnosticsLiveAction',
         'diagnosticsLiveBefore',
         'diagnosticsLiveSummary',
         'diagnosticsMissingEvidence',
+        'diagnosticsModeIntermittent',
+        'diagnosticsModeIntermittentSummary',
+        'diagnosticsModeNow',
+        'diagnosticsModeNowSummary',
+        'diagnosticsNowFinish',
         'diagnosticsOtherAction',
         'diagnosticsOtherBefore',
         'diagnosticsOtherSummary',
@@ -778,6 +838,7 @@ describe('packed plugin', () => {
         'diagnosticsRecordingBefore',
         'diagnosticsRecordingSummary',
         'diagnosticsReproducing',
+        'diagnosticsStartReproduction',
         'diagnosticsStartupAction',
         'diagnosticsStartupBefore',
         'diagnosticsStartupSummary',
@@ -851,6 +912,7 @@ describe('packed plugin', () => {
         closeAdvanced: 'Retour aux appareils',
         closeDiagnostics: 'Retour aux appareils',
         dashboardActionsLabel: 'Actions du tableau de bord',
+        diagnosticsBackgroundIssueVisible: 'Le problème d’interface est visible maintenant',
         menuAdvanced: 'Réglages avancés',
         menuDiagnostics: 'Diagnostics de débogage',
         menuRelogin: 'Se reconnecter ou remplacer le compte',
@@ -888,15 +950,15 @@ describe('packed plugin', () => {
         diagnosticsPanel: { hidden: false },
         diagnosticsIssue: { hidden: true },
         diagnosticsResult: { hidden: true },
-        diagnosticsSteps: { dataset: { phase: 'choose' } },
         diagnosticsQuestion: { hidden: false },
-        diagnosticsQuestionText: { textContent: catalogs['i18n/en.json'].diagnosticsQuestionStartup },
+        diagnosticsQuestionText: { textContent: catalogs['i18n/en.json'].diagnosticsQuestionDashboard },
         diagnosticsDirectPanel: { hidden: true },
+        diagnosticsFrequency: { hidden: true },
         diagnosticsMatch: { hidden: true },
         diagnosticsActions: { hidden: true },
       });
       await menuUi.diagnosticsNo.dispatch('click');
-      expect(menuUi.diagnosticsQuestionText.textContent).toBe(catalogs['i18n/en.json'].diagnosticsQuestionDevices);
+      expect(menuUi.diagnosticsQuestionText.textContent).toBe(catalogs['i18n/en.json'].diagnosticsQuestionStartup);
       expect(menuUi.diagnosticsQuestionText.focused).toBe(true);
       await menuUi.diagnosticsDirect.dispatch('click');
       expect(menuUi).toMatchObject({
@@ -907,32 +969,49 @@ describe('packed plugin', () => {
       await menuUi.diagnosticsDirectChoose.dispatch('click');
       expect(menuUi).toMatchObject({
         diagnosticsDirectPanel: { hidden: true },
+        diagnosticsFrequency: { hidden: false },
+        diagnosticsFrequencyHeading: { focused: true },
+        diagnosticsMatch: { hidden: true },
+      });
+      await menuUi.diagnosticsFrequencyIntermittent.dispatch('click');
+      expect(menuUi).toMatchObject({
+        diagnosticsFrequency: { hidden: true },
         diagnosticsMatch: { hidden: false },
         diagnosticsGuidanceTitle: { textContent: catalogs['i18n/en.json'].diagnosticsProfileControl },
-        diagnosticsGuidanceSummary: { textContent: catalogs['i18n/en.json'].diagnosticsControlSummary },
+        diagnosticsModeSummary: { textContent: catalogs['i18n/en.json'].diagnosticsModeIntermittentSummary },
       });
       expect(menuUi.diagnosticsGuidanceTitle.focused).toBe(true);
       await menuUi.diagnosticsReject.dispatch('click');
       expect(menuUi.diagnosticsDirectPanel.hidden).toBe(false);
       menuUi.diagnosticsProfile.value = 'control-state';
       await menuUi.diagnosticsDirectChoose.dispatch('click');
+      await menuUi.diagnosticsFrequencyIntermittent.dispatch('click');
       await menuUi.diagnosticsAuthorize.dispatch('click');
       expect(menuUi.requests).toContainEqual({
         path: '/diagnostics/authorize',
-        body: { profile: 'control-state' },
+        body: { profile: 'control-state', reproductionMode: 'intermittent' },
       });
       expect(menuUi).toMatchObject({
         diagnosticsWizardPanel: { hidden: true },
         diagnosticsGuidance: { focused: true, hidden: false },
-        diagnosticsGuidanceBeforeSection: { hidden: false },
-        diagnosticsGuidanceBefore: { textContent: catalogs['i18n/en.json'].diagnosticsControlBefore },
-        diagnosticsGuidanceAction: { textContent: catalogs['i18n/en.json'].diagnosticsControlAction },
+        diagnosticsGuidanceBeforeSection: { hidden: true },
+        diagnosticsGuidanceAction: {
+          textContent: catalogs['i18n/en.json'].diagnosticsIntermittentReadyGuidance,
+        },
         diagnosticsActions: { hidden: false },
+        diagnosticsReproduction: {
+          textContent: catalogs['i18n/en.json'].diagnosticsIntermittentStartWaiting,
+        },
       });
       await menuUi.diagnosticsReproduction.dispatch('click');
       expect(menuUi).toMatchObject({
         diagnosticsGuidanceBeforeSection: { hidden: true },
-        diagnosticsReproduction: { textContent: catalogs['i18n/en.json'].diagnosticsEndReproduction },
+        diagnosticsGuidanceAction: {
+          textContent: catalogs['i18n/en.json'].diagnosticsIntermittentWaitingGuidance,
+        },
+        diagnosticsReproduction: {
+          textContent: catalogs['i18n/en.json'].diagnosticsIntermittentIssueHappened,
+        },
       });
       await menuUi.diagnosticsReproduction.dispatch('click');
       expect(menuUi).toMatchObject({
@@ -966,6 +1045,130 @@ describe('packed plugin', () => {
       await menuUi.advancedClose.dispatch('click');
       expect(menuUi.advancedPanel.hidden).toBe(true);
 
+      const nowDiagnosticsUi = await renderUi(
+        script,
+        [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        undefined,
+        {
+          status: 'authorized',
+          profile: 'control-state',
+          reproductionMode: 'now',
+          missingEvidence: [],
+          partialExportAvailable: false,
+        },
+      );
+      expect(nowDiagnosticsUi).toMatchObject({
+        diagnosticsGuidance: { hidden: false },
+        diagnosticsGuidanceBeforeSection: { hidden: false },
+        diagnosticsGuidanceBefore: { textContent: catalogs['i18n/en.json'].diagnosticsControlBefore },
+        diagnosticsGuidanceAction: { textContent: catalogs['i18n/en.json'].diagnosticsControlAction },
+        diagnosticsReproduction: { textContent: catalogs['i18n/en.json'].diagnosticsStartCollection },
+      });
+
+      const waitingDiagnosticsUi = await renderUi(
+        script,
+        [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        undefined,
+        {
+          status: 'reproducing',
+          profile: 'live-media',
+          reproductionMode: 'intermittent',
+          missingEvidence: [],
+          partialExportAvailable: false,
+        },
+      );
+      expect(waitingDiagnosticsUi).toMatchObject({
+        diagnosticsGuidance: { hidden: false },
+        diagnosticsGuidanceBeforeSection: { hidden: true },
+        diagnosticsGuidanceAction: {
+          textContent: catalogs['i18n/en.json'].diagnosticsIntermittentWaitingGuidance,
+        },
+        diagnosticsReproduction: {
+          textContent: catalogs['i18n/en.json'].diagnosticsIntermittentIssueHappened,
+        },
+      });
+
+      const dashboardBackgroundUi = await renderUi(
+        script,
+        [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
+        catalogs,
+      );
+      await dashboardBackgroundUi.menuDiagnostics.dispatch('click');
+      await dashboardBackgroundUi.diagnosticsDirect.dispatch('click');
+      dashboardBackgroundUi.diagnosticsProfile.value = 'dashboard-ui';
+      await dashboardBackgroundUi.diagnosticsDirectChoose.dispatch('click');
+      await dashboardBackgroundUi.diagnosticsFrequencyNow.dispatch('click');
+      await dashboardBackgroundUi.diagnosticsAuthorize.dispatch('click');
+      await dashboardBackgroundUi.diagnosticsReproduction.dispatch('click');
+      expect(dashboardBackgroundUi).toMatchObject({
+        diagnosticsPanel: { hidden: true },
+        diagnosticsBackgroundAction: { hidden: false },
+        diagnosticsGuidance: { hidden: true },
+        diagnosticsActions: { hidden: true },
+        dashboardState: { hidden: false },
+      });
+      expect(dashboardBackgroundUi.requests).toContainEqual({
+        path: '/diagnostics/ui-event',
+        body: { event: 'background-started' },
+      });
+      expect(dashboardBackgroundUi.requests).toContainEqual({
+        path: '/diagnostics/ui-event',
+        body: { event: 'dashboard-opened' },
+      });
+      await dashboardBackgroundUi.dashboardAuthenticate.dispatch('click');
+      expect(dashboardBackgroundUi).toMatchObject({
+        dashboard: { hidden: true },
+        diagnosticsBackgroundAction: { hidden: false },
+        setupContent: { hidden: false },
+      });
+      expect(dashboardBackgroundUi.requests).toContainEqual({
+        path: '/diagnostics/ui-event',
+        body: { event: 'authentication-opened' },
+      });
+      await dashboardBackgroundUi.diagnosticsBackgroundAction.dispatch('click');
+      expect(dashboardBackgroundUi.requests).toContainEqual({
+        path: '/diagnostics/ui-event',
+        body: { event: 'issue-observed' },
+      });
+      expect(dashboardBackgroundUi).toMatchObject({
+        dashboard: { hidden: false },
+        diagnosticsPanel: { hidden: false },
+        diagnosticsBackgroundAction: { disabled: false, hidden: true },
+        diagnosticsResult: { hidden: false },
+        diagnosticsResultHeading: { focused: true },
+        setupContent: { hidden: true },
+      });
+
+      const reloadedDashboardBackgroundUi = await renderUi(
+        script,
+        [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        undefined,
+        {
+          status: 'reproducing',
+          profile: 'dashboard-ui',
+          reproductionMode: 'intermittent',
+          missingEvidence: [],
+          partialExportAvailable: false,
+        },
+      );
+      expect(reloadedDashboardBackgroundUi).toMatchObject({
+        diagnosticsBackgroundAction: { hidden: false },
+        diagnosticsGuidance: { hidden: true },
+        diagnosticsActions: { hidden: true },
+      });
+
       const completedDiagnosticsUi = await renderUi(
         script,
         [{ platform: 'HomebridgeEufy', username: 'guest@example.invalid' }],
@@ -978,6 +1181,7 @@ describe('packed plugin', () => {
           status: 'complete',
           supportCaseId: 'support-00000000-0000-4000-8000-000000000000',
           profile: 'startup-authentication',
+          reproductionMode: 'now',
           expiresAt: '2026-08-19T10:18:42.832Z',
           selectedEvidence: ['plugin-log', 'sdk-log'],
           missingEvidence: [],
@@ -986,7 +1190,6 @@ describe('packed plugin', () => {
         },
       );
       expect(completedDiagnosticsUi).toMatchObject({
-        diagnosticsSteps: { dataset: { phase: 'review' } },
         diagnosticsIssue: { hidden: false, href: 'https://example.invalid/issue' },
         diagnosticsResult: { hidden: false },
         diagnosticsWizardPanel: { hidden: true },
@@ -1019,14 +1222,12 @@ describe('packed plugin', () => {
         diagnosticsWizardPanel: { hidden: false },
         diagnosticsQuestion: { hidden: false },
         diagnosticsQuestionText: { focused: true },
-        diagnosticsSteps: { dataset: { phase: 'choose' } },
       });
       await completedDiagnosticsUi.diagnosticsClose.dispatch('click');
       await completedDiagnosticsUi.menuDiagnostics.dispatch('click');
       expect(completedDiagnosticsUi).toMatchObject({
         diagnosticsResult: { hidden: false },
         diagnosticsWizardPanel: { hidden: true },
-        diagnosticsSteps: { dataset: { phase: 'review' } },
       });
 
       const expiredCompletedDiagnosticsUi = await renderUi(
@@ -1048,7 +1249,6 @@ describe('packed plugin', () => {
       expect(expiredCompletedDiagnosticsUi).toMatchObject({
         diagnosticsResult: { hidden: false },
         diagnosticsWizardPanel: { hidden: true },
-        diagnosticsSteps: { dataset: { phase: 'review' } },
       });
 
       englishUi.account.value = 'guest@example.invalid';
@@ -1296,6 +1496,8 @@ describe('packed plugin', () => {
         firstSetup: { hidden: false },
         shell: { lang: 'en' },
       });
+      const plugin = (await import(entryPoint.href)) as { default: unknown };
+      expect(plugin.default).toBeTypeOf('function');
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

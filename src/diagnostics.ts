@@ -37,6 +37,8 @@ const MAX_TOTAL_LOG_BYTES = 200 * 1024 * 1024;
 const MAX_QUEUED_LOG_BYTES = 1024 * 1024;
 const MAX_SUPPORT_ARCHIVE_LOG_BYTES = 16 * 1024 * 1024;
 const MAX_SUPPORT_ARCHIVE_MARKER_BYTES = 1024 * 1024;
+const MAX_UI_EVENTS_BYTES = 64 * 1024;
+const MAX_PENDING_UI_EVENTS = 8;
 const SUPPORT_ARCHIVE_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const LOG_ROTATIONS = 3;
 const LOG_DIRECTORY = 'logs';
@@ -44,6 +46,7 @@ const LOG_FILE = 'homebridge-eufy.jsonl';
 const DIAGNOSTICS_DIRECTORY = 'diagnostics';
 const GUIDED_SESSION_FILE = 'session.json';
 const REPRODUCTION_MARKERS_FILE = 'reproduction-markers.jsonl';
+const UI_EVENTS_FILE = 'ui-events.jsonl';
 const DEBUG_AUTHORIZATION_MS = 72 * 60 * 60 * 1_000;
 const gzip = promisify(gzipCallback);
 const gunzip = promisify(gunzipCallback);
@@ -82,6 +85,11 @@ export type DiagnosticsProfile =
   | 'dashboard-ui'
   | 'other';
 
+export type DiagnosticsReproductionMode = 'now' | 'intermittent';
+
+export type DiagnosticsUiEvent =
+  'background-started' | 'dashboard-opened' | 'authentication-opened' | 'request-failed' | 'issue-observed';
+
 export type DiagnosticEvidence = 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log' | 'ui-log';
 
 export interface SupportArchiveManifest {
@@ -90,6 +98,7 @@ export interface SupportArchiveManifest {
   keyId: string;
   supportCaseId: string;
   profile: DiagnosticsProfile;
+  reproductionMode: DiagnosticsReproductionMode;
   createdAt: string;
   archiveExpiresAt: string;
   reproductionStartedAt: string;
@@ -188,10 +197,29 @@ export function isDiagnosticsProfile(value: unknown): value is DiagnosticsProfil
   return typeof value === 'string' && Object.hasOwn(DIAGNOSTICS_PROFILES, value);
 }
 
+/** Narrows external reproduction-mode input to the diagnostics-owned modes. */
+export function isDiagnosticsReproductionMode(value: unknown): value is DiagnosticsReproductionMode {
+  return value === 'now' || value === 'intermittent';
+}
+
+const DIAGNOSTICS_UI_EVENTS: ReadonlySet<DiagnosticsUiEvent> = new Set([
+  'background-started',
+  'dashboard-opened',
+  'authentication-opened',
+  'request-failed',
+  'issue-observed',
+]);
+
+/** Narrows external event input to the diagnostics-owned UI vocabulary. */
+export function isDiagnosticsUiEvent(value: unknown): value is DiagnosticsUiEvent {
+  return typeof value === 'string' && DIAGNOSTICS_UI_EVENTS.has(value as DiagnosticsUiEvent);
+}
+
 interface PersistedDiagnosticsSession {
   version: 1;
   supportCaseId: string;
   profile: DiagnosticsProfile;
+  reproductionMode: DiagnosticsReproductionMode;
   authorizedAt: string;
   expiresAt: string;
   reproductionStartedAt?: string;
@@ -202,6 +230,7 @@ export interface GuidedDiagnosticsStatus {
   status: 'inactive' | 'authorized' | 'reproducing' | 'complete' | 'expired';
   supportCaseId?: string;
   profile?: DiagnosticsProfile;
+  reproductionMode?: DiagnosticsReproductionMode;
   selectedEvidence: readonly DiagnosticEvidence[];
   missingEvidence: readonly DiagnosticEvidence[];
   authorizedAt?: string;
@@ -221,18 +250,20 @@ function readDiagnosticsSession(storageRoot: string): PersistedDiagnosticsSessio
     const candidate = JSON.parse(
       readFileSync(diagnosticsSessionPath(storageRoot), 'utf8'),
     ) as Partial<PersistedDiagnosticsSession>;
+    const reproductionMode = candidate.reproductionMode ?? 'now';
     if (
       candidate.version !== 1 ||
       typeof candidate.supportCaseId !== 'string' ||
       !/^support-[0-9a-f-]{36}$/.test(candidate.supportCaseId) ||
       typeof candidate.profile !== 'string' ||
       !isDiagnosticsProfile(candidate.profile) ||
+      !isDiagnosticsReproductionMode(reproductionMode) ||
       typeof candidate.authorizedAt !== 'string' ||
       typeof candidate.expiresAt !== 'string'
     ) {
       return undefined;
     }
-    return candidate as PersistedDiagnosticsSession;
+    return { ...candidate, reproductionMode } as PersistedDiagnosticsSession;
   } catch {
     return undefined;
   }
@@ -257,6 +288,9 @@ function evidenceForEvent(event: Readonly<Record<string, unknown>>): DiagnosticE
 /** Owns persisted, user-authorized diagnostic evidence windows and identity-free reproduction markers. */
 export class GuidedDiagnostics {
   private pendingSupportArchive?: PendingSupportArchive;
+  private uiEventWrites = Promise.resolve();
+  private pendingUiEvents = 0;
+  private uiEventsClosing = false;
 
   constructor(
     private readonly storageRoot: string,
@@ -264,20 +298,34 @@ export class GuidedDiagnostics {
     private readonly supportArchiveKey: SupportArchiveKey = SUPPORT_ARCHIVE_KEY,
   ) {}
 
-  async authorize(profile: DiagnosticsProfile): Promise<GuidedDiagnosticsStatus> {
+  async authorize(
+    profile: DiagnosticsProfile,
+    reproductionMode: DiagnosticsReproductionMode,
+  ): Promise<GuidedDiagnosticsStatus> {
     if (!isDiagnosticsProfile(profile)) {
       throw new Error('Unknown diagnostics profile');
     }
-    const authorizedAt = this.now();
-    const session: PersistedDiagnosticsSession = {
-      version: 1,
-      supportCaseId: `support-${randomUUID()}`,
-      profile,
-      authorizedAt: new Date(authorizedAt).toISOString(),
-      expiresAt: new Date(authorizedAt + DEBUG_AUTHORIZATION_MS).toISOString(),
-    };
-    await this.writeSession(session);
-    return this.project(session);
+    if (!isDiagnosticsReproductionMode(reproductionMode)) {
+      throw new Error('Unknown diagnostics reproduction mode');
+    }
+    this.uiEventsClosing = true;
+    try {
+      await this.uiEventWrites;
+      const authorizedAt = this.now();
+      const session: PersistedDiagnosticsSession = {
+        version: 1,
+        supportCaseId: `support-${randomUUID()}`,
+        profile,
+        reproductionMode,
+        authorizedAt: new Date(authorizedAt).toISOString(),
+        expiresAt: new Date(authorizedAt + DEBUG_AUTHORIZATION_MS).toISOString(),
+      };
+      await this.writeSession(session);
+      this.pendingSupportArchive = undefined;
+      return this.project(session);
+    } finally {
+      this.uiEventsClosing = false;
+    }
   }
 
   async status(): Promise<GuidedDiagnosticsStatus> {
@@ -287,6 +335,14 @@ export class GuidedDiagnostics {
   async startReproduction(): Promise<GuidedDiagnosticsStatus> {
     const session = this.requireAuthorized();
     if (!session.reproductionStartedAt || session.reproductionEndedAt) {
+      if (session.reproductionEndedAt) {
+        session.supportCaseId = `support-${randomUUID()}`;
+        this.pendingSupportArchive = undefined;
+      }
+      if (session.profile === 'dashboard-ui') {
+        await this.uiEventWrites;
+        this.uiEventsClosing = false;
+      }
       session.reproductionStartedAt = new Date(this.now()).toISOString();
       delete session.reproductionEndedAt;
       await this.writeSession(session);
@@ -296,20 +352,95 @@ export class GuidedDiagnostics {
   }
 
   async endReproduction(): Promise<GuidedDiagnosticsStatus> {
-    const session = this.requireAuthorized();
+    let session = this.requireAuthorized();
     if (!session.reproductionStartedAt) {
       throw new Error('Reproduction has not started');
     }
-    if (!session.reproductionEndedAt) {
-      session.reproductionEndedAt = new Date(this.now()).toISOString();
-      await this.writeSession(session);
+    const closesUiEvents = session.profile === 'dashboard-ui';
+    if (closesUiEvents) {
+      this.uiEventsClosing = true;
     }
-    await this.ensureMarker(session, 'reproduction-ended', session.reproductionEndedAt);
-    return this.project(session);
+    try {
+      if (closesUiEvents) {
+        await this.uiEventWrites;
+        session = this.requireAuthorized();
+      }
+      if (!session.reproductionEndedAt) {
+        session.reproductionEndedAt = new Date(this.now()).toISOString();
+        await this.writeSession(session);
+      }
+      await this.ensureMarker(session, 'reproduction-ended', session.reproductionEndedAt);
+      return this.project(session);
+    } catch (error) {
+      if (closesUiEvents) this.uiEventsClosing = false;
+      throw error;
+    }
+  }
+
+  async recordUiEvent(event: DiagnosticsUiEvent): Promise<void> {
+    if (!isDiagnosticsUiEvent(event)) {
+      throw new Error('Unknown diagnostics UI event');
+    }
+    if (this.uiEventsClosing) {
+      throw new Error('Diagnostics UI events are closing');
+    }
+    if (this.pendingUiEvents >= MAX_PENDING_UI_EVENTS) {
+      throw new Error('Diagnostics UI event queue is full');
+    }
+    this.pendingUiEvents += 1;
+    const write = this.uiEventWrites.then(async () => {
+      const session = this.requireAuthorized();
+      if (session.profile !== 'dashboard-ui' || !session.reproductionStartedAt || session.reproductionEndedAt) {
+        throw new Error('An active dashboard reproduction is required');
+      }
+      const directory = join(this.storageRoot, DIAGNOSTICS_DIRECTORY);
+      const path = join(directory, UI_EVENTS_FILE);
+      await mkdir(directory, { mode: 0o700, recursive: true });
+      await chmod(directory, 0o700);
+      const record = `${JSON.stringify({
+        version: 1,
+        supportCaseId: session.supportCaseId,
+        timestamp: new Date(this.now()).toISOString(),
+        event,
+      })}\n`;
+      let currentBytes = 0;
+      try {
+        currentBytes = (await stat(path)).size;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (currentBytes + Buffer.byteLength(record) > MAX_UI_EVENTS_BYTES) {
+        const retained = await this.readFileTail(path, MAX_UI_EVENTS_BYTES - Buffer.byteLength(record));
+        await writeFile(path, `${retained}${record}`, { encoding: 'utf8', mode: 0o600 });
+      } else {
+        await appendFile(path, record, { encoding: 'utf8', mode: 0o600 });
+      }
+      await chmod(path, 0o600);
+      const observedPath = observedEvidencePath(this.storageRoot, session.supportCaseId, 'ui-log');
+      await mkdir(dirname(observedPath), { mode: 0o700, recursive: true });
+      await writeFile(
+        observedPath,
+        `${JSON.stringify({
+          version: 1,
+          supportCaseId: session.supportCaseId,
+          evidence: 'ui-log',
+          observedAt: new Date(this.now()).toISOString(),
+        })}\n`,
+        { mode: 0o600 },
+      );
+      await chmod(observedPath, 0o600);
+    });
+    this.uiEventWrites = write
+      .catch(() => undefined)
+      .finally(() => {
+        this.pendingUiEvents -= 1;
+      });
+    return write;
   }
 
   /** Prepares the exact manifest and evidence snapshot that one subsequent export may encrypt. */
   async reviewSupportArchive(): Promise<SupportArchiveReview> {
+    await this.uiEventWrites;
     const session = readDiagnosticsSession(this.storageRoot);
     if (!session?.reproductionStartedAt || !session.reproductionEndedAt) {
       throw new Error('A completed reproduction is required before archive review');
@@ -323,6 +454,7 @@ export class GuidedDiagnostics {
       keyId: this.supportArchiveKey.keyId,
       supportCaseId: session.supportCaseId,
       profile: session.profile,
+      reproductionMode: session.reproductionMode,
       createdAt: new Date(createdAt).toISOString(),
       archiveExpiresAt: new Date(createdAt + SUPPORT_ARCHIVE_RETENTION_MS).toISOString(),
       reproductionStartedAt: session.reproductionStartedAt,
@@ -435,6 +567,21 @@ export class GuidedDiagnostics {
         ],
       });
     }
+    const uiEvents = await this.readUiEvents(session);
+    if (uiEvents) {
+      evidence.push({
+        evidence: 'ui-log',
+        privacyClass: 'diagnostic',
+        contentType: 'application/x-ndjson',
+        content: uiEvents,
+        fields: [
+          { field: 'version', privacyClass: 'operational' },
+          { field: 'supportCaseId', privacyClass: 'pseudonymous' },
+          { field: 'timestamp', privacyClass: 'operational' },
+          { field: 'event', privacyClass: 'diagnostic' },
+        ],
+      });
+    }
     const log = await this.readReproductionLog(session.reproductionStartedAt!, session.reproductionEndedAt!);
     const scopes: Readonly<Record<Extract<DiagnosticEvidence, 'plugin-log' | 'sdk-log' | 'homekit-log'>, string>> = {
       'plugin-log': 'plugin',
@@ -464,6 +611,48 @@ export class GuidedDiagnostics {
       }
     }
     return evidence;
+  }
+
+  private async readUiEvents(session: PersistedDiagnosticsSession): Promise<string> {
+    try {
+      const path = join(this.storageRoot, DIAGNOSTICS_DIRECTORY, UI_EVENTS_FILE);
+      const startedAt = Date.parse(session.reproductionStartedAt!);
+      const endedAt = Date.parse(session.reproductionEndedAt!);
+      const records = (await this.readFileTail(path, MAX_UI_EVENTS_BYTES))
+        .trim()
+        .split('\n')
+        .flatMap((line) => {
+          try {
+            const candidate = JSON.parse(line) as Record<string, unknown>;
+            const timestamp = typeof candidate.timestamp === 'string' ? Date.parse(candidate.timestamp) : Number.NaN;
+            if (
+              Object.keys(candidate).sort().join(',') !== 'event,supportCaseId,timestamp,version' ||
+              candidate.version !== 1 ||
+              candidate.supportCaseId !== session.supportCaseId ||
+              !isDiagnosticsUiEvent(candidate.event) ||
+              !Number.isFinite(timestamp) ||
+              timestamp < startedAt ||
+              timestamp > endedAt
+            ) {
+              return [];
+            }
+            return [
+              JSON.stringify({
+                version: 1,
+                supportCaseId: candidate.supportCaseId,
+                timestamp: new Date(timestamp).toISOString(),
+                event: candidate.event,
+              }),
+            ];
+          } catch {
+            return [];
+          }
+        });
+      return records.length ? `${records.join('\n')}\n` : '';
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw error;
+    }
   }
 
   private async readReproductionMarkers(supportCaseId: string): Promise<string> {
@@ -588,12 +777,14 @@ export class GuidedDiagnostics {
     const issueBody = [
       `Support case: ${session.supportCaseId}`,
       `Profile: ${session.profile}`,
+      `Reproduction mode: ${session.reproductionMode}`,
       `Missing evidence: ${missingEvidence.length ? missingEvidence.join(', ') : 'none'}`,
     ].join('\n');
     return {
       status,
       supportCaseId: session.supportCaseId,
       profile: session.profile,
+      reproductionMode: session.reproductionMode,
       selectedEvidence,
       missingEvidence,
       authorizedAt: session.authorizedAt,

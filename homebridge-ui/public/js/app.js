@@ -40,6 +40,11 @@ const diagnosticsDirect = document.querySelector('[data-diagnostics-direct]');
 const diagnosticsDirectPanel = document.querySelector('[data-diagnostics-direct-panel]');
 const diagnosticsDirectChoose = document.querySelector('[data-diagnostics-direct-choose]');
 const diagnosticsDirectBack = document.querySelector('[data-diagnostics-direct-back]');
+const diagnosticsFrequency = document.querySelector('[data-diagnostics-frequency]');
+const diagnosticsFrequencyHeading = document.querySelector('#diagnostics-frequency-heading');
+const diagnosticsFrequencyNow = document.querySelector('[data-diagnostics-frequency-answer="now"]');
+const diagnosticsFrequencyIntermittent = document.querySelector('[data-diagnostics-frequency-answer="intermittent"]');
+const diagnosticsFrequencyBack = document.querySelector('[data-diagnostics-frequency-back]');
 const diagnosticsMatch = document.querySelector('[data-diagnostics-match]');
 const diagnosticsReject = document.querySelector('[data-diagnostics-reject]');
 const diagnosticsProfile = document.querySelector('[data-diagnostics-profile]');
@@ -48,16 +53,14 @@ const diagnosticsReproduction = document.querySelector('[data-diagnostics-reprod
 const diagnosticsStatus = document.querySelector('[data-diagnostics-status]');
 const diagnosticsIssue = document.querySelector('[data-diagnostics-issue]');
 const diagnosticsResult = document.querySelector('[data-diagnostics-result]');
-const diagnosticsSteps = document.querySelector('[data-diagnostics-steps]');
 const diagnosticsActions = document.querySelector('[data-diagnostics-actions]');
 const diagnosticsGuidanceTitle = document.querySelector('[data-diagnostics-guidance-title]');
-const diagnosticsGuidanceSummary = document.querySelector('[data-diagnostics-guidance-summary]');
+const diagnosticsModeSummary = document.querySelector('[data-diagnostics-mode-summary]');
 const diagnosticsGuidance = document.querySelector('[data-diagnostics-guidance]');
 const diagnosticsPhaseTitle = document.querySelector('[data-diagnostics-phase-title]');
 const diagnosticsGuidanceBeforeSection = document.querySelector('[data-diagnostics-guidance-before-section]');
 const diagnosticsGuidanceBefore = document.querySelector('[data-diagnostics-guidance-before]');
 const diagnosticsGuidanceAction = document.querySelector('[data-diagnostics-guidance-action]');
-const diagnosticsCase = document.querySelector('[data-diagnostics-case]');
 const diagnosticsReview = document.querySelector('[data-diagnostics-review]');
 const diagnosticsManifest = document.querySelector('[data-diagnostics-manifest]');
 const diagnosticsReviewConfirm = document.querySelector('[data-diagnostics-review-confirm]');
@@ -65,6 +68,7 @@ const diagnosticsReviewConfirmLabel = document.querySelector('[data-diagnostics-
 const diagnosticsExport = document.querySelector('[data-diagnostics-export]');
 const diagnosticsResultHeading = document.querySelector('[data-diagnostics-result-heading]');
 const diagnosticsStartAnother = document.querySelector('[data-diagnostics-start-another]');
+const diagnosticsBackgroundAction = document.querySelector('[data-diagnostics-background-action]');
 const advancedPanel = document.querySelector('[data-advanced-settings]');
 const advancedClose = document.querySelector('[data-advanced-close]');
 const advancedPolling = document.querySelector('[data-advanced-polling]');
@@ -104,6 +108,19 @@ function requestWithinDeadline(path, body, timeoutMs = 320000) {
     timer = setTimeout(() => reject(new Error('Request timed out')), timeoutMs);
   });
   return Promise.race([homebridge.request(path, body), timeout]).finally(() => clearTimeout(timer));
+}
+
+function isDashboardUiReproducing(state = diagnosticsState) {
+  return diagnosticsWizard.backgroundActive(state);
+}
+
+async function recordActiveUiEvent(event) {
+  if (!isDashboardUiReproducing()) return;
+  await requestWithinDeadline('/diagnostics/ui-event', { event }, 12000);
+}
+
+function recordActiveUiEventBestEffort(event) {
+  void recordActiveUiEvent(event).catch(() => undefined);
 }
 
 acknowledgement.addEventListener('change', () => {
@@ -200,7 +217,6 @@ const diagnosticsProfiles = {
 function renderDiagnosticsGuidance(profile) {
   const guidance = diagnosticsProfiles[profile] ?? diagnosticsProfiles.other;
   diagnosticsGuidanceTitle.textContent = messages[guidance.title] ?? '';
-  diagnosticsGuidanceSummary.textContent = messages[guidance.summary] ?? '';
   diagnosticsPhaseTitle.textContent = messages[guidance.title] ?? '';
   diagnosticsGuidanceBefore.textContent = messages[guidance.before] ?? '';
   diagnosticsGuidanceAction.textContent = messages[guidance.action] ?? '';
@@ -209,6 +225,7 @@ function renderDiagnosticsGuidance(profile) {
 function renderDiagnosticsWizard() {
   diagnosticsQuestion.hidden = diagnosticsWizardState.mode !== 'questions';
   diagnosticsDirectPanel.hidden = diagnosticsWizardState.mode !== 'direct';
+  diagnosticsFrequency.hidden = diagnosticsWizardState.mode !== 'frequency';
   diagnosticsMatch.hidden = diagnosticsWizardState.mode !== 'match';
   if (diagnosticsWizardState.mode === 'questions') {
     const question = diagnosticsWizard.questions[diagnosticsWizardState.questionIndex];
@@ -217,23 +234,36 @@ function renderDiagnosticsWizard() {
   if (diagnosticsWizardState.mode === 'match') {
     diagnosticsProfile.value = diagnosticsWizardState.profile;
     renderDiagnosticsGuidance(diagnosticsWizardState.profile);
+    diagnosticsModeSummary.textContent =
+      messages[
+        diagnosticsWizardState.reproductionMode === 'intermittent'
+          ? 'diagnosticsModeIntermittentSummary'
+          : 'diagnosticsModeNowSummary'
+      ] ?? '';
   }
 }
 
 function renderDiagnostics(state) {
   diagnosticsState = state;
   const screen = diagnosticsWizard.screen(state, diagnosticsStartingAnother);
-  const phase = screen === 'review' ? 'review' : screen === 'reproduce' ? 'reproduce' : 'choose';
-  diagnosticsSteps.dataset.phase = phase;
   const choosing = screen === 'choose';
   const reviewing = screen === 'review';
+  const reproductionMode = state.reproductionMode ?? 'now';
+  const dashboardBackground = isDashboardUiReproducing(state);
+  diagnosticsBackgroundAction.hidden = !dashboardBackground;
   diagnosticsWizardPanel.hidden = !choosing;
-  diagnosticsGuidance.hidden = screen !== 'reproduce';
+  diagnosticsGuidance.hidden = screen !== 'reproduce' || dashboardBackground;
   diagnosticsGuidanceBeforeSection.hidden = state.status === 'reproducing';
-  diagnosticsActions.hidden = screen !== 'reproduce';
+  diagnosticsActions.hidden = screen !== 'reproduce' || dashboardBackground;
   diagnosticsReproduction.disabled = !['authorized', 'reproducing'].includes(state.status);
   diagnosticsReproduction.textContent =
-    state.status === 'reproducing' ? messages.diagnosticsEndReproduction : messages.diagnosticsStartReproduction;
+    reproductionMode === 'intermittent'
+      ? state.status === 'reproducing'
+        ? messages.diagnosticsIntermittentIssueHappened
+        : messages.diagnosticsIntermittentStartWaiting
+      : state.status === 'reproducing'
+        ? messages.diagnosticsNowFinish
+        : messages.diagnosticsStartCollection;
   diagnosticsIssue.hidden = !reviewing;
   diagnosticsIssue.href = state.issueUrl ?? '';
   diagnosticsResult.hidden = !reviewing;
@@ -245,25 +275,34 @@ function renderDiagnostics(state) {
   diagnosticsExport.disabled = true;
   diagnosticsReviewId = '';
   if (state.profile) diagnosticsProfile.value = state.profile;
-  if (screen === 'reproduce') renderDiagnosticsGuidance(state.profile);
+  if (screen === 'reproduce') {
+    renderDiagnosticsGuidance(state.profile);
+    if (reproductionMode === 'intermittent') {
+      diagnosticsGuidanceBeforeSection.hidden = true;
+      diagnosticsGuidanceAction.textContent =
+        messages[
+          state.status === 'reproducing'
+            ? 'diagnosticsIntermittentWaitingGuidance'
+            : 'diagnosticsIntermittentReadyGuidance'
+        ] ?? '';
+    }
+  }
   if (choosing) renderDiagnosticsWizard();
-  diagnosticsCase.hidden = diagnosticsStartingAnother || !state.supportCaseId;
-  diagnosticsCase.textContent = state.supportCaseId
-    ? (messages.diagnosticsCase ?? '')
-        .replace('{caseId}', state.supportCaseId)
-        .replace('{expiresAt}', new Date(state.expiresAt).toLocaleString(shell.lang || 'en'))
-    : '';
-  const statusKey = reviewing
-    ? state.missingEvidence?.length
-      ? 'diagnosticsMissingEvidence'
-      : 'diagnosticsComplete'
-    : {
-        inactive: 'diagnosticsInactive',
-        authorized: 'diagnosticsAuthorized',
-        reproducing: 'diagnosticsReproducing',
-        complete: state.missingEvidence?.length ? 'diagnosticsMissingEvidence' : 'diagnosticsComplete',
-        expired: 'diagnosticsExpired',
-      }[state.status];
+  const statusKey = dashboardBackground
+    ? 'diagnosticsBackgroundActive'
+    : reviewing
+      ? state.missingEvidence?.length
+        ? 'diagnosticsMissingEvidence'
+        : 'diagnosticsComplete'
+      : {
+          inactive: 'diagnosticsInactive',
+          authorized:
+            reproductionMode === 'intermittent' ? 'diagnosticsIntermittentAuthorized' : 'diagnosticsAuthorized',
+          reproducing:
+            reproductionMode === 'intermittent' ? 'diagnosticsIntermittentReproducing' : 'diagnosticsReproducing',
+          complete: state.missingEvidence?.length ? 'diagnosticsMissingEvidence' : 'diagnosticsComplete',
+          expired: 'diagnosticsExpired',
+        }[state.status];
   diagnosticsStatus.textContent = (
     choosing && (state.status === 'inactive' || diagnosticsStartingAnother) ? '' : (messages[statusKey] ?? '')
   ).replace('{evidence}', state.missingEvidence?.join(', ') ?? '');
@@ -272,7 +311,10 @@ function renderDiagnostics(state) {
 function renderArchiveManifest(manifest) {
   diagnosticsManifest.replaceChildren();
   const summary = document.createElement('p');
-  summary.textContent = `${manifest.archiveFormat} v${manifest.version} · ${manifest.keyId} · ${(messages.diagnosticsArchiveExpires ?? '').replace('{expiresAt}', new Date(manifest.archiveExpiresAt).toLocaleString(shell.lang || 'en'))}`;
+  const mode =
+    messages[manifest.reproductionMode === 'intermittent' ? 'diagnosticsModeIntermittent' : 'diagnosticsModeNow'] ??
+    manifest.reproductionMode;
+  summary.textContent = `${manifest.archiveFormat} v${manifest.version} · ${manifest.keyId} · ${messages.diagnosticsArchiveMode ?? ''} ${mode} · ${(messages.diagnosticsArchiveExpires ?? '').replace('{expiresAt}', new Date(manifest.archiveExpiresAt).toLocaleString(shell.lang || 'en'))}`;
   const evidence = document.createElement('ul');
   for (const item of manifest.evidence ?? []) {
     const row = document.createElement('li');
@@ -342,7 +384,10 @@ diagnosticsAuthorize.addEventListener('click', async () => {
   try {
     const authorized = await requestWithinDeadline(
       '/diagnostics/authorize',
-      { profile: diagnosticsWizardState.profile },
+      {
+        profile: diagnosticsWizardState.profile,
+        reproductionMode: diagnosticsWizardState.reproductionMode,
+      },
       12000,
     );
     diagnosticsStartingAnother = false;
@@ -356,8 +401,7 @@ diagnosticsAuthorize.addEventListener('click', async () => {
       if (refreshed.status === previousStatus) {
         diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
         focusAuthorizeAfter = true;
-      }
-      else if (refreshed.status === 'authorized') diagnosticsGuidance.focus?.();
+      } else if (refreshed.status === 'authorized') diagnosticsGuidance.focus?.();
     } catch {
       diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
     }
@@ -370,13 +414,13 @@ diagnosticsAuthorize.addEventListener('click', async () => {
 diagnosticsYes.addEventListener('click', () => {
   diagnosticsWizardState = diagnosticsWizard.answer(diagnosticsWizardState, true);
   renderDiagnosticsWizard();
-  diagnosticsGuidanceTitle.focus?.();
+  diagnosticsFrequencyHeading.focus?.();
 });
 
 diagnosticsNo.addEventListener('click', () => {
   diagnosticsWizardState = diagnosticsWizard.answer(diagnosticsWizardState, false);
   renderDiagnosticsWizard();
-  if (diagnosticsWizardState.mode === 'match') diagnosticsGuidanceTitle.focus?.();
+  if (diagnosticsWizardState.mode === 'frequency') diagnosticsFrequencyHeading.focus?.();
   else diagnosticsQuestionText.focus?.();
 });
 
@@ -389,13 +433,29 @@ diagnosticsDirect.addEventListener('click', () => {
 diagnosticsDirectChoose.addEventListener('click', () => {
   diagnosticsWizardState = diagnosticsWizard.selectDirect(diagnosticsWizardState, diagnosticsProfile.value);
   renderDiagnosticsWizard();
-  diagnosticsGuidanceTitle.focus?.();
+  diagnosticsFrequencyHeading.focus?.();
 });
 
 diagnosticsDirectBack.addEventListener('click', () => {
   diagnosticsWizardState = diagnosticsWizard.start();
   renderDiagnosticsWizard();
   diagnosticsQuestionText.focus?.();
+});
+
+function chooseDiagnosticsReproductionMode(reproductionMode) {
+  diagnosticsWizardState = diagnosticsWizard.chooseReproductionMode(diagnosticsWizardState, reproductionMode);
+  renderDiagnosticsWizard();
+  diagnosticsGuidanceTitle.focus?.();
+}
+
+diagnosticsFrequencyNow.addEventListener('click', () => chooseDiagnosticsReproductionMode('now'));
+diagnosticsFrequencyIntermittent.addEventListener('click', () => chooseDiagnosticsReproductionMode('intermittent'));
+
+diagnosticsFrequencyBack.addEventListener('click', () => {
+  diagnosticsWizardState = diagnosticsWizard.backFromFrequency(diagnosticsWizardState);
+  renderDiagnosticsWizard();
+  if (diagnosticsWizardState.mode === 'direct') diagnosticsProfile.focus?.();
+  else diagnosticsQuestionText.focus?.();
 });
 
 diagnosticsReject.addEventListener('click', () => {
@@ -416,9 +476,7 @@ diagnosticsReproduction.addEventListener('click', async () => {
   diagnosticsReproduction.disabled = true;
   const previousStatus = diagnosticsState.status;
   const path =
-    diagnosticsState.status === 'reproducing'
-      ? '/diagnostics/reproduction/end'
-      : '/diagnostics/reproduction/start';
+    diagnosticsState.status === 'reproducing' ? '/diagnostics/reproduction/end' : '/diagnostics/reproduction/start';
   try {
     let state = await requestWithinDeadline(path, undefined, 12000);
     if (state.status === 'complete' && state.missingEvidence?.length) {
@@ -426,6 +484,11 @@ diagnosticsReproduction.addEventListener('click', async () => {
       state = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
     }
     renderDiagnostics(state);
+    if (previousStatus === 'authorized' && isDashboardUiReproducing(state)) {
+      await recordActiveUiEvent('background-started').catch(() => undefined);
+      closeDashboardPanel();
+      return;
+    }
     if (state.status === 'complete' || state.partialExportAvailable) diagnosticsResultHeading.focus?.();
   } catch {
     try {
@@ -460,7 +523,46 @@ function closeDashboardPanel() {
   dashboardSummary.hidden = false;
   deviceGroups.hidden = false;
   dashboardPanelTrigger?.focus?.();
+  recordActiveUiEventBestEffort('dashboard-opened');
 }
+
+function openCompletedDiagnostics(trigger) {
+  firstSetup.hidden = true;
+  setupContent.hidden = true;
+  dashboard.hidden = false;
+  masthead.hidden = true;
+  openDashboardPanel(diagnosticsPanel, trigger);
+  diagnosticsResultHeading.focus?.();
+}
+
+diagnosticsBackgroundAction.addEventListener('click', async () => {
+  diagnosticsBackgroundAction.disabled = true;
+  try {
+    await recordActiveUiEvent('issue-observed').catch(() => undefined);
+    let state = await requestWithinDeadline('/diagnostics/reproduction/end', undefined, 12000);
+    if (state.status === 'complete' && state.missingEvidence?.length) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      state = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
+    }
+    renderDiagnostics(state);
+    openCompletedDiagnostics(diagnosticsBackgroundAction);
+  } catch {
+    await recordActiveUiEvent('request-failed').catch(() => undefined);
+    try {
+      const state = await requestWithinDeadline('/diagnostics/status', undefined, 12000);
+      renderDiagnostics(state);
+      if (state.status === 'complete' || state.partialExportAvailable) {
+        openCompletedDiagnostics(diagnosticsBackgroundAction);
+      } else {
+        diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+      }
+    } catch {
+      diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    }
+  } finally {
+    diagnosticsBackgroundAction.disabled = false;
+  }
+});
 
 menuDiagnostics.addEventListener('click', async () => {
   openDashboardPanel(diagnosticsPanel, menuDiagnostics);
@@ -468,6 +570,7 @@ menuDiagnostics.addEventListener('click', async () => {
     renderDiagnostics(await requestWithinDeadline('/diagnostics/status', undefined, 12000));
   } catch {
     diagnosticsStatus.textContent = messages.diagnosticsFailed ?? '';
+    recordActiveUiEventBestEffort('request-failed');
   }
 });
 menuAdvanced.addEventListener('click', () => {
@@ -507,6 +610,7 @@ async function updateAdvancedSettings() {
     advancedStatus.textContent = '';
   } catch {
     advancedStatus.textContent = messages.advancedSaveFailed ?? '';
+    recordActiveUiEventBestEffort('request-failed');
   }
 }
 
@@ -550,6 +654,7 @@ dashboardAuthenticate.addEventListener('click', () => {
   masthead.hidden = false;
   pageTitle.textContent = messages.pageTitle;
   accountInput.focus?.();
+  recordActiveUiEventBestEffort('authentication-opened');
 });
 
 legacyAcknowledge.addEventListener('click', async () => {
@@ -641,6 +746,7 @@ authForm.addEventListener('submit', async (event) => {
     await handleResult(await requestWithinDeadline('/auth/start', { configuration: pendingConfig }));
   } catch {
     authStatus.textContent = messages.authFailed ?? '';
+    recordActiveUiEventBestEffort('request-failed');
   } finally {
     setBusy(false);
   }
@@ -656,6 +762,7 @@ challengeForm.addEventListener('submit', async (event) => {
     await handleResult(await requestWithinDeadline(path, body));
   } catch {
     authStatus.textContent = messages.authFailed ?? '';
+    recordActiveUiEventBestEffort('request-failed');
   } finally {
     setBusy(false);
   }
@@ -717,6 +824,8 @@ homebridge.addEventListener('ready', async () => {
       );
     } catch {
       dashboardView.render({ state: 'missing', devices: [] }, configuredBlock() ?? {}, messages, dashboardElements);
+      recordActiveUiEventBestEffort('request-failed');
     }
+    recordActiveUiEventBestEffort('dashboard-opened');
   }
 });

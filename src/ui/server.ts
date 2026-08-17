@@ -12,7 +12,15 @@ import {
   type TemporaryAuthenticationInput,
 } from '../account/temporary-authentication.js';
 import { parseConfig } from '../configuration.js';
-import { GuidedDiagnostics, isDiagnosticsProfile, type DiagnosticsProfile } from '../diagnostics.js';
+import {
+  GuidedDiagnostics,
+  isDiagnosticsProfile,
+  isDiagnosticsReproductionMode,
+  isDiagnosticsUiEvent,
+  type DiagnosticsProfile,
+  type DiagnosticsReproductionMode,
+  type DiagnosticsUiEvent,
+} from '../diagnostics.js';
 import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
 import { RuntimeTracker } from '../runtime/tracker.js';
 import { resolveStorageRoot } from '../storage.js';
@@ -115,15 +123,24 @@ function parseRepresentationPreferences(value: unknown): Record<string, boolean>
   return { ...(preferences as Record<string, boolean>) };
 }
 
-function parseDiagnosticsProfile(value: unknown): DiagnosticsProfile {
+export function parseDiagnosticsAuthorization(value: unknown): {
+  profile: DiagnosticsProfile;
+  reproductionMode: DiagnosticsReproductionMode;
+} {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RequestError('Invalid diagnostics request', { status: 400 });
   }
-  const profile = (value as Record<string, unknown>).profile;
-  if (!isDiagnosticsProfile(profile)) {
+  const payload = value as Record<string, unknown>;
+  const fields = Object.keys(payload).sort().join(',');
+  const reproductionMode = fields === 'profile' ? 'now' : payload.reproductionMode;
+  if (
+    (fields !== 'profile' && fields !== 'profile,reproductionMode') ||
+    !isDiagnosticsProfile(payload.profile) ||
+    !isDiagnosticsReproductionMode(reproductionMode)
+  ) {
     throw new RequestError('Invalid diagnostics request', { status: 400 });
   }
-  return profile;
+  return { profile: payload.profile, reproductionMode };
 }
 
 function parseArchiveReview(value: unknown): string {
@@ -135,6 +152,17 @@ function parseArchiveReview(value: unknown): string {
     throw new RequestError('Invalid support archive request', { status: 400 });
   }
   return reviewId;
+}
+
+export function parseDiagnosticsUiEvent(value: unknown): DiagnosticsUiEvent {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RequestError('Invalid diagnostics UI event', { status: 400 });
+  }
+  const payload = value as Record<string, unknown>;
+  if (Object.keys(payload).join(',') !== 'event' || !isDiagnosticsUiEvent(payload.event)) {
+    throw new RequestError('Invalid diagnostics UI event', { status: 400 });
+  }
+  return payload.event;
 }
 
 /** Creates the production SDK client without enabling realtime ownership. */
@@ -193,9 +221,15 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
       readDashboard(this.runtimeTracker, Date.now, parseRepresentationPreferences(payload)),
     );
     this.onRequest('/diagnostics/status', () => this.diagnostics.status());
-    this.onRequest('/diagnostics/authorize', (payload) => this.diagnostics.authorize(parseDiagnosticsProfile(payload)));
+    this.onRequest('/diagnostics/authorize', (payload) => {
+      const authorization = parseDiagnosticsAuthorization(payload);
+      return this.diagnostics.authorize(authorization.profile, authorization.reproductionMode);
+    });
     this.onRequest('/diagnostics/reproduction/start', () => this.diagnostics.startReproduction());
     this.onRequest('/diagnostics/reproduction/end', () => this.diagnostics.endReproduction());
+    this.onRequest('/diagnostics/ui-event', (payload) =>
+      this.diagnostics.recordUiEvent(parseDiagnosticsUiEvent(payload)),
+    );
     this.onRequest('/diagnostics/archive/review', () => this.diagnostics.reviewSupportArchive());
     this.onRequest('/diagnostics/archive/export', async (payload) => {
       const exported = await this.diagnostics.exportSupportArchive(parseArchiveReview(payload));

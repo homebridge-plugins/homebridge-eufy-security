@@ -18,8 +18,9 @@ describe('custom UI downloads', () => {
       /menuDiagnostics\.addEventListener\('click',[\s\S]*requestWithinDeadline\('\/diagnostics\/status'/,
     );
     expect(stylesheet).toContain('.dashboard-actions');
-    expect(stylesheet).toContain('.shell[data-theme="dark"] .dashboard-action img');
-    expect(stylesheet).toContain('.shell[data-theme="dark"] .dashboard-page-icon');
+    expect(stylesheet).toMatch(/\.shell\[data-theme=['"]dark['"]\] \.dashboard-action img/);
+    expect(stylesheet).toMatch(/\.shell\[data-theme=['"]dark['"]\] \.dashboard-page-icon/);
+    expect(stylesheet).toMatch(/\.shell\[data-theme=['"]dark['"]\] \.diagnostics-background-action img/);
   });
 
   it('uses a CSP-compatible data link for encrypted support archives', () => {
@@ -47,6 +48,9 @@ describe('custom UI downloads', () => {
     expect(document).toContain('data-diagnostics-answer="no"');
     expect(document).toContain('data-diagnostics-direct');
     expect(document).toMatch(/data-diagnostics-direct-panel hidden/);
+    expect(document).toMatch(/data-diagnostics-frequency hidden/);
+    expect(document).toContain('data-diagnostics-frequency-answer="intermittent"');
+    expect(document).toContain('data-diagnostics-frequency-answer="now"');
     expect(document).toMatch(/data-diagnostics-match hidden/);
     expect(document).toMatch(/data-diagnostics-actions hidden/);
     expect(document).toMatch(/data-diagnostics-result hidden/);
@@ -56,6 +60,14 @@ describe('custom UI downloads', () => {
     expect(document).toContain('tabindex="-1" data-diagnostics-guidance-title');
     expect(document).toContain('aria-labelledby="diagnostics-question-heading"');
     expect(document).toContain('aria-labelledby="diagnostics-match-heading"');
+    expect(document).toContain('aria-labelledby="diagnostics-frequency-heading"');
+    expect(document).not.toContain('diagnostics-steps');
+    expect(document).not.toContain('data-diagnostics-case');
+    expect(document.indexOf('data-diagnostics-frequency-answer="intermittent"')).toBeLessThan(
+      document.indexOf('data-diagnostics-frequency-answer="now"'),
+    );
     expect(document).toContain('src="js/profile-wizard.js"');
+    expect(document).toMatch(/data-diagnostics-background-action[\s\S]*?hidden/);
+    expect(document).toContain('data-i18n-aria-label="diagnosticsBackgroundIssueVisible"');
   });
 });

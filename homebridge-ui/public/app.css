@@ -40,7 +40,13 @@ body {
   overflow-x: hidden;
   background: transparent;
   color: var(--ink);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font:
+    14px/1.5 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
 }
 
 .shell {
@@ -195,12 +201,15 @@ h2 {
 }
 
 .diagnostics-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+  margin-top: 4px;
 }
 
-.diagnostics-wizard {
+.diagnostics-stage {
+  display: grid;
+  gap: 12px;
+}
+
+.diagnostics-surface {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel);
@@ -209,12 +218,14 @@ h2 {
 
 .diagnostics-question,
 .diagnostics-direct,
+.diagnostics-frequency,
 .diagnostics-match {
   display: grid;
   gap: 14px;
 }
 
 .diagnostics-question > strong,
+.diagnostics-frequency > strong,
 .diagnostics-match > strong {
   font-size: clamp(17px, 4vw, 21px);
   line-height: 1.35;
@@ -225,14 +236,14 @@ h2 {
 }
 
 .diagnostics-choice-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 .diagnostics-choice-actions button {
-  width: auto;
-  min-width: 110px;
-  padding-inline: 22px;
+  width: 100%;
+  padding-inline: 16px;
 }
 
 button.diagnostics-secondary-action {
@@ -256,9 +267,6 @@ button.diagnostics-quiet-action {
 .diagnostics-guidance {
   display: grid;
   gap: 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
-  padding: 15px;
 }
 
 .diagnostics-guidance > div {
@@ -281,71 +289,21 @@ button.diagnostics-quiet-action {
 }
 
 .diagnostics-actions button {
-  width: auto;
-  min-width: 180px;
-}
-
-.diagnostics-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.diagnostics-steps li {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.diagnostics-steps span {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--panel);
-  font-size: 11px;
-}
-
-.diagnostics-steps[data-phase="choose"] li:first-child,
-.diagnostics-steps[data-phase="reproduce"] li:nth-child(-n + 2),
-.diagnostics-steps[data-phase="review"] li {
-  color: var(--ink);
-}
-
-.diagnostics-steps[data-phase="choose"] li:first-child span,
-.diagnostics-steps[data-phase="reproduce"] li:nth-child(2) span,
-.diagnostics-steps[data-phase="review"] li:nth-child(3) span {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #032f31;
+  width: 100%;
 }
 
 .diagnostics-result p {
   margin-bottom: 0;
 }
 
-.diagnostics-privacy,
-.diagnostics-case {
+.diagnostics-privacy {
   color: var(--muted);
   font-size: 12px;
 }
 
-.diagnostics-case {
-  border-left: 3px solid var(--line);
-  padding-left: 10px;
-}
-
 .diagnostics-result {
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
-  border-radius: 12px;
-  padding: 14px;
+  display: grid;
+  gap: 10px;
 }
 
 .diagnostics-result a {
@@ -356,8 +314,7 @@ button.diagnostics-quiet-action {
 }
 
 .diagnostics-result button {
-  width: auto;
-  margin-top: 10px;
+  width: 100%;
 }
 
 .diagnostics-manifest {
@@ -517,7 +474,9 @@ button.diagnostics-quiet-action {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-3px);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 
 .dashboard-action:hover,
@@ -531,9 +490,61 @@ button.diagnostics-quiet-action {
   transform: translateY(0);
 }
 
-.dashboard[data-state="degraded"] .status,
-.dashboard[data-state="incomplete"] .status,
-.dashboard[data-state="stale"] .status {
+.diagnostics-background-action {
+  position: fixed;
+  z-index: 40;
+  right: max(16px, calc((100vw - 720px) / 2 + 16px));
+  bottom: 18px;
+  display: grid;
+  width: 46px;
+  min-height: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--line));
+  border-radius: 50%;
+  background: var(--accent);
+  padding: 0;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 24%);
+}
+
+.diagnostics-background-action img {
+  width: 21px;
+  height: 21px;
+}
+
+.diagnostics-background-action::after {
+  content: attr(aria-label);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 6px 9px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 16%);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.diagnostics-background-action:hover::after,
+.diagnostics-background-action:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dashboard[data-state='degraded'] .status,
+.dashboard[data-state='incomplete'] .status,
+.dashboard[data-state='stale'] .status {
   background: color-mix(in srgb, #d99a21 16%, var(--panel));
   color: color-mix(in srgb, #d99a21 75%, var(--ink));
 }
@@ -573,7 +584,7 @@ button.diagnostics-quiet-action {
 }
 
 .device-tile-changed::after {
-  content: "";
+  content: '';
   position: absolute;
   z-index: 5;
   top: 11px;
@@ -675,7 +686,7 @@ button.diagnostics-quiet-action {
 }
 
 .device-summary::after {
-  content: "";
+  content: '';
   position: absolute;
   z-index: 1;
   inset: 0;
@@ -684,7 +695,7 @@ button.diagnostics-quiet-action {
 }
 
 .device-tile-disabled .device-summary::before {
-  content: "";
+  content: '';
   position: absolute;
   z-index: 1;
   inset: 0;
@@ -831,7 +842,9 @@ button.diagnostics-quiet-action {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-3px);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 
 .device-badges span:hover::after,
@@ -949,7 +962,9 @@ button.diagnostics-quiet-action {
   font-size: 10px;
   font-weight: 700;
   text-align: center;
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .snapshot-segment input:checked + span {
@@ -987,11 +1002,13 @@ button.diagnostics-quiet-action {
   border-radius: 999px;
   background: color-mix(in srgb, var(--muted) 28%, var(--panel));
   padding: 0;
-  transition: background 140ms ease, border-color 140ms ease;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
 }
 
 .preference-grid .toggle input::before {
-  content: "";
+  content: '';
   position: absolute;
   top: 2px;
   left: 2px;
@@ -1027,7 +1044,7 @@ button.diagnostics-quiet-action {
 }
 
 .first-setup::before {
-  content: "";
+  content: '';
   position: absolute;
   top: 50%;
   left: -3px;
@@ -1092,7 +1109,7 @@ button.diagnostics-quiet-action {
 
 .first-setup-confirmation input::before,
 .diagnostics-review-confirm input::before {
-  content: "";
+  content: '';
   width: 8px;
   height: 4px;
   border-bottom: 2px solid #07383a;
@@ -1300,14 +1317,6 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .diagnostics-steps strong {
-    display: none;
-  }
-
-  .diagnostics-steps li {
-    justify-content: center;
-  }
-
   .diagnostics-actions button {
     width: 100%;
   }
@@ -1367,7 +1376,7 @@ button:disabled {
   }
 
   .device-card-settings::after {
-    content: "";
+    content: '';
     width: 100%;
     min-height: 36px;
     flex: 1;
@@ -1394,7 +1403,7 @@ button:disabled {
   }
 }
 
-.shell[data-theme="dark"] {
+.shell[data-theme='dark'] {
   color-scheme: dark;
   --accent: #00bfc4;
   --accent-ink: #67e1e4;
@@ -1417,22 +1426,23 @@ button:disabled {
   --tile-tooltip-ink: #f4f7fb;
 }
 
-.shell[data-theme="dark"] .handoff p {
+.shell[data-theme='dark'] .handoff p {
   color: #c6d3f5;
 }
 
-.shell[data-theme="dark"] .notice-icon,
-.shell[data-theme="dark"] .status-icon,
-.shell[data-theme="dark"] .dashboard-page-icon,
-.shell[data-theme="dark"] .dashboard-action img,
-.shell[data-theme="dark"] .device-class-icon {
+.shell[data-theme='dark'] .notice-icon,
+.shell[data-theme='dark'] .status-icon,
+.shell[data-theme='dark'] .dashboard-page-icon,
+.shell[data-theme='dark'] .dashboard-action img,
+.shell[data-theme='dark'] .diagnostics-background-action img,
+.shell[data-theme='dark'] .device-class-icon {
   filter: invert(1);
 }
 
-.shell[data-theme="dark"] .eufy-logo .logo-light {
+.shell[data-theme='dark'] .eufy-logo .logo-light {
   display: none;
 }
 
-.shell[data-theme="dark"] .eufy-logo .logo-dark {
+.shell[data-theme='dark'] .eufy-logo .logo-dark {
   display: block;
 }

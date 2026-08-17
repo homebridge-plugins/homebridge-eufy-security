@@ -212,15 +212,21 @@ function validatePayload(payload, envelope, archivePath) {
   const expiresAt = Date.parse(manifest.archiveExpiresAt);
   const reproductionStartedAt = Date.parse(manifest.reproductionStartedAt);
   const reproductionEndedAt = Date.parse(manifest.reproductionEndedAt);
+  const manifestFields = Object.keys(manifest).sort().join(',');
+  const currentManifestFields =
+    'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,supportCaseId,version';
+  const legacyManifestFields =
+    'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionStartedAt,supportCaseId,version';
+  const reproductionMode = manifestFields === legacyManifestFields ? 'now' : manifest.reproductionMode;
   if (
-    Object.keys(manifest).sort().join(',') !==
-      'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionStartedAt,supportCaseId,version' ||
+    (manifestFields !== currentManifestFields && manifestFields !== legacyManifestFields) ||
     manifest.version !== 1 ||
     manifest.archiveFormat !== envelope.format ||
     manifest.keyId !== envelope.keyId ||
     !supportCasePattern.test(manifest.supportCaseId) ||
     path.basename(archivePath) !== `homebridge-eufy-${manifest.supportCaseId}.eufysupport.gz` ||
     !PROFILES.has(manifest.profile) ||
+    !['now', 'intermittent'].includes(reproductionMode) ||
     !Number.isFinite(createdAt) ||
     !Number.isFinite(expiresAt) ||
     !Number.isFinite(reproductionStartedAt) ||
@@ -317,7 +323,7 @@ function validatePayload(payload, envelope, archivePath) {
     throw new Error('Manifest declares evidence that is absent from the payload');
   }
   if (expiresAt <= Date.now()) console.warn(`WARNING: support archive expired at ${manifest.archiveExpiresAt}`);
-  return { manifest, extracted };
+  return { manifest: { ...manifest, reproductionMode }, extracted };
 }
 
 function extract(archivePath, manifest, evidence) {
