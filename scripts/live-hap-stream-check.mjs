@@ -11,7 +11,9 @@
  *   - the accessory accepts the negotiated selection and reports a streaming session;
  *   - inbound RTP carries the negotiated payload type and synchronisation source, with multiplexed
  *     RTCP sender reports counted separately;
- *   - video continues across the RTCP interval while receiver reports are sent;
+ *   - video continues across the RTCP interval while receiver reports are sent from the moment the
+ *     session starts, because an accessory may terminate a session that receives no RTCP inside its
+ *     startup grace, well before a slow camera has delivered a first frame;
  *   - measured packet rate, byte rate, and RTP timestamp cadence stay inside the negotiated frame rate
  *     and bitrate;
  *   - audio absence or silence does not stop video, reported as a separate audio packet count;
@@ -56,6 +58,16 @@ const H264 = 0;
 const AAC_ELD = 2;
 const START_SESSION = 1;
 const END_SESSION = 0;
+
+const ACCESSORY_INFORMATION = '0000003E';
+const MODEL = '00000021';
+
+/** Product model of one accessory, which identifies a run without exposing the owner's chosen name. */
+function accessoryModel(accessory) {
+  const information = accessory.services.find((service) => service.type.toUpperCase().startsWith(ACCESSORY_INFORMATION));
+  const model = information?.characteristics.find((entry) => entry.type.toUpperCase().startsWith(MODEL));
+  return typeof model?.value === 'string' ? model.value : 'unknown model';
+}
 
 function options(argv) {
   const parsed = new Map();
@@ -221,7 +233,9 @@ try {
     }
     return `${accessory.aid}.${found.iid}`;
   };
-  console.log(`camera aid=${accessory.aid} wired=${selectable.includes(accessory)} ports video=${video.port} audio=${audio.port}`);
+  console.log(
+    `camera aid=${accessory.aid} model="${accessoryModel(accessory)}" power=${selectable.includes(accessory) ? 'wired' : 'battery'} ports video=${video.port} audio=${audio.port}`,
+  );
 
   const sessionId = Buffer.from(randomUUID().replaceAll('-', ''), 'hex');
   const videoKey = randomBytes(16);
@@ -313,9 +327,6 @@ try {
   console.log('start-session accepted');
 
   const reports = setInterval(() => {
-    if (observed.videoPackets === 0) {
-      return;
-    }
     video.socket.send(
       receiverReport(0x4f4f4f4f, videoSsrc >>> 0, highestSequence, observed.videoPackets),
       accessoryVideoPort,

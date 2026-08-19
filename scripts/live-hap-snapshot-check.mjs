@@ -48,6 +48,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 const CAMERA_RTP_STREAM_MANAGEMENT = '00000110-0000-1000-8000-0026BB765291';
 const BATTERY = '00000096-0000-1000-8000-0026BB765291';
 
+const ACCESSORY_INFORMATION = '0000003E';
+const MODEL = '00000021';
+
+/** Product model of one accessory, which identifies a run without exposing the owner's chosen name. */
+function accessoryModel(accessory) {
+  const information = accessory.services.find((service) => service.type.toUpperCase().startsWith(ACCESSORY_INFORMATION));
+  const model = information?.characteristics.find((entry) => entry.type.toUpperCase().startsWith(MODEL));
+  return typeof model?.value === 'string' ? model.value : 'unknown model';
+}
+
 function options(argv) {
   const parsed = new Map();
   for (let index = 0; index < argv.length; index += 1) {
@@ -123,7 +133,11 @@ try {
       ? cameras
       : cameras.filter((accessory) => !accessory.services.some((service) => service.type.toUpperCase() === BATTERY))
   ).slice(0, Number(parsed.get('limit') ?? cameras.length));
-  console.log(`cameras=${cameras.length} selected=${selected.length} (aids ${selected.map(({ aid }) => aid).join(',')})`);
+  console.log(`cameras=${cameras.length} selected=${selected.length}`);
+  for (const candidate of selected) {
+    const powered = candidate.services.some((service) => service.type.toUpperCase() === BATTERY) ? 'battery' : 'wired';
+    console.log(`  aid=${candidate.aid} model="${accessoryModel(candidate)}" power=${powered}`);
+  }
   if (selected.length === 0) {
     throw new Error('no camera accessory matched the selection');
   }

@@ -54,8 +54,16 @@ negotiated payload type, synchronisation source, frame rate, and bitrate, matche
 selection against the adaptation process arguments, and confirms no adaptation process survives the
 session. It never decrypts media.
 
+Both report the accessory id, product model, and power class for every camera they touch, so a recorded
+result identifies its subject without naming rooms.
+
+`scripts/live-hap-capture.mjs` is the visual counterpart: it decrypts one negotiated session per camera
+and writes an MP4 plus a still frame for inspection. It writes real camera imagery, refuses to write
+inside a git working tree, and its output must stay out of repositories, backups, issues, and support
+archives.
+
 Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
-a camera, so both scripts use wired cameras unless `--battery` is passed.
+a camera, so all three scripts use wired cameras unless `--battery` is passed.
 
 ## Pull requests
 
