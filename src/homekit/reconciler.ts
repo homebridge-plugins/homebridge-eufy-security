@@ -9,6 +9,8 @@ import type {
   AttachedAdapter,
   HomeKitDefinitions,
   LiveMediaAdapter,
+  SnapshotMediaAdapter,
+  SnapshotMode,
 } from './adapter.js';
 import { admittedHomeKitAdapters } from './representation.js';
 
@@ -58,7 +60,9 @@ export interface HomeKitEventTrace {
 
 export type HomeKitEventTraceSink = (trace: HomeKitEventTrace) => void;
 
-export type HomeKitEntityPreferences = Readonly<Record<string, { represented?: boolean; audio?: boolean }>>;
+export type HomeKitEntityPreferences = Readonly<
+  Record<string, { represented?: boolean; audio?: boolean; snapshotMode?: SnapshotMode }>
+>;
 
 interface AccessoryContext {
   homebridgeEufy?: {
@@ -96,6 +100,7 @@ export class HomeKitReconciler {
     private readonly trace?: HomeKitEventTraceSink,
     private readonly entityPreferences: HomeKitEntityPreferences = {},
     private readonly liveMedia?: LiveMediaAdapter,
+    private readonly snapshotMedia?: SnapshotMediaAdapter,
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -179,7 +184,9 @@ export class HomeKitReconciler {
           accessory,
           hap: this.store.hap,
           liveMedia: this.liveMedia,
+          snapshotMedia: this.snapshotMedia,
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
+          snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
           persist: () => this.store.update([accessory]),

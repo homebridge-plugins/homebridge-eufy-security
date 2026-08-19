@@ -25,6 +25,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AdapterAttachmentContext, PreparedLiveMedia } from '../../src/homekit/adapter.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
+import { SnapshotAcquisition } from '../../src/media/snapshot.js';
 
 const HAP = {
   Service,
@@ -57,6 +58,18 @@ function callStream(delegate: CameraStreamingDelegate, request: StreamingRequest
   });
 }
 
+function callSnapshot(delegate: CameraStreamingDelegate): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    delegate.handleSnapshotRequest({} as never, (error, buffer) => {
+      if (error || !buffer) {
+        reject(error ?? new Error('missing snapshot'));
+      } else {
+        resolve(buffer);
+      }
+    });
+  });
+}
+
 function prepareRequest(sessionID = 'synthetic-session'): PrepareStreamRequest {
   return {
     sessionID,
@@ -79,6 +92,275 @@ function prepareRequest(sessionID = 'synthetic-session'): PrepareStreamRequest {
 }
 
 describe('camera streaming bundle adapter', () => {
+  it('serves Cloud snapshots only from passive SDK storage', async () => {
+    const target = new Accessory(
+      'Synthetic cloud snapshot camera',
+      uuid.generate('synthetic-cloud-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const stored = Buffer.from('synthetic stored jpeg');
+    const snapshotStored = vi.fn(async () => stored);
+    const snapshotLive = vi.fn();
+    const live = vi.fn();
+    const prepare = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ snapshotStored, snapshotLive, live }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+        [
+          'camera.snapshotStored.momentary-action',
+          { id: 'camera.snapshotStored.momentary-action', kind: 'momentary-action' },
+        ],
+      ]),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      snapshotMedia: new SnapshotAcquisition(),
+      snapshotMode: 'Cloud',
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).resolves.toBe(stored);
+    expect(snapshotStored).toHaveBeenCalledOnce();
+    expect(snapshotLive).not.toHaveBeenCalled();
+    expect(live).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('coalesces only concurrent Live snapshots and otherwise acquires a fresh image', async () => {
+    const target = new Accessory(
+      'Synthetic live snapshot camera',
+      uuid.generate('synthetic-live-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const first = Buffer.from('synthetic first live jpeg');
+    const second = Buffer.from('synthetic second live jpeg');
+    let resolveFirst!: (value: { jpeg: Buffer; width: number; height: number }) => void;
+    const snapshotLive = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ jpeg: Buffer; width: number; height: number }>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ jpeg: second, width: 640, height: 360 });
+    const snapshotStored = vi.fn();
+    const snapshotMedia = new SnapshotAcquisition();
+
+    const context = {
+      device: { camera: () => ({ snapshotStored, snapshotLive, live: vi.fn() }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+        [
+          'camera.snapshotLive.momentary-action',
+          { id: 'camera.snapshotLive.momentary-action', kind: 'momentary-action' },
+        ],
+      ]),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia,
+      snapshotMode: 'Live',
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext;
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    const firstRequest = callSnapshot(controller.delegate);
+    await vi.waitFor(() => expect(snapshotLive).toHaveBeenCalledOnce());
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const secondRequest = callSnapshot(controller.delegate);
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    resolveFirst({ jpeg: first, width: 1280, height: 720 });
+    await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([first, first]);
+    await expect(callSnapshot(controller.delegate)).resolves.toBe(second);
+
+    expect(snapshotLive).toHaveBeenCalledTimes(2);
+    expect(snapshotStored).not.toHaveBeenCalled();
+  });
+
+  it('rejects a selected snapshot policy without its exact SDK evidence', async () => {
+    const target = new Accessory(
+      'Synthetic unevidenced snapshot camera',
+      uuid.generate('synthetic-unevidenced-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const snapshotStored = vi.fn(async () => Buffer.from('synthetic stored jpeg'));
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ snapshotStored, live: vi.fn() }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+      ]),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(),
+      snapshotMode: 'Cloud',
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).rejects.toThrow('stored camera snapshot is unavailable');
+    expect(snapshotStored).not.toHaveBeenCalled();
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-snapshot-capability-unavailable',
+      capability: 'camera',
+      member: 'snapshotStored',
+      active: true,
+      reason: 'missing-evidence',
+    });
+  });
+
+  it('diagnoses a selected snapshot policy without media adaptation', () => {
+    const target = new Accessory(
+      'Synthetic unadapted snapshot camera',
+      uuid.generate('synthetic-unadapted-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ snapshotStored: vi.fn(), live: vi.fn() }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+        [
+          'camera.snapshotStored.momentary-action',
+          { id: 'camera.snapshotStored.momentary-action', kind: 'momentary-action' },
+        ],
+      ]),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMode: 'Cloud',
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-snapshot-capability-unavailable',
+      capability: 'camera',
+      member: 'snapshotStored',
+      active: true,
+      reason: 'adapter-missing',
+    });
+  });
+
+  it('does not coalesce a new Live request after complete evidence withdrawal', async () => {
+    const target = new Accessory(
+      'Synthetic withdrawn live snapshot camera',
+      uuid.generate('synthetic-withdrawn-live-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    let resolveSnapshot!: (value: { jpeg: Buffer; width: number; height: number }) => void;
+    const snapshotLive = vi.fn(
+      () =>
+        new Promise<{ jpeg: Buffer; width: number; height: number }>((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    const common = {
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(),
+      snapshotMode: 'Live' as const,
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    };
+    CAMERA_STREAMING_ADAPTER.attach({
+      ...common,
+      device: { camera: () => ({ snapshotLive, live: vi.fn() }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+        [
+          'camera.snapshotLive.momentary-action',
+          { id: 'camera.snapshotLive.momentary-action', kind: 'momentary-action' },
+        ],
+      ]),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const admittedRequest = callSnapshot(controller.delegate);
+    await vi.waitFor(() => expect(snapshotLive).toHaveBeenCalledOnce());
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      ...common,
+      device: { camera: () => ({ snapshotLive, live: vi.fn() }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+      ]),
+    } satisfies AdapterAttachmentContext);
+
+    await expect(callSnapshot(controller.delegate)).rejects.toThrow('live camera snapshot is unavailable');
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    resolveSnapshot({ jpeg: Buffer.from('synthetic admitted jpeg'), width: 1280, height: 720 });
+    await expect(admittedRequest).resolves.toEqual(Buffer.from('synthetic admitted jpeg'));
+  });
+
+  it('exposes a Live snapshot failure without falling back to stored imagery', async () => {
+    const target = new Accessory(
+      'Synthetic failed live snapshot camera',
+      uuid.generate('synthetic-failed-live-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const failure = new Error('synthetic live snapshot failure');
+    const snapshotStored = vi.fn(async () => Buffer.from('synthetic stored jpeg'));
+    const snapshotLive = vi.fn(async () => {
+      throw failure;
+    });
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ snapshotStored, snapshotLive, live: vi.fn() }) } as never,
+      evidence: new Map([
+        ['camera.live.momentary-action', { id: 'camera.live.momentary-action', kind: 'momentary-action' }],
+        [
+          'camera.snapshotLive.momentary-action',
+          { id: 'camera.snapshotLive.momentary-action', kind: 'momentary-action' },
+        ],
+      ]),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(),
+      snapshotMode: 'Live',
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).rejects.toBe(failure);
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    expect(snapshotStored).not.toHaveBeenCalled();
+  });
+
   it('drives negotiated prepare, start, reconfigure, and stop through the media seam', async () => {
     const target = new Accessory(
       'Synthetic camera',

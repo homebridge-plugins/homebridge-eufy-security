@@ -77,6 +77,27 @@ export interface LiveMediaAdapter {
   }): Promise<PreparedLiveMedia>;
 }
 
+export type SnapshotMode = 'Cloud' | 'Live' | 'Refresh';
+
+export interface SnapshotMediaSource {
+  snapshotStored?(): Promise<Buffer>;
+  snapshotLive?(): Promise<{ jpeg: Buffer; width: number; height: number }>;
+}
+
+/** Stable camera-local identity that preserves concurrent acquisition lifetime across source replacement. */
+export interface SnapshotAcquisitionScope {
+  readonly identity: object;
+}
+
+/** Snapshot acquisition requested without exposing the concrete media policy implementation. */
+export interface SnapshotMediaAdapter {
+  acquire(
+    scope: SnapshotAcquisitionScope,
+    source: SnapshotMediaSource,
+    mode: Exclude<SnapshotMode, 'Refresh'>,
+  ): Promise<Buffer>;
+}
+
 /** An allowlisted capability condition emitted without physical-device identity. */
 export interface AdapterDiagnostic {
   code: string;
@@ -99,7 +120,9 @@ export interface AdapterAttachmentContext {
   readonly accessory: PlatformAccessory;
   readonly hap: HomeKitDefinitions;
   readonly liveMedia?: LiveMediaAdapter;
+  readonly snapshotMedia?: SnapshotMediaAdapter;
   readonly audioEnabled?: boolean;
+  readonly snapshotMode?: SnapshotMode;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;
   persist(): void;

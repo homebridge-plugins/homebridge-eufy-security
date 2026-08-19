@@ -83,11 +83,6 @@ function defer(rows: readonly string[], issue: string, risk: string): void {
 }
 
 defer(['camera.recordFragments.momentary-action'], '#999', 'requires negotiated HKSV adaptation');
-defer(
-  ['camera.snapshotStored.momentary-action', 'camera.snapshotLive.momentary-action'],
-  '#1002',
-  'requires distinct stored-only and live snapshot policy',
-);
 defer(['camera.talkback.momentary-action'], '#1001', 'requires isolated return-audio adaptation');
 /** Derives the current semantic member inventory directly from the pinned SDK contract. */
 function currentSdkSurface(): string[] {
