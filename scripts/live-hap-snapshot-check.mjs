@@ -29,7 +29,7 @@
  *
  * Usage:
  *   node scripts/live-hap-snapshot-check.mjs \
- *     --device-id 0E:04:7D:13:CA:C9 --address 127.0.0.1 --port 51955 --pin 031-45-154 \
+ *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
  *     [--storage /tmp/hb-check/homebridge-eufy] [--battery] [--limit 1] [--settle-ms 25000]
  *
  * Behavior notes this check exercises:

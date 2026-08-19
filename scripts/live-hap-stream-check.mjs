@@ -34,7 +34,7 @@
  *
  * Usage:
  *   node scripts/live-hap-stream-check.mjs \
- *     --device-id 0E:04:7D:13:CA:C9 --address 127.0.0.1 --port 51955 --pin 031-45-154 \
+ *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
  *     [--aid 7] [--battery] [--seconds 25] [--width 1280] [--height 720] [--fps 30] [--bitrate 299] \
  *     [--homebridge-pid 12345]
  *
