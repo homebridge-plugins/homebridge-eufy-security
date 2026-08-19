@@ -668,6 +668,83 @@ describe('camera streaming bundle adapter', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('keeps two concurrent negotiated sessions independent on one camera', async () => {
+    const target = new Accessory(
+      'Synthetic concurrent camera',
+      uuid.generate('synthetic-concurrent-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const sessions = [41000, 41002].map((videoPort) => ({
+      videoPort,
+      start: vi.fn(async () => undefined),
+      reconfigure: vi.fn(),
+      stop: vi.fn(),
+    }));
+    const prepare = vi.fn(async () => sessions[prepare.mock.calls.length - 1] as PreparedLiveMedia);
+    const live = vi.fn();
+
+    const attachment = CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ live }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    const first = await callPrepare(controller.delegate, prepareRequest('first-session'));
+    const second = await callPrepare(controller.delegate, prepareRequest('second-session'));
+    expect([first.video.port, second.video.port]).toEqual([41000, 41002]);
+    expect(first.video.ssrc).not.toBe(second.video.ssrc);
+
+    for (const sessionID of ['first-session', 'second-session']) {
+      await callStream(controller.delegate, {
+        sessionID,
+        type: StreamRequestTypes.START,
+        video: {
+          codec: 0,
+          profile: H264Profile.MAIN,
+          level: H264Level.LEVEL3_1,
+          packetizationMode: 0,
+          width: 1280,
+          height: 720,
+          fps: 30,
+          pt: 99,
+          ssrc: sessionID === 'first-session' ? first.video.ssrc : second.video.ssrc,
+          max_bit_rate: 300,
+          rtcp_interval: 0.5,
+          mtu: 1200,
+        },
+      } as StreamingRequest);
+    }
+    expect(sessions[0].start).toHaveBeenCalledOnce();
+    expect(sessions[1].start).toHaveBeenCalledOnce();
+    expect(live).not.toHaveBeenCalled();
+
+    await callStream(controller.delegate, { sessionID: 'first-session', type: StreamRequestTypes.STOP });
+    expect(sessions[0].stop).toHaveBeenCalledOnce();
+    expect(sessions[1].stop).not.toHaveBeenCalled();
+
+    await callStream(controller.delegate, {
+      sessionID: 'second-session',
+      type: StreamRequestTypes.RECONFIGURE,
+      video: { width: 640, height: 360, fps: 15, max_bit_rate: 150, rtcp_interval: 0.5 },
+    });
+    expect(sessions[1].reconfigure).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 640, ssrc: second.video.ssrc }),
+    );
+
+    attachment?.detach?.();
+    expect(sessions[1].stop).toHaveBeenCalledOnce();
+    expect(sessions[0].stop).toHaveBeenCalledOnce();
+  });
+
   it('closes a prepared session that completes after adapter detachment', async () => {
     const target = new Accessory(
       'Synthetic pending camera',

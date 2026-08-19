@@ -48,14 +48,21 @@ retained last successful images on disk, and removes its own pairing. The script
 prerequisites, including why a production bridge cannot be used and how to provide `hap-controller`
 without changing this repository's lockfile.
 
-`scripts/live-hap-stream-check.mjs` qualifies negotiated live streaming the same way: it drives one
-complete `SetupEndpoints` / start / RTCP / end-session cycle, observes inbound RTP against the
-negotiated payload type, synchronisation source, frame rate, and bitrate, matches the negotiated
-selection against the adaptation process arguments, and confirms no adaptation process survives the
-session. It never decrypts media.
+`scripts/live-hap-stream-check.mjs` qualifies negotiated live streaming the same way: it drives complete
+`SetupEndpoints` / start / RTCP / reconfigure / end-session cycles, authenticates and decrypts the
+inbound SRTP with the keys it supplied so it can judge the coded dimensions, profile, level, frame rate,
+keyframe cadence, and bit rate the accessory actually produced, negotiates a concurrent second session
+with `--concurrent`, matches the negotiated selection against the adaptation process arguments, and
+confirms no adaptation process survives the session. It measures decrypted media and keeps none of it.
 
 Both report the accessory id, product model, and power class for every camera they touch, so a recorded
 result identifies its subject without naming rooms.
+
+`scripts/hap-live-harness.mjs` owns the controller session mechanics all three scripts share: HAP TLV
+encoding, camera selection, endpoint setup, negotiated start, reconfigure and end commands, receiver
+reports, and SRTP measurement. Its measurement is covered hermetically by
+`test/contracts/live-hap-harness.test.ts`, so a green live result is not the only evidence that the
+harness reads packets correctly.
 
 `scripts/live-hap-capture.mjs` is the visual counterpart: it decrypts one negotiated session per camera
 and writes an MP4 plus a still frame for inspection. It writes real camera imagery, refuses to write

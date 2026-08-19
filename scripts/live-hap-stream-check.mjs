@@ -1,440 +1,435 @@
 /**
  * Live HomeKit stream qualification.
  *
- * Pairs a real HAP controller against a running Homebridge instance and drives one complete negotiated
- * live session for a represented camera: `SetupEndpoints`, `SelectedRTPStreamConfiguration` start,
- * inbound SRTP observation with periodic RTCP receiver reports, then an explicit end-session. It exists
- * because negotiated live media cannot be qualified hermetically: it needs an authenticated account, a
- * reachable camera, P2P transport, and an ffmpeg binary.
+ * Pairs a real HAP controller against a running Homebridge instance and drives complete negotiated live
+ * sessions for a represented camera: `SetupEndpoints`, start, an optional mid-session reconfiguration, an
+ * optional concurrent second session, then an explicit end. It exists because negotiated live media
+ * cannot be qualified hermetically: it needs an authenticated account, a reachable camera, P2P transport,
+ * and an ffmpeg binary.
  *
- * What it observes, without decrypting media:
+ * What it observes:
  *   - the accessory accepts the negotiated selection and reports a streaming session;
- *   - inbound RTP carries the negotiated payload type and synchronisation source, with multiplexed
- *     RTCP sender reports counted separately;
- *   - video continues across the RTCP interval while receiver reports are sent from the moment the
- *     session starts, because an accessory may terminate a session that receives no RTCP inside its
- *     startup grace, well before a slow camera has delivered a first frame;
- *   - measured packet rate, byte rate, and RTP timestamp cadence stay inside the negotiated frame rate
- *     and bitrate;
+ *   - every inbound packet authenticates with the SRTP key this controller supplied and carries the
+ *     negotiated payload type and synchronisation source, with multiplexed RTCP counted separately;
+ *   - the decrypted H.264 elementary stream carries the negotiated coded dimensions, profile, and level in
+ *     its sequence parameter sets, so the selection is proven on the wire and not only on a command line;
+ *   - measured frame rate, keyframe cadence, and bit rate stay inside the negotiated maxima, and video
+ *     continues across the RTCP interval while receiver reports are sent from the moment the session
+ *     starts, because an accessory may terminate a session that receives no RTCP inside its startup
+ *     grace, well before a slow camera has delivered a first frame;
+ *   - a mid-session reconfiguration changes the coded dimensions on the wire without ending the session
+ *     or changing its synchronisation source;
+ *   - a concurrent second session on the same camera streams alongside the first, and ending one leaves
+ *     the other streaming;
  *   - audio absence or silence does not stop video, reported as a separate audio packet count;
- *   - the session ends on request and the accessory returns to an available streaming status;
- *   - with `--homebridge-pid`, one adaptation process exists while streaming, its arguments carry the
- *     negotiated dimensions, frame rate, and bitrate, and none survives the end of the session.
+ *   - sessions end on request and the accessory returns to an available streaming status;
+ *   - with `--homebridge-pid`, adaptation processes exist while streaming, their arguments carry the
+ *     negotiated dimensions, frame rate, and bit rate, and none survives the end of the sessions.
  *
- * Adaptation arguments are matched but never printed, because they carry SRTP key material.
- *
- * SRTP payloads are never decrypted, so image content is not inspected and no media is written to disk.
- * Receiver reports are plain RTCP rather than SRTCP; the plugin's keepalive treats any datagram on the
- * session port as liveness, which is the behavior under test.
+ * Adaptation arguments are matched but never printed, because they carry SRTP key material. Decrypted
+ * media is measured and discarded: no imagery is written to disk. Use `live-hap-capture.mjs` when a
+ * maintainer needs to look at a frame. Receiver reports are plain RTCP rather than SRTCP; the plugin's
+ * keepalive treats any datagram on the session port as liveness, which is the behavior under test.
  *
  * Prerequisites and controller module resolution are identical to `live-hap-snapshot-check.mjs`: use a
  * dedicated Homebridge instance that is not paired to any controller, and provide `hap-controller`
  * through `--hap-controller <path>` or `HAP_CONTROLLER`.
  *
- * The controller must hold one persistent HAP connection, because an accessory ties the streaming
- * session to the connection that wrote `SetupEndpoints` and tears the session down when it closes.
- *
  * Usage:
  *   node scripts/live-hap-stream-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
  *     [--aid 7] [--battery] [--seconds 25] [--width 1280] [--height 720] [--fps 30] [--bitrate 299] \
- *     [--homebridge-pid 12345]
+ *     [--profile main] [--level 3.1] [--no-reconfigure] [--concurrent] \
+ *     [--reconfigure-width 640] [--reconfigure-height 360] [--reconfigure-fps 15] \
+ *     [--reconfigure-bitrate 150] [--homebridge-pid 12345] \
+ *     [--instance-log /tmp/hb-check/instance.log] [--jsonl /tmp/hb-check/homebridge-eufy/logs/homebridge-eufy.jsonl]
  *
- * A live session wakes the camera and streams from it, so wired cameras are used unless `--battery`
- * is passed. The script removes its own pairing before exiting.
+ * A live session wakes the camera and streams from it, so wired cameras are used unless `--battery` is
+ * passed. A battery source bounds a continuous stream with a power budget the plugin must extend, so use
+ * `--seconds 60` or more on a battery camera to cross that boundary. The script removes its own pairing
+ * before exiting.
+ *
+ * With `--instance-log` and `--jsonl` it also judges the log sections the run appended: a Homebridge
+ * service log free of failure and cleanup lines, and a plugin JSONL free of error records. Only levels,
+ * counts, and kebab-case condition codes are printed, never a log line, because those files carry
+ * support-sensitive context even though plugin output is allowlisted. Both files must be readable by the
+ * account running this script, so run it as the account that owns the Homebridge storage.
  */
-import { execFileSync } from 'node:child_process';
-import { createSocket } from 'node:dgram';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const CAMERA_RTP_STREAM_MANAGEMENT = '00000110-0000-1000-8000-0026BB765291';
-const BATTERY = '00000096-0000-1000-8000-0026BB765291';
-const SETUP_ENDPOINTS = '00000118';
-const SELECTED_RTP_STREAM_CONFIGURATION = '00000117';
-const STREAMING_STATUS = '00000120';
-const AES_CM_128_HMAC_SHA1_80 = 0;
-const H264 = 0;
-const AAC_ELD = 2;
-const START_SESSION = 1;
-const END_SESSION = 0;
+import {
+  LiveSession,
+  accessoryModel,
+  adaptationProcesses,
+  cameraStreamManagements,
+  hasBattery,
+  options,
+  required,
+  selectCameras,
+  waitFor,
+} from './hap-live-harness.mjs';
 
-const ACCESSORY_INFORMATION = '0000003E';
-const MODEL = '00000021';
-
-/** Product model of one accessory, which identifies a run without exposing the owner's chosen name. */
-function accessoryModel(accessory) {
-  const information = accessory.services.find((service) => service.type.toUpperCase().startsWith(ACCESSORY_INFORMATION));
-  const model = information?.characteristics.find((entry) => entry.type.toUpperCase().startsWith(MODEL));
-  return typeof model?.value === 'string' ? model.value : 'unknown model';
-}
-
-function options(argv) {
-  const parsed = new Map();
-  for (let index = 0; index < argv.length; index += 1) {
-    if (!argv[index].startsWith('--')) {
-      continue;
-    }
-    const next = argv[index + 1];
-    parsed.set(argv[index].slice(2), next && !next.startsWith('--') ? next : 'true');
-  }
-  return parsed;
-}
-
-function required(parsed, name) {
-  const value = parsed.get(name);
-  if (!value) {
-    throw new Error(`missing --${name}; see the header of this script for usage`);
-  }
-  return value;
-}
-
-function tlv(...pairs) {
-  const chunks = [];
-  for (let index = 0; index < pairs.length; index += 2) {
-    const type = pairs[index];
-    const payload = Buffer.isBuffer(pairs[index + 1]) ? pairs[index + 1] : Buffer.from([pairs[index + 1]]);
-    for (let offset = 0; offset < Math.max(payload.length, 1); offset += 255) {
-      const fragment = payload.subarray(offset, offset + 255);
-      chunks.push(Buffer.from([type, fragment.length]), fragment);
-    }
-  }
-  return Buffer.concat(chunks);
-}
-
-function untlv(buffer) {
-  const values = new Map();
-  let offset = 0;
-  while (offset + 2 <= buffer.length) {
-    const type = buffer[offset];
-    const length = buffer[offset + 1];
-    const fragment = buffer.subarray(offset + 2, offset + 2 + length);
-    values.set(type, values.has(type) ? Buffer.concat([values.get(type), fragment]) : fragment);
-    offset += 2 + length;
-  }
-  return values;
-}
-
-function uint16(value) {
-  const buffer = Buffer.alloc(2);
-  buffer.writeUInt16LE(value);
-  return buffer;
-}
-
-function uint32(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(value);
-  return buffer;
-}
-
-async function reservePort() {
-  const socket = createSocket('udp4');
-  await new Promise((resolve, reject) => {
-    socket.once('error', reject);
-    socket.bind(0, '0.0.0.0', resolve);
-  });
-  return {
-    port: socket.address().port,
-    socket,
-  };
-}
-
-/** RFC 5761 multiplexes RTCP on the RTP port; packet types 200-204 are RTCP, not media. */
-function isRtcp(packet) {
-  const packetType = packet[1] & 0xff;
-  return packetType >= 200 && packetType <= 204;
-}
-
-/**
- * Adaptation processes the accessory owns for this session, observed only when a pid is supplied.
- * Arguments are returned for matching against the negotiated selection and must not be printed,
- * because they carry SRTP key material.
- */
-function adaptationProcesses(pid) {
-  if (!pid) {
-    return undefined;
-  }
-  const listing = execFileSync('ps', ['-ax', '-o', 'ppid=,args='], { encoding: 'utf8' });
-  return listing
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const separator = line.indexOf(' ');
-      return { parent: Number(line.slice(0, separator)), args: line.slice(separator + 1) };
-    })
-    .filter(({ parent, args }) => parent === Number(pid) && args.includes('ffmpeg'));
-}
-
-/** A minimal RTCP receiver report, enough for the accessory's session keepalive. */
-function receiverReport(senderSsrc, sourceSsrc, highestSequence, packets) {
-  const report = Buffer.alloc(32);
-  report.writeUInt8(0x81, 0);
-  report.writeUInt8(201, 1);
-  report.writeUInt16BE(7, 2);
-  report.writeUInt32BE(senderSsrc, 4);
-  report.writeUInt32BE(sourceSsrc, 8);
-  report.writeUInt8(0, 12);
-  report.writeUIntBE(0, 13, 3);
-  report.writeUInt32BE(highestSequence, 16);
-  report.writeUInt32BE(0, 20);
-  report.writeUInt32BE(0, 24);
-  report.writeUInt32BE(packets, 28);
-  return report;
-}
+const FIRST_PACKET_TIMEOUT_MS = 20_000;
+const RECONFIGURE_TIMEOUT_MS = 20_000;
+const TEARDOWN_GRACE_MS = 5_000;
+const LATE_WINDOW_SECONDS = 10;
+const CONCURRENT_WINDOW_SECONDS = 10;
 
 const parsed = options(process.argv.slice(2));
+const address = required(parsed, 'address');
 const seconds = Number(parsed.get('seconds') ?? 25);
-const width = Number(parsed.get('width') ?? 1280);
-const height = Number(parsed.get('height') ?? 720);
-const fps = Number(parsed.get('fps') ?? 30);
-const maxBitrate = Number(parsed.get('bitrate') ?? 299);
-const videoPayloadType = 99;
-const audioPayloadType = 110;
+const selection = {
+  width: Number(parsed.get('width') ?? 1280),
+  height: Number(parsed.get('height') ?? 720),
+  fps: Number(parsed.get('fps') ?? 30),
+  bitrate: Number(parsed.get('bitrate') ?? 299),
+  profile: parsed.get('profile') ?? 'main',
+  level: parsed.get('level') ?? '3.1',
+  videoPayloadType: 99,
+  audioPayloadType: 110,
+};
+const reconfigured = {
+  ...selection,
+  width: Number(parsed.get('reconfigure-width') ?? 640),
+  height: Number(parsed.get('reconfigure-height') ?? 360),
+  fps: Number(parsed.get('reconfigure-fps') ?? 15),
+  bitrate: Number(parsed.get('reconfigure-bitrate') ?? 150),
+};
+const homebridgePid = parsed.get('homebridge-pid');
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
   throw new Error(`hap-controller is unavailable at ${controllerModule}; install it outside this repository`);
 });
 
-const client = new HttpClient(
-  required(parsed, 'device-id'),
-  required(parsed, 'address'),
-  Number(required(parsed, 'port')),
-  undefined,
-  { usePersistentConnections: true, subscriptionsUseSameConnection: true },
-);
+let failures = 0;
+let unverified = 0;
+function check(passed, description) {
+  console.log(`  ${passed ? 'pass' : 'FAIL'} ${description}`);
+  if (!passed) {
+    failures += 1;
+  }
+}
+
+const PROFILE_ORDER = ['baseline', 'main', 'high'];
+const FAILURE_LINE = /\b(error|failed|failure|exception|unhandled|cleanup)\b/i;
+const CONDITION_CODE = /\[([a-z][a-z0-9-]+)\]/g;
+
+/** Byte length of a log file now, so only the section this run appends is ever read. */
+function logMark(path) {
+  if (!path) {
+    return undefined;
+  }
+  return { path, offset: statSync(path).size };
+}
+
+/** Reads only what a run appended to a log, without exposing any line of it. */
+function appended(mark) {
+  const content = readFileSync(mark.path, 'utf8').slice(mark.offset);
+  return content.split('\n').filter((line) => line.trim().length > 0);
+}
+
+/** Judges the Homebridge service log section this run produced by level and condition code only. */
+function judgeInstanceLog(mark) {
+  if (!mark) {
+    unverified += 1;
+    console.log('instance-log=not-observed (pass --instance-log to verify it)');
+    return;
+  }
+  const lines = appended(mark);
+  const failing = lines.filter((line) => FAILURE_LINE.test(line));
+  const codes = new Set(lines.flatMap((line) => [...line.matchAll(CONDITION_CODE)].map((match) => match[1])));
+  console.log(
+    `instance-log lines=${lines.length} conditions=[${[...codes].join(',')}] failure-lines=${failing.length}`,
+  );
+  check(failing.length === 0, 'the Homebridge log recorded no failure or repeated cleanup line for the session');
+}
+
+/** Judges the plugin JSONL section this run produced by level and condition code only. */
+function judgePluginLog(mark) {
+  if (!mark) {
+    unverified += 1;
+    console.log('plugin-jsonl=not-observed (pass --jsonl to verify it)');
+    return;
+  }
+  const records = appended(mark).flatMap((line) => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
+  const levels = {};
+  const codes = new Set();
+  for (const record of records) {
+    levels[record.level] = (levels[record.level] ?? 0) + 1;
+    if (record.code && record.level !== 'debug') {
+      codes.add(record.code);
+    }
+  }
+  console.log(
+    `plugin-jsonl records=${records.length} levels=${JSON.stringify(levels)} conditions=[${[...codes].join(',')}]`,
+  );
+  check((levels.error ?? 0) === 0, 'the plugin JSONL recorded no error condition for the session');
+}
+
+/**
+ * A coded profile or level satisfies a negotiated one when it is not higher than it. A controller that
+ * offered `main` at level 3.1 decodes a constrained-baseline level-3.0 stream, so the acceptance rule is
+ * an upper bound rather than equality.
+ */
+function withinNegotiated(coded, negotiated) {
+  const codedProfile = PROFILE_ORDER.indexOf(coded.profile);
+  return (
+    codedProfile >= 0 &&
+    codedProfile <= PROFILE_ORDER.indexOf(negotiated.profile) &&
+    Number(coded.level) <= Number(negotiated.level)
+  );
+}
+
+/**
+ * What one session carried between two of its snapshots, so a window is judged on its own. Numeric
+ * counters are differenced; the payload-type and synchronisation-source sets stay whole-session, because
+ * an identity that appeared once must still fail a later window.
+ */
+function delta(current, previous) {
+  const window = {
+    payloadTypes: current.payloadTypes,
+    ssrcs: current.ssrcs,
+    parameterSets: current.parameterSets.slice(Math.max(previous.parameterSets.length - 1, 0)),
+  };
+  for (const [name, value] of Object.entries(current)) {
+    if (typeof value === 'number') {
+      window[name] = value - previous[name];
+    }
+  }
+  return window;
+}
+
+/**
+ * Reports and judges what one measured window carried, without exposing any media content. Rates are
+ * judged on the window; keyframe presence and refresh cadence are judged on the whole session, because a
+ * window shorter than one group of pictures legitimately contains no keyframe of its own.
+ */
+function reportWindow(label, report, elapsedSeconds, expected, session = report) {
+  const kilobitsPerSecond = (report.bytes * 8) / 1_000 / Math.max(elapsedSeconds, 1);
+  const framesPerSecond = report.frames / Math.max(elapsedSeconds, 1);
+  console.log(
+    `${label} packets=${report.packets} bytes=${report.bytes} rate=${kilobitsPerSecond.toFixed(0)}kbps` +
+      ` frames=${report.frames} (${framesPerSecond.toFixed(1)}fps) keyframes=${report.keyframes}` +
+      ` unauthenticated=${report.unauthenticated} foreign-ssrc=${report.foreign} accessory-rtcp=${report.rtcpPackets}`,
+  );
+  console.log(
+    `${label} coded=${report.parameterSets
+      .map((set) => `${set.width}x${set.height} ${set.profile}@${set.level} frames=${set.frames}`)
+      .join(' -> ')}`,
+  );
+  check(report.packets > 0, `${label} delivered authenticated video`);
+  check(report.unauthenticated === 0, `${label} authenticated every packet with the negotiated SRTP key`);
+  check(report.foreign === 0, `${label} sent nothing from another synchronisation source`);
+  check(
+    report.payloadTypes.size === 1 && report.payloadTypes.has(expected.videoPayloadType),
+    `${label} used only the negotiated payload type ${expected.videoPayloadType}`,
+  );
+  check(session.keyframes > 0, `${label} delivered at least one keyframe`);
+  if (session.keyframes > 1) {
+    check(
+      session.frames / session.keyframes <= expected.fps * 3,
+      `${label} refreshed inside the negotiated group of pictures`,
+    );
+  }
+  check(kilobitsPerSecond <= expected.bitrate * 1.5, `${label} stayed inside the negotiated ${expected.bitrate}kbps`);
+  check(framesPerSecond <= expected.fps * 1.2, `${label} stayed inside the negotiated ${expected.fps}fps`);
+  const coded = report.parameterSets.at(-1);
+  check(
+    coded?.width === expected.width && coded?.height === expected.height,
+    `${label} coded the negotiated ${expected.width}x${expected.height}`,
+  );
+  check(
+    coded !== undefined && withinNegotiated(coded, expected),
+    `${label} coded at or below the negotiated ${expected.profile} profile and level ${expected.level}`,
+  );
+}
+
+/** Adaptation processes the plugin owns, with the negotiated selection matched but never printed. */
+function observeAdaptation(label, expectedCount, applied) {
+  const processes = adaptationProcesses(homebridgePid);
+  if (processes === undefined) {
+    console.log(`${label} adaptation processes=not-observed (pass --homebridge-pid to verify them)`);
+    unverified += 1;
+    return;
+  }
+  console.log(`${label} adaptation processes=${processes.length}`);
+  check(processes.length === expectedCount, `${label} ran exactly ${expectedCount} adaptation process(es)`);
+  if (!applied || processes.length === 0) {
+    return;
+  }
+  check(
+    processes.some(({ args }) => args.includes(`${applied.width}:${applied.height}`)),
+    `${label} adaptation applied ${applied.width}x${applied.height}`,
+  );
+  check(
+    processes.some(({ args }) => new RegExp(`-r\\s+${applied.fps}\\b`).test(args)),
+    `${label} adaptation applied ${applied.fps}fps`,
+  );
+  check(
+    processes.some(({ args }) => args.includes(`${applied.bitrate}k`)),
+    `${label} adaptation applied ${applied.bitrate}kbps`,
+  );
+}
+
+const client = new HttpClient(required(parsed, 'device-id'), address, Number(required(parsed, 'port')), undefined, {
+  usePersistentConnections: true,
+  subscriptionsUseSameConnection: true,
+});
 await client.pairSetup(required(parsed, 'pin'));
 console.log('paired one temporary controller');
 
-let failures = 0;
-const video = await reservePort();
-const audio = await reservePort();
+const sessions = [];
+const instanceLog = logMark(parsed.get('instance-log'));
+const pluginLog = logMark(parsed.get('jsonl'));
 try {
   const { accessories } = await client.getAccessories();
-  const cameras = accessories.filter((accessory) =>
-    accessory.services.some((service) => service.type.toUpperCase() === CAMERA_RTP_STREAM_MANAGEMENT),
-  );
-  const selectable = parsed.has('battery')
-    ? cameras
-    : cameras.filter((accessory) => !accessory.services.some((service) => service.type.toUpperCase() === BATTERY));
-  const accessory = parsed.has('aid')
-    ? cameras.find(({ aid }) => aid === Number(parsed.get('aid')))
-    : selectable[0];
+  const cameras = selectCameras(accessories, {
+    battery: parsed.has('battery'),
+    ...(parsed.has('aid') ? { aid: parsed.get('aid') } : {}),
+  });
+  const accessory = cameras[0];
   if (!accessory) {
     throw new Error('no camera accessory matched the selection');
   }
-  const management = accessory.services.find(
-    (service) => service.type.toUpperCase() === CAMERA_RTP_STREAM_MANAGEMENT,
-  );
-  const characteristic = (prefix) => {
-    const found = management.characteristics.find((entry) => entry.type.toUpperCase().startsWith(prefix));
-    if (!found) {
-      throw new Error(`camera service is missing characteristic ${prefix}`);
-    }
-    return `${accessory.aid}.${found.iid}`;
-  };
+  const streamCount = cameraStreamManagements(accessory).length;
   console.log(
-    `camera aid=${accessory.aid} model="${accessoryModel(accessory)}" power=${selectable.includes(accessory) ? 'wired' : 'battery'} ports video=${video.port} audio=${audio.port}`,
+    `camera aid=${accessory.aid} model="${accessoryModel(accessory)}"` +
+      ` power=${hasBattery(accessory) ? 'battery' : 'wired'} stream-managements=${streamCount}`,
   );
 
-  const sessionId = Buffer.from(randomUUID().replaceAll('-', ''), 'hex');
-  const videoKey = randomBytes(16);
-  const videoSalt = randomBytes(14);
-  const audioKey = randomBytes(16);
-  const audioSalt = randomBytes(14);
-  const setup = tlv(
-    1,
-    sessionId,
-    3,
-    tlv(1, 0, 2, Buffer.from(required(parsed, 'address'), 'utf8'), 3, uint16(video.port), 4, uint16(audio.port)),
-    4,
-    tlv(1, AES_CM_128_HMAC_SHA1_80, 2, videoKey, 3, videoSalt),
-    5,
-    tlv(1, AES_CM_128_HMAC_SHA1_80, 2, audioKey, 3, audioSalt),
-  );
-  await client.setCharacteristics({ [characteristic(SETUP_ENDPOINTS)]: setup.toString('base64') });
-  const response = await client.getCharacteristics([characteristic(SETUP_ENDPOINTS)]);
-  const negotiated = untlv(Buffer.from(response.characteristics[0].value, 'base64'));
-  const status = negotiated.get(2)?.[0];
-  if (status !== 0) {
-    throw new Error(`accessory refused endpoint setup with status ${status}`);
+  const primary = new LiveSession(client, accessory, address);
+  sessions.push(primary);
+  const endpoints = await primary.setup();
+  if (endpoints.status !== 0) {
+    throw new Error(`accessory refused endpoint setup with status ${endpoints.status}`);
   }
-  const accessoryAddress = untlv(negotiated.get(3));
-  const accessoryVideoPort = accessoryAddress.get(3).readUInt16LE(0);
-  const videoSsrc = negotiated.get(6).readUInt32LE(0);
-  const audioSsrc = negotiated.get(7).readUInt32LE(0);
-  console.log(`endpoints accepted accessory-video-port=${accessoryVideoPort} video-ssrc=${videoSsrc >>> 0}`);
-
-  const observed = {
-    videoPackets: 0,
-    videoBytes: 0,
-    audioPackets: 0,
-    accessoryReports: 0,
-    payloadTypes: new Set(),
-    ssrcs: new Set(),
-  };
-  const timestamps = new Set();
-  let highestSequence = 0;
-  video.socket.on('message', (packet) => {
-    if (packet.length < 12) {
-      return;
-    }
-    if (isRtcp(packet)) {
-      observed.accessoryReports += 1;
-      return;
-    }
-    observed.videoPackets += 1;
-    observed.videoBytes += packet.length;
-    observed.payloadTypes.add(packet[1] & 0x7f);
-    observed.ssrcs.add(packet.readUInt32BE(8));
-    highestSequence = Math.max(highestSequence, packet.readUInt16BE(2));
-    timestamps.add(packet.readUInt32BE(4));
-  });
-  audio.socket.on('message', (packet) => {
-    if (!isRtcp(packet)) {
-      observed.audioPackets += 1;
-    }
-  });
-
-  const selection = tlv(
-    1,
-    tlv(1, sessionId, 2, START_SESSION),
-    2,
-    tlv(
-      1,
-      H264,
-      2,
-      tlv(1, 1, 2, 0, 3, 1),
-      3,
-      tlv(1, uint16(width), 2, uint16(height), 3, fps),
-      4,
-      tlv(1, videoPayloadType, 2, uint32(videoSsrc), 3, uint16(maxBitrate), 4, Buffer.from([0, 0, 0x80, 0x3f])),
-    ),
-    3,
-    tlv(
-      1,
-      AAC_ELD,
-      2,
-      tlv(1, 1, 2, 0, 3, 0, 4, 30),
-      3,
-      tlv(1, audioPayloadType, 2, uint32(audioSsrc), 3, uint16(24), 4, Buffer.from([0, 0, 0x80, 0x3f]), 6, 13),
-      4,
-      0,
-    ),
+  console.log(
+    `endpoints accepted accessory-video-port=${endpoints.accessoryVideoPort} video-ssrc=${endpoints.videoSsrc}`,
   );
+
   const startedAt = Date.now();
-  await client.setCharacteristics({ [characteristic(SELECTED_RTP_STREAM_CONFIGURATION)]: selection.toString('base64') });
-  console.log('start-session accepted');
+  await primary.start(selection);
+  console.log(
+    `start-session accepted ${selection.width}x${selection.height}@${selection.fps} ${selection.bitrate}kbps`,
+  );
+  const firstPacket = await waitFor(() => primary.measured.report.packets > 0, FIRST_PACKET_TIMEOUT_MS);
+  check(firstPacket !== undefined, `video started within ${FIRST_PACKET_TIMEOUT_MS / 1_000}s of start-session`);
+  if (firstPacket !== undefined) {
+    console.log(`first video packet after ${Date.now() - startedAt}ms`);
+  }
 
-  const reports = setInterval(() => {
-    video.socket.send(
-      receiverReport(0x4f4f4f4f, videoSsrc >>> 0, highestSequence, observed.videoPackets),
-      accessoryVideoPort,
-      required(parsed, 'address'),
+  const early = primary.measured.report;
+  const observedFrom = Date.now();
+  await delay(Math.max(seconds - LATE_WINDOW_SECONDS, 0) * 1_000);
+  const late = primary.measured.report;
+  await delay(Math.min(seconds, LATE_WINDOW_SECONDS) * 1_000);
+  const streaming = primary.measured.report;
+  observeAdaptation('primary', 1, selection);
+  reportWindow('primary', delta(streaming, early), (Date.now() - observedFrom) / 1_000, selection, streaming);
+  check(streaming.packets > early.packets, 'primary continued past its first packets across the RTCP interval');
+  check(
+    streaming.frames > late.frames,
+    `primary was still delivering frames in its last ${LATE_WINDOW_SECONDS}s, so no source budget or` +
+      ' linger boundary stopped it mid-session',
+  );
+  check(streaming.rtcpPackets > 0, 'primary received accessory RTCP inside the session');
+  console.log(`primary audio-packets=${primary.audioPackets}`);
+  check(
+    streaming.frames > early.frames,
+    'primary kept delivering complete video frames while source audio was silent or absent',
+  );
+
+  if (!parsed.has('no-reconfigure') && streaming.packets > 0) {
+    console.log(
+      `reconfigure to ${reconfigured.width}x${reconfigured.height}@${reconfigured.fps} ${reconfigured.bitrate}kbps`,
     );
-  }, 1_000);
-  const firstPacketAt = await (async () => {
-    for (let waited = 0; waited < 20_000; waited += 250) {
-      if (observed.videoPackets > 0) {
-        return Date.now();
-      }
-      await delay(250);
-    }
-    return undefined;
-  })();
-  if (!firstPacketAt) {
-    failures += 1;
-    console.log('no inbound video within 20s of start-session');
-  } else {
-    console.log(`first video packet after ${firstPacketAt - startedAt}ms`);
-  }
-  const midpoint = { ...observed, timestamps: timestamps.size };
-  await delay(seconds * 1_000);
-  const streamingProcesses = adaptationProcesses(parsed.get('homebridge-pid'));
-  clearInterval(reports);
-
-  const elapsedSeconds = (Date.now() - (firstPacketAt ?? startedAt)) / 1_000;
-  const kilobitsPerSecond = (observed.videoBytes * 8) / 1_000 / Math.max(elapsedSeconds, 1);
-  const framesPerSecond = (timestamps.size - midpoint.timestamps) / Math.max(elapsedSeconds, 1);
-  console.log(
-    `observed video packets=${observed.videoPackets} bytes=${observed.videoBytes} rate=${kilobitsPerSecond.toFixed(0)}kbps frames=${framesPerSecond.toFixed(1)}fps audio-packets=${observed.audioPackets} accessory-rtcp=${observed.accessoryReports}`,
-  );
-  console.log(
-    `payload-types=[${[...observed.payloadTypes].join(',')}] ssrcs-match=${observed.ssrcs.size === 1 && observed.ssrcs.has(videoSsrc >>> 0)}`,
-  );
-  if (observed.videoPackets > 0) {
-    if (!observed.payloadTypes.has(videoPayloadType) || observed.payloadTypes.size !== 1) {
-      failures += 1;
-      console.log(`negotiated payload type ${videoPayloadType} was not the only inbound payload type`);
-    }
-    if (!(observed.ssrcs.size === 1 && observed.ssrcs.has(videoSsrc >>> 0))) {
-      failures += 1;
-      console.log('inbound synchronisation source did not match the negotiated value');
-    }
-    if (kilobitsPerSecond > maxBitrate * 1.5) {
-      failures += 1;
-      console.log(`observed bitrate exceeded the negotiated maximum of ${maxBitrate}kbps`);
-    }
-    if (framesPerSecond > fps * 1.2) {
-      failures += 1;
-      console.log(`observed frame rate exceeded the negotiated ${fps}fps`);
-    }
-    if (observed.videoPackets === midpoint.videoPackets) {
-      failures += 1;
-      console.log('video stopped after the first packets instead of continuing across the RTCP interval');
-    }
+    const before = primary.measured.report;
+    const reconfiguredFrom = Date.now();
+    await primary.reconfigure(reconfigured);
+    const changed = await waitFor(() => {
+      const coded = primary.measured.report.parameterSets.at(-1);
+      return coded?.width === reconfigured.width && coded?.height === reconfigured.height;
+    }, RECONFIGURE_TIMEOUT_MS);
+    check(changed !== undefined, `reconfigured dimensions reached the wire within ${RECONFIGURE_TIMEOUT_MS / 1_000}s`);
+    await delay(5_000);
+    const after = primary.measured.report;
+    check(after.packets > before.packets, 'the session continued through the reconfiguration');
+    check(after.ssrcs.size === 1, 'the reconfigured session kept its negotiated synchronisation source');
+    check(after.unauthenticated === before.unauthenticated, 'the reconfigured session kept the negotiated SRTP key');
+    check((await primary.streamingStatus()) === 1, 'the accessory still reported an in-use streaming session');
+    observeAdaptation('reconfigured', 1, reconfigured);
+    reportWindow(
+      'reconfigured',
+      delta(after, before),
+      (Date.now() - reconfiguredFrom) / 1_000,
+      reconfigured,
+      delta(after, before),
+    );
   }
 
-  if (streamingProcesses !== undefined) {
-    console.log(`adaptation processes while streaming=${streamingProcesses.length}`);
-    if (streamingProcesses.length < 1) {
-      failures += 1;
-      console.log('no adaptation process was running while the session streamed');
-    } else {
-      const applied = {
-        dimensions: streamingProcesses.some(({ args }) => args.includes(`${width}:${height}`)),
-        frameRate: streamingProcesses.some(({ args }) => new RegExp(`-r\\s+${fps}\\b`).test(args)),
-        bitrate: streamingProcesses.some(({ args }) => args.includes(`${maxBitrate}k`)),
-      };
-      console.log(
-        `negotiated selection applied dimensions=${applied.dimensions} frame-rate=${applied.frameRate} bitrate=${applied.bitrate}`,
+  if (parsed.has('concurrent')) {
+    check(streamCount > 1, 'the accessory advertises more than one stream management service');
+    const secondary = new LiveSession(client, accessory, address, { streamIndex: 1 });
+    sessions.push(secondary);
+    const secondaryEndpoints = await secondary.setup();
+    check(secondaryEndpoints.status === 0, 'a concurrent second session was accepted for endpoint setup');
+    if (secondaryEndpoints.status === 0) {
+      const concurrentFrom = primary.measured.report;
+      await secondary.start(selection);
+      const secondaryFirst = await waitFor(() => secondary.measured.report.packets > 0, FIRST_PACKET_TIMEOUT_MS);
+      check(secondaryFirst !== undefined, 'the concurrent session delivered video of its own');
+      const secondaryEarly = secondary.measured.report;
+      const observedConcurrentFrom = Date.now();
+      await delay(CONCURRENT_WINDOW_SECONDS * 1_000);
+      reportWindow(
+        'concurrent',
+        delta(secondary.measured.report, secondaryEarly),
+        (Date.now() - observedConcurrentFrom) / 1_000,
+        selection,
+        secondary.measured.report,
       );
-      for (const [name, matched] of Object.entries(applied)) {
-        if (!matched) {
-          failures += 1;
-          console.log(`adaptation did not apply the negotiated ${name}`);
-        }
-      }
+      check(
+        primary.measured.report.packets > concurrentFrom.packets,
+        'the first session kept streaming while the concurrent session ran',
+      );
+      observeAdaptation('concurrent', 2);
+      const beforeEnd = primary.measured.report;
+      await secondary.end();
+      await delay(TEARDOWN_GRACE_MS);
+      check(
+        primary.measured.report.packets > beforeEnd.packets,
+        'the first session survived the end of the concurrent session',
+      );
+      observeAdaptation('after-concurrent-end', 1);
+      check((await secondary.streamingStatus()) === 0, 'the concurrent stream management returned to available');
     }
   }
 
-  await client.setCharacteristics({
-    [characteristic(SELECTED_RTP_STREAM_CONFIGURATION)]: tlv(1, tlv(1, sessionId, 2, END_SESSION)).toString('base64'),
-  });
-  await delay(5_000);
-  const remainingProcesses = adaptationProcesses(parsed.get('homebridge-pid'));
-  if (remainingProcesses !== undefined) {
-    console.log(`adaptation processes after end-session=${remainingProcesses.length}`);
-    if (remainingProcesses.length > 0) {
-      failures += 1;
-      console.log('an adaptation process survived the end of the session');
-    }
-  }
-  const streaming = await client.getCharacteristics([characteristic(STREAMING_STATUS)]);
-  const streamingStatus = untlv(Buffer.from(streaming.characteristics[0].value, 'base64')).get(1)?.[0];
-  console.log(`end-session accepted streaming-status=${streamingStatus}`);
-  if (streamingStatus !== 0) {
-    failures += 1;
-    console.log('accessory did not return to an available streaming status');
-  }
+  await primary.end();
+  await delay(TEARDOWN_GRACE_MS);
+  observeAdaptation('after-end', 0);
+  check((await primary.streamingStatus()) === 0, 'the accessory returned to an available streaming status');
+  judgeInstanceLog(instanceLog);
+  judgePluginLog(pluginLog);
 } finally {
-  video.socket.close();
-  audio.socket.close();
+  for (const session of sessions) {
+    session.close();
+  }
   await client.removePairing(client.pairingProtocol.iOSDevicePairingID);
   client.close();
   console.log('removed the temporary controller pairing');
 }
 
+if (unverified > 0) {
+  console.log(`live stream qualification left ${unverified} observation(s) unverified`);
+}
 if (failures > 0) {
   console.error(`live stream qualification reported ${failures} failing observation(s)`);
   process.exitCode = 1;

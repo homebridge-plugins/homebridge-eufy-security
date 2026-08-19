@@ -114,7 +114,47 @@ Opening a live stream wakes some battery cameras and consumes a bounded media bu
 lights, alarms, locks, arming state, microphone settings, or other persistent controls unless that
 operation class has separate explicit approval.
 
-## 6. Record the result safely
+## 6. Drive the same paths without a Home app
+
+The harnesses in `scripts/` pair a real HAP controller against a dedicated Homebridge instance, so live
+camera acceptance does not depend on adding a bridge in the Home app. Each script documents its own
+prerequisites and options in its file header; all three need a Homebridge instance that is **not** paired
+to any controller and a `hap-controller` module installed outside this repository.
+
+| Script | What it qualifies |
+| --- | --- |
+| `live-hap-snapshot-check.mjs` | HomeKit snapshot requests, retained image policy, and on-disk modes |
+| `live-hap-stream-check.mjs` | Negotiated live streaming, measured on the decrypted wire |
+| `live-hap-capture.mjs` | One MP4 and still per camera when a maintainer must look at a frame |
+
+`live-hap-stream-check.mjs` decrypts and authenticates the inbound SRTP with the keys it supplied, so it
+judges what the accessory actually encoded rather than what a command line asked for: negotiated payload
+type and synchronisation source, coded dimensions, profile and level from the sequence parameter sets,
+frame rate, keyframe cadence, and bit rate. It also drives the cases a Home app only reaches by chance:
+
+```bash
+node scripts/live-hap-stream-check.mjs \
+  --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
+  --seconds 25 --concurrent --homebridge-pid <homebridge pid>
+```
+
+- a mid-session reconfiguration must change the coded dimensions on the wire while the session keeps its
+  synchronisation source, its SRTP key, and its single adaptation process;
+- `--concurrent` negotiates a second session on the camera's second stream management service, and ending
+  one must leave the other streaming;
+- `--homebridge-pid` counts adaptation processes during and after the session and matches the negotiated
+  selection against their arguments, which are never printed because they carry SRTP key material;
+- a battery camera bounds a continuous stream with a power budget the plugin must extend, so use
+  `--seconds 60` or more with `--battery` to cross that boundary.
+
+A coded profile or level below the negotiated one is a pass: a controller that offered `main` at level
+3.1 decodes the constrained-baseline stream low-latency adaptation produces. Measured frame rate and bit
+rate are upper-bound checks, because a camera that delivers fewer frames than negotiated is normal.
+
+The measurement itself is covered hermetically by `test/contracts/live-hap-harness.test.ts`, so a green
+live result is not the only evidence that the harness reads packets correctly.
+
+## 7. Record the result safely
 
 Record only:
 

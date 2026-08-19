@@ -193,6 +193,122 @@ describe('live media adaptation', () => {
     }
   });
 
+  it('applies a reconfigured selection to adaptation while keeping the negotiated RTP identity', async () => {
+    const stream = new SyntheticLiveStream();
+    const spawned: string[][] = [];
+    const media = new FfmpegLiveMedia(
+      '/synthetic/ffmpeg',
+      (_executable, args) => {
+        spawned.push([...args]);
+        return process();
+      },
+      async () => ({ port: 41000, onMessage: vi.fn(), close: vi.fn() }),
+    );
+    const prepared = await media.prepare({
+      addressVersion: 'ipv4',
+      targetAddress: '192.0.2.10',
+      video: {
+        port: 50100,
+        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+        srtpKey: Buffer.alloc(16, 5),
+        srtpSalt: Buffer.alloc(14, 6),
+      },
+    });
+    const video = {
+      width: 1280,
+      height: 720,
+      fps: 30,
+      maxBitRate: 300,
+      profile: 'main' as const,
+      level: '3.1' as const,
+      payloadType: 99,
+      ssrc: 1234,
+      mtu: 1200,
+      rtcpInterval: 0.5,
+    };
+    await prepared.start({ live: async () => stream }, { video });
+    const keyframe = { codec: 'h264' as const, width: 1280, height: 720, keyframe: true, data: Buffer.from([0x65]) };
+    stream.video(keyframe);
+
+    prepared.reconfigure({ ...video, width: 640, height: 360, fps: 15, maxBitRate: 150 });
+    stream.video({ ...keyframe, keyframe: false });
+    expect(spawned).toHaveLength(1);
+    stream.video(keyframe);
+
+    expect(spawned).toHaveLength(2);
+    expect(spawned[0]).toContain(
+      'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+    );
+    expect(spawned[1]).toContain('scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2');
+    expect(spawned[1]).toEqual(expect.arrayContaining(['-r', '15', '-g', '30', '-b:v', '150k', '-maxrate', '150k']));
+    expect(spawned[1]).toEqual(
+      expect.arrayContaining([
+        '-payload_type',
+        '99',
+        '-ssrc',
+        '1234',
+        '-srtp_out_params',
+        Buffer.concat([Buffer.alloc(16, 5), Buffer.alloc(14, 6)]).toString('base64'),
+        'srtp://192.0.2.10:50100?rtcpport=50100&pkt_size=1200',
+      ]),
+    );
+    expect(stream.stop).not.toHaveBeenCalled();
+    prepared.stop();
+  });
+
+  it('readapts a changed source codec at its next keyframe without changing negotiated output', async () => {
+    const stream = new SyntheticLiveStream();
+    const spawned: string[][] = [];
+    const media = new FfmpegLiveMedia(
+      '/synthetic/ffmpeg',
+      (_executable, args) => {
+        spawned.push([...args]);
+        return process();
+      },
+      async () => ({ port: 41000, onMessage: vi.fn(), close: vi.fn() }),
+    );
+    const prepared = await media.prepare({
+      addressVersion: 'ipv4',
+      targetAddress: '192.0.2.10',
+      video: {
+        port: 50100,
+        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+        srtpKey: Buffer.alloc(16),
+        srtpSalt: Buffer.alloc(14),
+      },
+    });
+    await prepared.start(
+      { live: async () => stream },
+      {
+        video: {
+          width: 1280,
+          height: 720,
+          fps: 30,
+          maxBitRate: 300,
+          profile: 'main',
+          level: '3.1',
+          payloadType: 99,
+          ssrc: 1234,
+          mtu: 1200,
+          rtcpInterval: 0.5,
+        },
+      },
+    );
+    stream.video({ codec: 'h264', width: 1920, height: 1080, keyframe: true, data: Buffer.from([0x65]) });
+    stream.video({ codec: 'h265', width: 1920, height: 1080, keyframe: false, data: Buffer.from([0x02]) });
+    expect(spawned).toHaveLength(1);
+    stream.video({ codec: 'h265', width: 1920, height: 1080, keyframe: true, data: Buffer.from([0x26]) });
+    stream.video({ codec: 'h265', width: 1280, height: 720, keyframe: true, data: Buffer.from([0x26]) });
+
+    expect(spawned.map((args) => args[args.indexOf('-f') + 1])).toEqual(['h264', 'hevc', 'hevc']);
+    for (const args of spawned) {
+      expect(args).toContain('scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2');
+      expect(args).toEqual(expect.arrayContaining(['-r', '30', '-b:v', '300k', '-payload_type', '99']));
+    }
+    expect(stream.stop).not.toHaveBeenCalled();
+    prepared.stop();
+  });
+
   it('starts and retains video when source audio is absent or its separate process fails', async () => {
     const stream = new SyntheticLiveStream();
     const children: Array<LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean }> = [];

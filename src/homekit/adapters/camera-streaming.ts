@@ -63,8 +63,20 @@ export const CAMERA_STREAMING_ADAPTER = {
           behavior: 'drives negotiated prepare, start, reconfigure, and stop through the media seam',
         },
         {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'keeps two concurrent negotiated sessions independent on one camera',
+        },
+        {
           file: 'test/contracts/live-media.test.ts',
           behavior: 'starts and retains video when source audio is absent or its separate process fails',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'applies a reconfigured selection to adaptation while keeping the negotiated RTP identity',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'readapts a changed source codec at its next keyframe without changing negotiated output',
         },
       ],
     },
