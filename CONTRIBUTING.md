@@ -48,8 +48,14 @@ retained last successful images on disk, and removes its own pairing. The script
 prerequisites, including why a production bridge cannot be used and how to provide `hap-controller`
 without changing this repository's lockfile.
 
-Record the result with the live acceptance evidence for the change. A live acquisition wakes a camera,
-so the script uses wired cameras unless `--battery` is passed.
+`scripts/live-hap-stream-check.mjs` qualifies negotiated live streaming the same way: it drives one
+complete `SetupEndpoints` / start / RTCP / end-session cycle, observes inbound RTP against the
+negotiated payload type, synchronisation source, frame rate, and bitrate, matches the negotiated
+selection against the adaptation process arguments, and confirms no adaptation process survives the
+session. It never decrypts media.
+
+Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
+a camera, so both scripts use wired cameras unless `--battery` is passed.
 
 ## Pull requests
 

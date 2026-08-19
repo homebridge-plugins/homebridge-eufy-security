@@ -106,6 +106,8 @@ const client = new HttpClient(
   required(parsed, 'device-id'),
   required(parsed, 'address'),
   Number(required(parsed, 'port')),
+  undefined,
+  { usePersistentConnections: true, subscriptionsUseSameConnection: true },
 );
 await client.pairSetup(required(parsed, 'pin'));
 console.log('paired one temporary controller');
