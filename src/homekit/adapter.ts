@@ -87,15 +87,12 @@ export interface SnapshotMediaSource {
 /** Stable camera-local identity that preserves concurrent acquisition lifetime across source replacement. */
 export interface SnapshotAcquisitionScope {
   readonly identity: object;
+  readonly serial: string;
 }
 
 /** Snapshot acquisition requested without exposing the concrete media policy implementation. */
 export interface SnapshotMediaAdapter {
-  acquire(
-    scope: SnapshotAcquisitionScope,
-    source: SnapshotMediaSource,
-    mode: Exclude<SnapshotMode, 'Refresh'>,
-  ): Promise<Buffer>;
+  acquire(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource, mode: SnapshotMode): Promise<Buffer>;
 }
 
 /** An allowlisted capability condition emitted without physical-device identity. */

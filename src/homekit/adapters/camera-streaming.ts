@@ -42,6 +42,7 @@ const CAMERA_STREAMING_STATES = new WeakMap<
 
 /** The typed SDK camera media accessor consumed by the live bundle. */
 export interface CameraStreamingSdkDevice {
+  readonly sn: string;
   camera?: () => CameraActions | undefined;
 }
 
@@ -69,25 +70,49 @@ export const CAMERA_STREAMING_ADAPTER = {
     },
     {
       id: CAMERA_SNAPSHOT_STORED.id,
-      hapFit: 'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode',
+      hapFit:
+        'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image',
       identityEffect: 'Stored snapshots use the stable camera controller without creating another service',
-      diagnostics: 'Missing or failed stored acquisition fails the request without opening live media',
+      diagnostics:
+        'Cloud fails a request without substituting live media; Refresh reports missing stored acquisition only when live refresh is also unavailable',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves Cloud snapshots only from passive SDK storage',
         },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'acquires a stored-only Refresh image when no last successful image exists',
+        },
+        {
+          file: 'test/contracts/last-successful-image.test.ts',
+          behavior: 'keeps a live image ahead of stored-only replacement for two minutes',
+        },
       ],
     },
     {
       id: CAMERA_SNAPSHOT_LIVE.id,
-      hapFit: 'Official camera snapshot requests consume a fresh SDK live still in Live mode',
+      hapFit:
+        'Official camera snapshot requests consume a fresh SDK live still in Live mode and one rate-limited refresh in Refresh mode',
       identityEffect: 'Live snapshots use the stable camera controller without creating another service',
-      diagnostics: 'Missing or failed live acquisition fails the request without a stored fallback',
+      diagnostics:
+        'Live fails a request without a stored fallback; Refresh reports missing live acquisition only when stored acquisition is also unavailable',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'coalesces only concurrent Live snapshots and otherwise acquires a fresh image',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'serves a Refresh snapshot from the last successful image and rate-limits live refresh',
+        },
+        {
+          file: 'test/contracts/last-successful-image.test.ts',
+          behavior: 'stores a validated image atomically under an owner-only opaque name',
+        },
+        {
+          file: 'test/contracts/last-successful-image.test.ts',
+          behavior: 'survives restart and full Homebridge backup restoration',
         },
       ],
     },
@@ -129,12 +154,10 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
       : liveAvailable
         ? 'recovered'
         : 'missing';
-  context.diagnose(
-    snapshotUnavailable(snapshotMode === 'Cloud' && storedReason !== 'recovered', 'snapshotStored', storedReason),
-  );
-  context.diagnose(
-    snapshotUnavailable(snapshotMode === 'Live' && liveReason !== 'recovered', 'snapshotLive', liveReason),
-  );
+  const requiresStored = snapshotMode === 'Cloud' || (snapshotMode === 'Refresh' && !liveAvailable);
+  const requiresLive = snapshotMode === 'Live' || (snapshotMode === 'Refresh' && !storedAvailable);
+  context.diagnose(snapshotUnavailable(requiresStored && storedReason !== 'recovered', 'snapshotStored', storedReason));
+  context.diagnose(snapshotUnavailable(requiresLive && liveReason !== 'recovered', 'snapshotLive', liveReason));
   const source: CameraMediaSource = {
     live: camera.live.bind(camera),
     ...(storedAvailable ? { snapshotStored: camera.snapshotStored!.bind(camera) } : {}),
@@ -156,6 +179,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   }
 
   const delegate = new LiveCameraDelegate(
+    device.sn,
     source,
     context.liveMedia,
     context.snapshotMedia,
@@ -266,17 +290,20 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   controller?: CameraController;
   private readonly sessions = new Map<string, PendingSession>();
   private readonly prepareGenerations = new Map<string, symbol>();
-  private readonly snapshotScope = { identity: {} };
+  private readonly snapshotScope: { identity: object; serial: string };
   private acceptingSessions = true;
 
   constructor(
+    serial: string,
     private source: CameraMediaSource,
     private media: LiveMediaAdapter,
     private snapshotMedia: SnapshotMediaAdapter | undefined,
     private audioEnabled: boolean,
     private snapshotMode: SnapshotMode,
     private readonly hap: AdapterAttachmentContext['hap'],
-  ) {}
+  ) {
+    this.snapshotScope = { identity: {}, serial };
+  }
 
   update(
     source: CameraMediaSource,
@@ -296,10 +323,6 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   handleSnapshotRequest(_request: never, callback: (error?: Error, buffer?: Buffer) => void): void {
     if (!this.snapshotMedia) {
       callback(new Error('camera snapshot adaptation is unavailable'));
-      return;
-    }
-    if (this.snapshotMode === 'Refresh') {
-      callback(new Error('Refresh camera snapshots are not admitted by this adapter'));
       return;
     }
     void this.snapshotMedia.acquire(this.snapshotScope, this.source, this.snapshotMode).then(

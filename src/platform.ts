@@ -10,6 +10,7 @@ import {
 } from './diagnostics.js';
 import { HomeKitReconciler, type HomeKitAccessoryStore } from './homekit/reconciler.js';
 import { FfmpegLiveMedia } from './media/live-stream.js';
+import { PersistedLastSuccessfulImages } from './media/last-successful-image.js';
 import { SnapshotAcquisition } from './media/snapshot.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
@@ -54,7 +55,9 @@ export function createEufyPlatform(
       const diagnosticLog = createDiagnosticLogger(log, storageRoot);
       const diagnostics = new DiagnosticConditions(diagnosticLog);
       const liveMedia = configuredConfig.ffmpegPath ? new FfmpegLiveMedia(configuredConfig.ffmpegPath) : undefined;
-      const snapshotMedia = new SnapshotAcquisition();
+      const snapshotMedia = new SnapshotAcquisition(
+        storageRoot ? new PersistedLastSuccessfulImages(storageRoot) : undefined,
+      );
       if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
         reportDiscardedV4Settings(diagnosticLog);
       }

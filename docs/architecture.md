@@ -155,3 +155,13 @@ output, snapshots, live sessions, talkback, HKSV fragments, prebuffer, and resou
 HomeKit camera bundles define the media interfaces they consume. The platform composition root injects
 the media implementations. This prevents camera tickets from embedding independent process, source,
 and cleanup policies in each HomeKit adapter.
+
+The last successful image is plugin state rather than SDK state. The SDK retains a stored-only image
+only in memory for the lifetime of its session, so a restart or a cold camera would otherwise leave
+HomeKit with no image at all. `media/` therefore retains one validated source JPEG per camera under
+`homebridge-eufy/snapshots`, using an opaque serial-derived name, directory mode `0700`, file mode
+`0600`, and temporary-file-plus-rename replacement. The location makes the images part of a full
+Homebridge backup while the 10 MiB validation bound keeps a retained image inside the Homebridge UI
+per-file backup limit; the allowlisted diagnostics archive never reads plugin storage, so support
+evidence cannot contain camera imagery. Retained provenance and its acceptance time stay in memory, so
+a restored image is treated as the oldest acceptable fallback.
