@@ -39,6 +39,18 @@ The current vocabulary is in [CONTEXT.md](./CONTEXT.md).
   insufficient and what transitive/audit cost is introduced.
 - Treat real-device access as read-only unless the owner explicitly approves a write operation.
 
+### Live camera snapshot qualification
+
+`npm run verify` stays hermetic, so HomeKit-initiated snapshots are qualified separately by
+`scripts/live-hap-snapshot-check.mjs`. It pairs one temporary HAP controller against a dedicated,
+unpaired Homebridge instance running this plugin, issues real snapshot resource requests, checks the
+retained last successful images on disk, and removes its own pairing. The script header states the
+prerequisites, including why a production bridge cannot be used and how to provide `hap-controller`
+without changing this repository's lockfile.
+
+Record the result with the live acceptance evidence for the change. A live acquisition wakes a camera,
+so the script uses wired cameras unless `--battery` is passed.
+
 ## Pull requests
 
 Keep the body concise and developer-focused:
