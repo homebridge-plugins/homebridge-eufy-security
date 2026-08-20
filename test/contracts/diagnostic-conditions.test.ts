@@ -258,6 +258,54 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify(records)).not.toContain('synthetic-property');
   });
 
+  it('allowlists every bounded live camera session reason without media or device material', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    const reasons = [
+      'source-acquisition-timeout',
+      'no-video-within-backstop',
+      'source-error',
+      'rtcp-timeout',
+      'adaptation-failed',
+    ];
+    const serial = 'T8000P0000000000';
+
+    for (const reason of reasons) {
+      conditions.reportHomeKit(
+        { code: 'camera-live-session-failed', capability: 'camera', member: 'live', active: true, reason },
+        [serial],
+      );
+    }
+    conditions.reportHomeKit(
+      {
+        code: 'camera-live-session-failed',
+        capability: 'camera',
+        member: 'live',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledTimes(reasons.length);
+    expect(warn.mock.calls[0]![0]).toContain('[camera-live-session-failed] A live camera session ended without video');
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual([...reasons, 'recovered']);
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-live-session-failed',
+      capability: 'camera',
+      member: 'live',
+      active: true,
+      summaryKey: 'log.homekit.cameraLiveSessionFailed',
+      actionKey: 'log.action.retryLiveView',
+      affectedAccessoryCount: 1,
+    });
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
   it('emits only allowlisted bounded HomeKit event traces in debug output', () => {
     const debug = vi.fn();
 

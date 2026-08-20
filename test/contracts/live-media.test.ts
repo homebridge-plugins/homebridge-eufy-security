@@ -4,7 +4,33 @@ import { PassThrough } from 'node:stream';
 import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame } from '@mega-yfue/eufy-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import { FfmpegLiveMedia, type LiveMediaProcess } from '../../src/media/live-stream.js';
+import {
+  FfmpegLiveMedia,
+  type LiveMediaProcess,
+  type LiveSessionOutcome,
+  type NegotiatedLiveVideo,
+} from '../../src/media/live-stream.js';
+
+const NEGOTIATED_VIDEO: NegotiatedLiveVideo = {
+  width: 1280,
+  height: 720,
+  fps: 30,
+  maxBitRate: 300,
+  profile: 'main',
+  level: '3.1',
+  payloadType: 99,
+  ssrc: 1234,
+  mtu: 1200,
+  rtcpInterval: 0.5,
+};
+
+const KEYFRAME = {
+  codec: 'h264' as const,
+  width: 1280,
+  height: 720,
+  keyframe: true,
+  data: Buffer.from([0, 0, 0, 1, 0x65]),
+};
 
 class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
   start(): this {
@@ -22,7 +48,9 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
   }
 }
 
-function process(): LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean } {
+type SyntheticProcess = LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean };
+
+function process(): SyntheticProcess {
   const events = new EventEmitter();
   return {
     stdin: new PassThrough(),
@@ -33,7 +61,164 @@ function process(): LiveMediaProcess & { emit(event: string, ...args: unknown[])
   };
 }
 
+/** One prepared single-video session that records every adaptation process and reported outcome. */
+async function liveSession(source?: { live(): Promise<LiveStreamHandle> }) {
+  const stream = new SyntheticLiveStream();
+  const onVideoFailure = vi.fn();
+  const outcomes: LiveSessionOutcome[] = [];
+  const children: SyntheticProcess[] = [];
+  let receiverReport: (() => void) | undefined;
+  const media = new FfmpegLiveMedia(
+    '/synthetic/ffmpeg',
+    () => {
+      const child = process();
+      children.push(child);
+      return child;
+    },
+    async () => ({
+      port: 41000,
+      onMessage: (listener) => {
+        receiverReport = listener;
+      },
+      close: vi.fn(),
+    }),
+  );
+  const prepared = await media.prepare({
+    addressVersion: 'ipv4',
+    targetAddress: '192.0.2.10',
+    video: {
+      port: 50100,
+      srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+      srtpKey: Buffer.alloc(16),
+      srtpSalt: Buffer.alloc(14),
+    },
+    onVideoFailure,
+    onSessionOutcome: (outcome) => outcomes.push(outcome),
+  });
+  return {
+    prepared,
+    stream,
+    children,
+    onVideoFailure,
+    outcomes,
+    start: (): Promise<void> => prepared.start(source ?? { live: async () => stream }, { video: NEGOTIATED_VIDEO }),
+    receiverReport: (): void => receiverReport?.(),
+  };
+}
+
 describe('live media adaptation', () => {
+  it('starts adaptation for a first keyframe delivered after the SDK warm-up window', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+
+    await vi.advanceTimersByTimeAsync(22_000);
+
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    expect(session.stream.stop).not.toHaveBeenCalled();
+    expect(session.children).toHaveLength(0);
+
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('progress=continue\n');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(session.children).toHaveLength(1);
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }]);
+    session.prepared.stop();
+    vi.useRealTimers();
+  });
+
+  it('fails a session on the SDK warm-up error before the video backstop', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    session.stream.emit('error', new Error('synthetic warm-up failure'));
+
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'source-error' }]);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.outcomes).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it('bounds a silent source at the video backstop and reports the bounded reason', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'no-video-within-backstop' }]);
+    vi.useRealTimers();
+  });
+
+  it('arms the initial RTCP grace from first adaptation progress rather than session start', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('progress=continue\n');
+    await vi.advanceTimersByTimeAsync(14_999);
+
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }]);
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'rtcp-timeout' }]);
+    vi.useRealTimers();
+  });
+
+  it('does not let an early receiver report bound a session before its media starts', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+    session.receiverReport();
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    expect(session.outcomes).toEqual([]);
+
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('progress=continue\n');
+    await vi.advanceTimersByTimeAsync(4_999);
+
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }]);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'rtcp-timeout' }]);
+    vi.useRealTimers();
+  });
+
+  it('reports an upstream source end apart from a source failure', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('progress=continue\n');
+    session.stream.emit('stop');
+
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'source-stopped' }]);
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
   it('transcodes H.264 when passthrough compliance cannot be proven from SDK frames', async () => {
     const stream = new SyntheticLiveStream();
     const spawned: Array<{ executable: string; args: string[]; process: LiveMediaProcess }> = [];
@@ -311,7 +496,7 @@ describe('live media adaptation', () => {
 
   it('starts and retains video when source audio is absent or its separate process fails', async () => {
     const stream = new SyntheticLiveStream();
-    const children: Array<LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean }> = [];
+    const children: SyntheticProcess[] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
       () => {
@@ -383,7 +568,7 @@ describe('live media adaptation', () => {
 
   it('does not let a replaced audio process clear the process for a later source codec', async () => {
     const stream = new SyntheticLiveStream();
-    const children: Array<LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean }> = [];
+    const children: SyntheticProcess[] = [];
     const spawnedArgs: string[][] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
@@ -455,208 +640,62 @@ describe('live media adaptation', () => {
 
   it('bounds startup when a long GOP supplies no keyframe', async () => {
     vi.useFakeTimers();
-    const stream = new SyntheticLiveStream();
-    const onVideoFailure = vi.fn();
-    const spawn = vi.fn(() => process());
-    const media = new FfmpegLiveMedia('/synthetic/ffmpeg', spawn, async () => ({
-      port: 41000,
-      onMessage: vi.fn(),
-      close: vi.fn(),
-    }));
-    const prepared = await media.prepare({
-      addressVersion: 'ipv4',
-      targetAddress: '192.0.2.10',
-      video: {
-        port: 50100,
-        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
-        srtpKey: Buffer.alloc(16),
-        srtpSalt: Buffer.alloc(14),
-      },
-      onVideoFailure,
-    });
-    await prepared.start(
-      { live: async () => stream },
-      {
-        video: {
-          width: 1280,
-          height: 720,
-          fps: 30,
-          maxBitRate: 300,
-          profile: 'main',
-          level: '3.1',
-          payloadType: 99,
-          ssrc: 1234,
-          mtu: 1200,
-          rtcpInterval: 0.5,
-        },
-      },
-    );
-    stream.video({
-      codec: 'h264',
-      width: 1280,
-      height: 720,
-      keyframe: false,
-      data: Buffer.from([0, 0, 0, 1, 0x41]),
-    });
+    const session = await liveSession();
+    await session.start();
+    session.stream.video({ ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41]) });
 
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(spawn).not.toHaveBeenCalled();
-    expect(stream.stop).toHaveBeenCalledOnce();
-    expect(onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.children).toHaveLength(0);
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'no-video-within-backstop' }]);
     vi.useRealTimers();
   });
 
   it('bounds stalled source acquisition and no-RTCP sessions', async () => {
     vi.useFakeTimers();
-    const unresolved = new Promise<LiveStreamHandle>(() => undefined);
-    const acquisitionFailure = vi.fn();
-    const children: Array<LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean }> = [];
-    const media = new FfmpegLiveMedia(
-      '/synthetic/ffmpeg',
-      vi.fn(() => {
-        const child = process();
-        children.push(child);
-        return child;
-      }),
-      async () => ({
-        port: 41000,
-        onMessage: vi.fn(),
-        close: vi.fn(),
-      }),
-    );
-    const stalled = await media.prepare({
-      addressVersion: 'ipv4',
-      targetAddress: '192.0.2.10',
-      video: {
-        port: 50100,
-        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
-        srtpKey: Buffer.alloc(16),
-        srtpSalt: Buffer.alloc(14),
-      },
-      onVideoFailure: acquisitionFailure,
-    });
-    const start = expect(
-      stalled.start(
-        { live: () => unresolved },
-        {
-          video: {
-            width: 1280,
-            height: 720,
-            fps: 30,
-            maxBitRate: 300,
-            profile: 'main',
-            level: '3.1',
-            payloadType: 99,
-            ssrc: 1234,
-            mtu: 1200,
-            rtcpInterval: 0.5,
-          },
-        },
-      ),
-    ).rejects.toThrow('source acquisition timed out');
+    const stalled = await liveSession({ live: () => new Promise<LiveStreamHandle>(() => undefined) });
+    const start = expect(stalled.start()).rejects.toThrow('source acquisition timed out');
     await vi.advanceTimersByTimeAsync(10_000);
     await start;
-    expect(acquisitionFailure).toHaveBeenCalledOnce();
 
-    const stream = new SyntheticLiveStream();
-    const rtcpFailure = vi.fn();
-    const noRtcp = await media.prepare({
-      addressVersion: 'ipv4',
-      targetAddress: '192.0.2.10',
-      video: {
-        port: 50100,
-        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
-        srtpKey: Buffer.alloc(16),
-        srtpSalt: Buffer.alloc(14),
-      },
-      onVideoFailure: rtcpFailure,
-    });
-    await noRtcp.start(
-      { live: async () => stream },
-      {
-        video: {
-          width: 1280,
-          height: 720,
-          fps: 30,
-          maxBitRate: 300,
-          profile: 'main',
-          level: '3.1',
-          payloadType: 99,
-          ssrc: 1234,
-          mtu: 1200,
-          rtcpInterval: 0.5,
-        },
-      },
-    );
-    stream.video({
-      codec: 'h264',
-      width: 1280,
-      height: 720,
-      keyframe: true,
-      data: Buffer.from([0, 0, 0, 1, 0x65]),
-    });
-    children[0].stderr.push('progress=continue\n');
+    expect(stalled.onVideoFailure).toHaveBeenCalledOnce();
+    expect(stalled.outcomes).toEqual([{ outcome: 'failed', reason: 'source-acquisition-timeout' }]);
+
+    const noRtcp = await liveSession();
+    await noRtcp.start();
+    noRtcp.stream.video(KEYFRAME);
+    noRtcp.children[0]!.stderr.push('progress=continue\n');
     await vi.advanceTimersByTimeAsync(15_000);
 
-    expect(rtcpFailure).toHaveBeenCalledOnce();
-    expect(stream.stop).toHaveBeenCalledOnce();
+    expect(noRtcp.onVideoFailure).toHaveBeenCalledOnce();
+    expect(noRtcp.stream.stop).toHaveBeenCalledOnce();
+    expect(noRtcp.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'rtcp-timeout' }]);
     vi.useRealTimers();
   });
 
   it('restarts the keyframe deadline after an acknowledged reconfiguration', async () => {
     vi.useFakeTimers();
-    const stream = new SyntheticLiveStream();
-    const onVideoFailure = vi.fn();
-    const child = process();
-    const media = new FfmpegLiveMedia(
-      '/synthetic/ffmpeg',
-      vi.fn(() => child),
-      async () => ({
-        port: 41000,
-        onMessage: vi.fn(),
-        close: vi.fn(),
-      }),
-    );
-    const prepared = await media.prepare({
-      addressVersion: 'ipv4',
-      targetAddress: '192.0.2.10',
-      video: {
-        port: 50100,
-        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
-        srtpKey: Buffer.alloc(16),
-        srtpSalt: Buffer.alloc(14),
-      },
-      onVideoFailure,
-    });
-    const video = {
-      width: 1280,
-      height: 720,
-      fps: 30,
-      maxBitRate: 300,
-      profile: 'main' as const,
-      level: '3.1' as const,
-      payloadType: 99,
-      ssrc: 1234,
-      mtu: 1200,
-      rtcpInterval: 0.5,
-    };
-    await prepared.start({ live: async () => stream }, { video });
-    stream.video({
-      codec: 'h264',
-      width: 1280,
-      height: 720,
-      keyframe: true,
-      data: Buffer.from([0, 0, 0, 1, 0x65]),
-    });
-    child.stderr.push('prog');
-    child.stderr.push('ress=continue\n');
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('prog');
+    session.children[0]!.stderr.push('ress=continue\n');
+    await vi.advanceTimersByTimeAsync(0);
 
-    prepared.reconfigure({ ...video, width: 640, height: 360 });
-    await vi.advanceTimersByTimeAsync(10_000);
+    session.prepared.reconfigure({ ...NEGOTIATED_VIDEO, width: 640, height: 360 });
+    for (let elapsed = 0; elapsed < 30_000; elapsed += 2_000) {
+      session.receiverReport();
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
 
-    expect(onVideoFailure).toHaveBeenCalledOnce();
-    expect(stream.stop).toHaveBeenCalledOnce();
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'no-video-within-backstop' },
+    ]);
     vi.useRealTimers();
   });
 });

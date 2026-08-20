@@ -156,6 +156,18 @@ HomeKit camera bundles define the media interfaces they consume. The platform co
 the media implementations. This prevents camera tickets from embedding independent process, source,
 and cleanup policies in each HomeKit adapter.
 
+A live session is bounded by whichever domain owns the phase. The SDK owns source warm-up: it retries a
+start inside its own window and fails its consumers with a typed error, which the plugin already
+subscribes to, so that error is the primary failure signal for a source that never produces video. The
+plugin's own start bound is therefore a backstop set strictly above the SDK's window, and exists only to
+catch an SDK that reports nothing at all. A shorter plugin bound would truncate the SDK's retries and
+tear the source down before its explanation arrived, converting a diagnosable transport failure into a
+silent local timeout. For the same reason RTCP liveness is armed when adaptation first reaches the
+negotiated output rather than when the session starts: before media flows the backstop owns the bound,
+and an absolute grace would fail a source that legitimately warms for longer than one RTCP interval.
+Each failure reports one bounded reason through the HomeKit diagnostic seam, so `media/` reports outcomes
+without importing diagnostics.
+
 The last successful image is plugin state rather than SDK state. The SDK retains a stored-only image
 only in memory for the lifetime of its session, so a restart or a cold camera would otherwise leave
 HomeKit with no image at all. `media/` therefore retains one validated source JPEG per camera under

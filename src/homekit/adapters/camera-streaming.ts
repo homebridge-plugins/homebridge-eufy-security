@@ -14,6 +14,7 @@ import type {
   AttachedAdapter,
   HomeKitAdapter,
   LiveMediaAdapter,
+  LiveSessionOutcome,
   NegotiatedLiveVideo,
   PreparedLiveMedia,
   SnapshotMediaAdapter,
@@ -21,6 +22,8 @@ import type {
 } from '../adapter.js';
 
 export const CAMERA_STREAMING_ADAPTER_KEY = 'camera.streaming';
+
+const CAMERA_LIVE_SESSION_CONDITION = 'camera-live-session-failed';
 
 const CAMERA_LIVE = {
   id: 'camera.live.momentary-action',
@@ -56,7 +59,8 @@ export const CAMERA_STREAMING_ADAPTER = {
       id: CAMERA_LIVE.id,
       hapFit: 'Official Camera RTP Stream Management exposes negotiated live video and optional audio',
       identityEffect: 'Primary-purpose live media configures one stable camera controller on the accessory container',
-      diagnostics: 'Missing typed live media or adaptation fails closed without a raw-stream fallback',
+      diagnostics:
+        'Missing typed live media or adaptation fails closed without a raw-stream fallback, and a session that ends without usable video latches one bounded reason until a later session streams',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -65,6 +69,10 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'keeps two concurrent negotiated sessions independent on one camera',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'latches one live-session failure reason and clears it when a later session streams',
         },
         {
           file: 'test/contracts/live-media.test.ts',
@@ -77,6 +85,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/live-media.test.ts',
           behavior: 'readapts a changed source codec at its next keyframe without changing negotiated output',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'starts adaptation for a first keyframe delivered after the SDK warm-up window',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'fails a session on the SDK warm-up error before the video backstop',
         },
       ],
     },
@@ -177,6 +193,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   };
   const existing = CAMERA_STREAMING_STATES.get(context.accessory);
   const owner = Symbol('camera-streaming-owner');
+  const reportSession = liveSessionReporter(context);
   if (existing) {
     existing.owner = owner;
     existing.delegate.update(
@@ -185,6 +202,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
       context.snapshotMedia,
       context.audioEnabled !== false,
       snapshotMode,
+      reportSession,
     );
     CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
     return attachment(context, existing.controller, existing.delegate, owner);
@@ -198,6 +216,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     context.audioEnabled !== false,
     snapshotMode,
     context.hap,
+    reportSession,
   );
   const controller = new context.hap.CameraController(
     {
@@ -284,6 +303,27 @@ function snapshotUnavailable(active: boolean, member: 'snapshotStored' | 'snapsh
   };
 }
 
+/**
+ * Latches why the most recent live session ended without usable video and clears that condition once a
+ * later session reaches the negotiated output. Only the media domain's bounded reason vocabulary is
+ * reported; no device identity, address, key, media byte, or SDK message crosses this seam.
+ */
+function liveSessionReporter(context: AdapterAttachmentContext): (outcome: LiveSessionOutcome) => void {
+  return (outcome) => {
+    if (outcome.outcome === 'streaming') {
+      context.observed(CAMERA_LIVE_SESSION_CONDITION);
+      return;
+    }
+    context.diagnose({
+      code: CAMERA_LIVE_SESSION_CONDITION,
+      capability: 'camera',
+      member: 'live',
+      active: true,
+      reason: outcome.reason,
+    });
+  };
+}
+
 interface PendingSession {
   prepared: PreparedLiveMedia;
   videoSsrc: number;
@@ -313,6 +353,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     private audioEnabled: boolean,
     private snapshotMode: SnapshotMode,
     private readonly hap: AdapterAttachmentContext['hap'],
+    private reportSession: (outcome: LiveSessionOutcome) => void,
   ) {
     this.snapshotScope = { identity: {}, serial };
   }
@@ -323,12 +364,14 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     snapshotMedia: SnapshotMediaAdapter | undefined,
     audioEnabled: boolean,
     snapshotMode: SnapshotMode,
+    reportSession: (outcome: LiveSessionOutcome) => void,
   ): void {
     this.source = source;
     this.media = media;
     this.snapshotMedia = snapshotMedia;
     this.audioEnabled = audioEnabled;
     this.snapshotMode = snapshotMode;
+    this.reportSession = reportSession;
     this.acceptingSessions = true;
   }
 
@@ -377,6 +420,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       video: mediaTarget(request.video, this.hap),
       ...(this.audioEnabled ? { audio: mediaTarget(request.audio, this.hap) } : {}),
       onVideoFailure: () => this.controller?.forceStopStreamingSession(request.sessionID),
+      onSessionOutcome: (outcome) => this.reportSession(outcome),
     });
     return {
       session: { prepared, videoSsrc, ...(audioSsrc === undefined ? {} : { audioSsrc }) },

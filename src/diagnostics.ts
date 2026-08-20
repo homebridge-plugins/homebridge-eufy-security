@@ -1221,7 +1221,7 @@ export type RuntimeState =
   | 'failed'
   | 'stopping';
 
-const CAPABILITIES = new Set(['arming', 'battery', 'contact', 'siren', 'smart_light']);
+const CAPABILITIES = new Set(['arming', 'battery', 'camera', 'contact', 'siren', 'smart_light']);
 const MEMBERS = new Set([
   'active',
   'batteryAlert',
@@ -1229,6 +1229,7 @@ const MEMBERS = new Set([
   'charging',
   'color',
   'level',
+  'live',
   'mode',
   'open',
   'power',
@@ -1236,16 +1237,22 @@ const MEMBERS = new Set([
   'test',
 ]);
 const REASONS = new Set([
+  'adaptation-failed',
   'capability-not-supported',
   'expired',
   'hot',
   'malformed',
   'missing',
   'no-primary-purpose-member',
+  'no-video-within-backstop',
   'operation-failure',
   'primary-adapter-unavailable',
   'recovered',
+  'rtcp-timeout',
   'sdk-fault',
+  'source-acquisition-timeout',
+  'source-error',
+  'source-stopped',
   'timeout',
   'unsupported',
 ]);
@@ -1418,6 +1425,10 @@ const HOMEKIT_CONDITIONS = {
   'lock-reconciliation-expired': {
     summaryKey: 'log.homekit.lockReconciliationExpired',
     actionKey: 'log.action.checkPhysicalLock',
+  },
+  'camera-live-session-failed': {
+    summaryKey: 'log.homekit.cameraLiveSessionFailed',
+    actionKey: 'log.action.retryLiveView',
   },
 } as const;
 

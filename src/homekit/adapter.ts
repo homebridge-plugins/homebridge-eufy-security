@@ -66,6 +66,19 @@ export interface PreparedLiveMedia {
   stop(): void;
 }
 
+/** Why one live session ended without usable video, in the bounded vocabulary the media domain owns. */
+export type LiveSessionFailure =
+  | 'source-acquisition-timeout'
+  | 'no-video-within-backstop'
+  | 'source-error'
+  | 'source-stopped'
+  | 'rtcp-timeout'
+  | 'adaptation-failed';
+
+/** One live session lifecycle outcome, carrying no device identity, address, key, or media material. */
+export type LiveSessionOutcome =
+  { readonly outcome: 'streaming' } | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure };
+
 /** Camera-owned media adaptation requested without exposing its concrete FFmpeg implementation. */
 export interface LiveMediaAdapter {
   prepare(transport: {
@@ -74,6 +87,7 @@ export interface LiveMediaAdapter {
     video: LiveMediaTarget;
     audio?: LiveMediaTarget;
     onVideoFailure?(): void;
+    onSessionOutcome?(outcome: LiveSessionOutcome): void;
   }): Promise<PreparedLiveMedia>;
 }
 

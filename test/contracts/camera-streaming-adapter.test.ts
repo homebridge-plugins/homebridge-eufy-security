@@ -23,7 +23,7 @@ import type {
 } from 'homebridge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdapterAttachmentContext, PreparedLiveMedia } from '../../src/homekit/adapter.js';
+import type { AdapterAttachmentContext, LiveSessionOutcome, PreparedLiveMedia } from '../../src/homekit/adapter.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
 import { SnapshotAcquisition, type LastSuccessfulImages } from '../../src/media/snapshot.js';
 
@@ -786,5 +786,63 @@ describe('camera streaming bundle adapter', () => {
 
     await expect(pending).rejects.toThrow('cancelled');
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('latches one live-session failure reason and clears it when a later session streams', async () => {
+    const target = new Accessory(
+      'Synthetic reported camera',
+      uuid.generate('synthetic-reported-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const reporters: Array<(outcome: LiveSessionOutcome) => void> = [];
+    const prepare = vi.fn(async (transport: { onSessionOutcome?(outcome: LiveSessionOutcome): void }) => {
+      reporters.push((outcome) => transport.onSessionOutcome?.(outcome));
+      return {
+        videoPort: 41000 + reporters.length,
+        start: vi.fn(async () => undefined),
+        reconfigure: vi.fn(),
+        stop: vi.fn(),
+      } satisfies PreparedLiveMedia;
+    });
+    const diagnose = vi.fn();
+    const observed = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      audioEnabled: false,
+      diagnose,
+      observed,
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await callPrepare(controller.delegate, prepareRequest('failed-session'));
+    reporters[0]!({ outcome: 'failed', reason: 'no-video-within-backstop' });
+    const liveConditions = (): unknown[] =>
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-live-session-failed');
+
+    expect(liveConditions()).toEqual([
+      {
+        code: 'camera-live-session-failed',
+        capability: 'camera',
+        member: 'live',
+        active: true,
+        reason: 'no-video-within-backstop',
+      },
+    ]);
+    expect(observed).not.toHaveBeenCalled();
+
+    await callPrepare(controller.delegate, prepareRequest('streaming-session'));
+    reporters[1]!({ outcome: 'streaming' });
+
+    expect(observed).toHaveBeenCalledExactlyOnceWith('camera-live-session-failed');
+    expect(liveConditions()).toHaveLength(1);
+    expect(JSON.stringify(diagnose.mock.calls)).not.toContain(SNAPSHOT_SERIAL);
   });
 });

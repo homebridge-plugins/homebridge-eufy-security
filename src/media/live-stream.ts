@@ -5,8 +5,15 @@ import type { Readable, Writable } from 'node:stream';
 
 const PROCESS_STOP_GRACE_MS = 2_000;
 const INITIAL_RTCP_GRACE_MS = 15_000;
-const VIDEO_START_DEADLINE_MS = 10_000;
-const VIDEO_START_TIMEOUT = Symbol('video-start-timeout');
+const SOURCE_ACQUISITION_DEADLINE_MS = 10_000;
+/**
+ * Backstop for a started session that never produces video. The SDK live source owns the warm-up
+ * window, retries the start inside it, and fails its consumers with a typed `error` event, which is
+ * the primary failure signal here; that window is an SDK-internal default the plugin cannot read, so
+ * this bound sits strictly above it and only catches an SDK that reports nothing at all.
+ */
+const VIDEO_START_BACKSTOP_MS = 30_000;
+const SOURCE_ACQUISITION_TIMEOUT = Symbol('source-acquisition-timeout');
 
 export interface LiveMediaProcess {
   readonly stdin: Writable;
@@ -31,7 +38,25 @@ export interface LiveMediaTransport {
   readonly video: LiveMediaTarget;
   readonly audio?: LiveMediaTarget;
   readonly onVideoFailure?: () => void;
+  readonly onSessionOutcome?: (outcome: LiveSessionOutcome) => void;
 }
+
+/** Why one live session ended without usable video, in a bounded plugin-owned vocabulary. */
+export type LiveSessionFailure =
+  | 'source-acquisition-timeout'
+  | 'no-video-within-backstop'
+  | 'source-error'
+  | 'source-stopped'
+  | 'rtcp-timeout'
+  | 'adaptation-failed';
+
+/**
+ * One live session lifecycle outcome, reported once per transition and carrying no device identity,
+ * address, key, media byte, or SDK message.
+ */
+export type LiveSessionOutcome =
+  | { readonly outcome: 'streaming' }
+  | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure };
 
 export interface LiveMediaTarget {
   readonly port: number;
@@ -104,8 +129,10 @@ export class FfmpegLiveMedia {
     let audioInputCodec: LiveAudioFrame['codec'] | undefined;
     let rtcpDeadline: ReturnType<typeof setTimeout> | undefined;
     let initialRtcpGrace: ReturnType<typeof setTimeout> | undefined;
-    let videoStartDeadline: ReturnType<typeof setTimeout> | undefined;
+    let videoStartBackstop: ReturnType<typeof setTimeout> | undefined;
     let videoFailed = false;
+    let rtcpObserved = false;
+    let streaming = false;
     const stoppingProcesses = new WeakSet<object>();
 
     const stopProcess = (process: LiveMediaProcess | undefined): void => {
@@ -126,29 +153,63 @@ export class FfmpegLiveMedia {
       stopped = true;
       clearTimeout(rtcpDeadline);
       clearTimeout(initialRtcpGrace);
-      clearTimeout(videoStartDeadline);
+      clearTimeout(videoStartBackstop);
       stopProcess(videoProcess);
       stopProcess(audioProcess);
       source?.stop();
       videoPort.close();
       audioPort?.close();
     };
-    const failVideo = (): void => {
+    const failVideo = (reason: LiveSessionFailure): void => {
       if (stopped || videoFailed) {
         return;
       }
       videoFailed = true;
       stop();
+      transport.onSessionOutcome?.({ outcome: 'failed', reason });
       transport.onVideoFailure?.();
     };
+    /**
+     * RTCP liveness bounds a session that is already sending media. Before adaptation reaches the
+     * negotiated output the start backstop owns the bound, so an early datagram only records that the
+     * controller is present; arming the recurring deadline here would fail a source that legitimately
+     * warms for longer than one RTCP interval.
+     */
     const resetRtcpDeadline = (): void => {
+      rtcpObserved = true;
       clearTimeout(initialRtcpGrace);
       clearTimeout(rtcpDeadline);
+      if (!streaming) {
+        return;
+      }
       const interval = Math.max(negotiated?.video.rtcpInterval ?? 1, 1) * 5_000;
-      rtcpDeadline = setTimeout(failVideo, interval);
+      rtcpDeadline = setTimeout(() => failVideo('rtcp-timeout'), interval);
       rtcpDeadline.unref?.();
     };
     videoPort.onMessage(resetRtcpDeadline);
+    /**
+     * Adaptation reached the negotiated output, so the session is bounded from here by RTCP liveness
+     * rather than by the start backstop. The initial grace is armed from this point because media may
+     * legitimately start well after the session does.
+     */
+    const observeAdaptationProgress = (): void => {
+      if (stopped) {
+        return;
+      }
+      clearTimeout(videoStartBackstop);
+      videoStartBackstop = undefined;
+      if (streaming) {
+        return;
+      }
+      streaming = true;
+      if (rtcpObserved) {
+        resetRtcpDeadline();
+      } else {
+        initialRtcpGrace = setTimeout(() => failVideo('rtcp-timeout'), INITIAL_RTCP_GRACE_MS);
+        initialRtcpGrace.unref?.();
+      }
+      transport.onSessionOutcome?.({ outcome: 'streaming' });
+    };
 
     const writeVideo = (frame: LiveVideoFrame): void => {
       if (stopped || !negotiated) {
@@ -182,22 +243,22 @@ export class FfmpegLiveMedia {
           const lines = `${progressRemainder}${chunk.toString()}`.split(/\r?\n/);
           progressRemainder = lines.pop()?.slice(-64) ?? '';
           if (lines.some((line) => line.startsWith('progress='))) {
-            clearTimeout(videoStartDeadline);
+            observeAdaptationProgress();
           }
         });
         child.stdin.on('error', () => {
           if (!stoppingProcesses.has(child)) {
-            failVideo();
+            failVideo('adaptation-failed');
           }
         });
         child.on('error', () => {
           if (!stoppingProcesses.has(child)) {
-            failVideo();
+            failVideo('adaptation-failed');
           }
         });
         child.on('exit', () => {
           if (!stopped && !stoppingProcesses.has(child)) {
-            failVideo();
+            failVideo('adaptation-failed');
           }
         });
       }
@@ -263,13 +324,13 @@ export class FfmpegLiveMedia {
           source = await Promise.race([
             sourcePromise,
             new Promise<never>((_, reject) => {
-              acquisitionDeadline = setTimeout(() => reject(VIDEO_START_TIMEOUT), VIDEO_START_DEADLINE_MS);
+              acquisitionDeadline = setTimeout(() => reject(SOURCE_ACQUISITION_TIMEOUT), SOURCE_ACQUISITION_DEADLINE_MS);
               acquisitionDeadline.unref?.();
             }),
           ]);
         } catch (error) {
-          failVideo();
-          throw error === VIDEO_START_TIMEOUT ? new Error('live media source acquisition timed out') : error;
+          failVideo(error === SOURCE_ACQUISITION_TIMEOUT ? 'source-acquisition-timeout' : 'source-error');
+          throw error === SOURCE_ACQUISITION_TIMEOUT ? new Error('live media source acquisition timed out') : error;
         } finally {
           clearTimeout(acquisitionDeadline);
         }
@@ -277,10 +338,8 @@ export class FfmpegLiveMedia {
           source.stop();
           return;
         }
-        videoStartDeadline = setTimeout(failVideo, VIDEO_START_DEADLINE_MS);
-        videoStartDeadline.unref?.();
-        initialRtcpGrace = setTimeout(failVideo, INITIAL_RTCP_GRACE_MS);
-        initialRtcpGrace.unref?.();
+        videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), VIDEO_START_BACKSTOP_MS);
+        videoStartBackstop.unref?.();
         source.on('video', writeVideo);
         source.on('audio', writeAudio);
         source.on('budget', (notice) => {
@@ -288,8 +347,8 @@ export class FfmpegLiveMedia {
             notice.extend();
           }
         });
-        source.on('error', failVideo);
-        source.on('stop', failVideo);
+        source.on('error', () => failVideo('source-error'));
+        source.on('stop', () => failVideo('source-stopped'));
       },
       reconfigure(video): void {
         if (!negotiated) {
@@ -300,9 +359,9 @@ export class FfmpegLiveMedia {
         videoProcess = undefined;
         videoInput = undefined;
         receivedVideoKeyframe = false;
-        clearTimeout(videoStartDeadline);
-        videoStartDeadline = setTimeout(failVideo, VIDEO_START_DEADLINE_MS);
-        videoStartDeadline.unref?.();
+        clearTimeout(videoStartBackstop);
+        videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), VIDEO_START_BACKSTOP_MS);
+        videoStartBackstop.unref?.();
       },
       stop,
     };
