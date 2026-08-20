@@ -174,6 +174,25 @@ _Avoid_: Session pre-warm, recording delay
 Plugin-owned translation of SDK media source truth into a HomeKit-negotiated codec, framing, timing, and transport contract.
 _Avoid_: Device decoding, SDK media transport
 
+**Adaptation host capability**:
+A media facility supplied by the host installation rather than by the device or the plugin, such as the
+encoders present in the resolved adaptation executable. It varies per installation, is neither device
+truth nor HomeKit policy, and may not be relied on before qualification.
+_Avoid_: SDK gap, compatibility workaround, supported capability
+
+**Encoder qualification**:
+Proof that a candidate adaptation encoder satisfies a negotiated contract, established in four
+independent stages: the encoder is named by the executable, the exact argument list the session will use
+is accepted, the encoder opens against the host's devices and drivers, and the coded output carries the
+negotiated profile, level, geometry, timing, and bit-rate ceiling. Passing an earlier stage never
+implies a later one.
+_Avoid_: Probe, encoder detection, capability enumeration
+
+**Qualified encoder**:
+An adaptation encoder that has passed every stage of encoder qualification for the negotiated selection
+it is used to serve. An unqualified encoder is not a fallback.
+_Avoid_: Available encoder, detected encoder, hardware encoder
+
 ## Diagnostics
 
 **Guided diagnostics session**:

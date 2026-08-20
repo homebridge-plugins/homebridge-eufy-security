@@ -177,3 +177,36 @@ Homebridge backup while the 10 MiB validation bound keeps a retained image insid
 per-file backup limit; the allowlisted diagnostics archive never reads plugin storage, so support
 evidence cannot contain camera imagery. Retained provenance and its acceptance time stay in memory, so
 a restored image is treated as the oldest acceptable fallback.
+
+### Live adaptation encoder
+
+Live adaptation always encodes with `libx264` at `-preset superfast -tune zerolatency`. Hardware
+encoding is excluded rather than deferred.
+
+The negotiated contract requires the coded stream to carry exactly the negotiated profile, level,
+geometry and frame rate and to stay under the negotiated bit rate. Constrained Baseline is the named
+realization of a negotiated Baseline selection: it is a strict subset that any Baseline decoder accepts,
+and the only Baseline form the encoder can produce. `superfast` is the cheapest preset that retains
+CABAC and therefore the cheapest one that can satisfy a Main or High selection; `ultrafast` cannot,
+because dropping CABAC forces the coded stream below the negotiated profile.
+
+No hardware encoder reachable on a Homebridge host clears that bar. The encoders present in every
+bundled Linux artifact cannot express the advertised profile set at all, and the encoders that can
+express it are absent from every bundled artifact. Availability is also not qualification: an encoder
+that enumerates may still fail at option parse, fail at device open, or silently widen the coded
+profile, and each stage must be proven separately. V4 shipped that mistake — a probe that validated a
+smaller command than the one it authorized — and every session on the affected hosts failed while the
+probe reported success.
+
+Encoding cost is not what the exclusion trades away. On a Homebridge host with the bundled binary,
+retaining CABAC costs half a percent of encoder CPU and halves the quantizer at the same bit-rate
+ceiling. Revisit this decision only when both conditions hold: a bundled artifact ships an encoder that
+expresses every advertised combination exactly, and a measurement on a real constrained host shows
+software encoding cannot serve the advertised concurrent-session count. The supporting evidence is in
+[hardware encoder viability](./reference/hardware-encoder-viability.md).
+
+Host capacity for concurrent adaptation is observed, never inferred. A core count is not a capacity and
+a container quota is not always readable, so the plugin admits sessions against the throughput its own
+running adaptations report and refuses a new session while an active one cannot hold real time. It never
+ends an established session to make room, because the accessory cannot renegotiate a selection and
+ending one is indistinguishable from a failure to the viewer.

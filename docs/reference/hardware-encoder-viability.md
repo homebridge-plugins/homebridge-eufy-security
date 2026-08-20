@@ -5,7 +5,9 @@
 Should live-stream adaptation probe for and use a hardware H.264 encoder instead of always using
 `libx264 -preset ultrafast -tune zerolatency`?
 
-This file records evidence only. The decision belongs in `docs/architecture.md`.
+This file records evidence only. The decision it supports is recorded under "Live adaptation encoder" in
+[the architecture](../architecture.md): hardware encoding is excluded, and the two conditions that would
+reopen it are stated there.
 
 ## What the plugin currently promises
 
