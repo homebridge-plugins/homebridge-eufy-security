@@ -71,7 +71,13 @@ export default defineConfig({
             { text: "Prerelease versions", link: "/legacy/v4/prerelease-versions" },
           ],
         },
-        { text: "Under the hood", items: [{ text: "Architecture", link: "/architecture" }] },
+        {
+          text: "Under the hood",
+          items: [
+            { text: "Architecture", link: "/architecture" },
+            { text: "Hardware encoder viability", link: "/reference/hardware-encoder-viability" },
+          ],
+        },
       ],
     },
     search: { provider: "local" },
