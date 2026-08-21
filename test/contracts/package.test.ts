@@ -507,6 +507,27 @@ async function renderUi(
   };
 }
 
+/**
+ * Coded geometry of a baseline JPEG, read from its start-of-frame marker. A controller decodes what this
+ * package ships, so a presentation image that is not a decodable baseline JPEG has to fail here rather than
+ * on a camera tile.
+ */
+function baselineJpeg(image: Buffer): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 9 < image.length) {
+    if (image[offset] !== 0xff) {
+      throw new Error('not a JPEG segment');
+    }
+    const marker = image[offset + 1]!;
+    const length = image.readUInt16BE(offset + 2);
+    if (marker === 0xc0) {
+      return { height: image.readUInt16BE(offset + 5), width: image.readUInt16BE(offset + 7) };
+    }
+    offset += 2 + length;
+  }
+  throw new Error('no baseline start-of-frame marker');
+}
+
 describe('packed plugin', () => {
   it('keeps the runtime dependency and entry-point surface closed', () => {
     const repository = fileURLToPath(new URL('../..', import.meta.url));
@@ -600,6 +621,25 @@ describe('packed plugin', () => {
       expect(schema.customUi).toBe(true);
       expect(result.files.map((file) => file.path)).toContain('dist/ui/server.js');
       expect(result.files.map((file) => file.path)).toContain('i18n/runtime/en.json');
+      expect(
+        result.files
+          .map((file) => file.path)
+          .filter((path) => path.startsWith('media/'))
+          .sort(),
+        'exactly the presentation images ship, and no editable master',
+      ).toEqual([
+        'media/Snapshot-Unavailable.jpg',
+        'media/Snapshot-black.jpg',
+        'media/camera-disabled.jpg',
+        'media/camera-offline.jpg',
+      ]);
+      expect(
+        baselineJpeg(readFileSync(join(packageDirectory, 'media', 'Snapshot-Unavailable.jpg'))),
+        'placeholder',
+      ).toEqual({
+        width: 1920,
+        height: 1080,
+      });
       expect(
         result.files.map((file) => file.path).filter((path) => path.startsWith('scripts/')),
         'maintainer tooling that writes to a real device must not reach an installed plugin',

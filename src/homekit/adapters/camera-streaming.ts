@@ -26,6 +26,7 @@ export const CAMERA_STREAMING_ADAPTER_KEY = 'camera.streaming';
 
 const CAMERA_LIVE_SESSION_CONDITION = 'camera-live-session-failed';
 const CAMERA_LIVE_REFUSED_CONDITION = 'camera-live-session-refused';
+const CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION = 'camera-snapshot-unavailable';
 
 /**
  * The exact enablement observation a live session is admitted against. The row itself belongs to the
@@ -159,7 +160,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image',
       identityEffect: 'Stored snapshots use the stable camera controller without creating another service',
       diagnostics:
-        'Cloud fails a request without substituting live media; Refresh reports missing stored acquisition only when live refresh is also unavailable',
+        'Cloud never substitutes live media and Refresh reports missing stored acquisition only when live refresh is also unavailable; a request no admitted acquisition can answer serves the packaged unavailable image and latches one bounded reason until a later real image withdraws it',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -168,6 +169,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'acquires a stored-only Refresh image when no last successful image exists',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'serves the packaged unavailable placeholder when no admitted acquisition can answer',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'fails a snapshot request when this package carries no usable placeholder',
         },
         {
           file: 'test/contracts/last-successful-image.test.ts',
@@ -181,7 +190,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         'Official camera snapshot requests consume a fresh SDK live still in Live mode and one rate-limited refresh in Refresh mode',
       identityEffect: 'Live snapshots use the stable camera controller without creating another service',
       diagnostics:
-        'Live fails a request without a stored fallback; Refresh reports missing live acquisition only when stored acquisition is also unavailable',
+        'Live never falls back to stored imagery and Refresh reports missing live acquisition only when stored acquisition is also unavailable; a failed acquisition serves the packaged unavailable image rather than an image from another camera path',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -190,6 +199,10 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves a Refresh snapshot from the last successful image and rate-limits live refresh',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'serves the placeholder for a failed Live acquisition without falling back to stored imagery',
         },
         {
           file: 'test/contracts/last-successful-image.test.ts',
@@ -259,6 +272,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     enablement: enablementObservation(context, camera),
     reportSession: liveSessionReporter(context),
     reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
+    reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
   };
   if (existing) {
     existing.owner = owner;
@@ -367,14 +381,18 @@ function liveSessionReporter(context: AdapterAttachmentContext): (outcome: LiveS
  * Only the reason vocabulary its caller owns is reported; no device identity, address, key, media byte, or
  * SDK message crosses this seam.
  */
-function cameraLiveCondition(context: AdapterAttachmentContext, code: string): (reason?: string) => void {
+function cameraCondition(context: AdapterAttachmentContext, code: string, member: string): (reason?: string) => void {
   return (reason) => {
     if (reason === undefined) {
       context.observed(code);
       return;
     }
-    context.diagnose({ code, capability: 'camera', member: 'live', active: true, reason });
+    context.diagnose({ code, capability: 'camera', member, active: true, reason });
   };
+}
+
+function cameraLiveCondition(context: AdapterAttachmentContext, code: string): (reason?: string) => void {
+  return cameraCondition(context, code, 'live');
 }
 
 /**
@@ -416,6 +434,9 @@ interface CameraMediaSource {
 /** Why live view is unavailable for a camera an admitted observation reports as disabled. */
 type LiveAdmissionRefusal = 'disabled' | 'disabled-mid-session';
 
+/** Why a packaged image was served in place of a camera image. */
+type SnapshotSubstitution = 'no-acquisition';
+
 /** Everything one attachment supplies to the stable camera delegate, rebound on each reconciliation. */
 interface LiveCameraBinding {
   readonly source: CameraMediaSource;
@@ -426,6 +447,7 @@ interface LiveCameraBinding {
   readonly enablement: () => boolean | undefined;
   readonly reportSession: (outcome: LiveSessionOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
+  readonly reportSnapshot: (substitution?: SnapshotSubstitution) => void;
 }
 
 /** Owns HomeKit camera negotiation while delegating source adaptation to the media domain. */
@@ -451,16 +473,33 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     this.acceptingSessions = true;
   }
 
+  /**
+   * Answers a snapshot request from the camera's own acquisition policy, or with the packaged unavailable
+   * image when that policy produced nothing. A substitution latches one bounded reason and a later real
+   * image withdraws it, so a camera that only ever shows the placeholder is visible in the log rather than
+   * only in the Home app.
+   */
   handleSnapshotRequest(_request: never, callback: (error?: Error, buffer?: Buffer) => void): void {
     const snapshotMedia = this.binding.snapshotMedia;
     if (!snapshotMedia) {
       callback(new Error('camera snapshot adaptation is unavailable'));
       return;
     }
-    void snapshotMedia.acquire(this.snapshotScope, this.binding.source, this.binding.snapshotMode).then(
-      (buffer) => callback(undefined, buffer),
-      (error: unknown) => callback(error instanceof Error ? error : new Error('camera snapshot failed')),
-    );
+    let substituted = false;
+    void snapshotMedia
+      .acquire(this.snapshotScope, this.binding.source, this.binding.snapshotMode, () => {
+        substituted = true;
+        this.binding.reportSnapshot('no-acquisition');
+      })
+      .then(
+        (buffer) => {
+          if (!substituted) {
+            this.binding.reportSnapshot();
+          }
+          callback(undefined, buffer);
+        },
+        (error: unknown) => callback(error instanceof Error ? error : new Error('camera snapshot failed')),
+      );
   }
 
   /**

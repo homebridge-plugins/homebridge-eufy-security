@@ -220,6 +220,16 @@ adaptation process unchanged, whether it was answered from the retained image in
 live in about eight seconds. Live view therefore never has to be interrupted to answer a snapshot, and a
 snapshot that fails does not end a session.
 
+When no admitted acquisition can answer a request at all, the plugin serves a packaged image rather than
+failing it, because a HomeKit tile that cannot be drawn tells a viewer nothing while an explicit
+"unavailable" frame does. The image ships as a baseline JPEG at the largest resolution HomeKit asks for and
+is served as-is for every requested size, so this path needs no encoder and cannot fail for want of one; a
+controller scales what it is given, and the delegate already ignores requested dimensions for real camera
+stills. A substitution latches one bounded condition and a later real image withdraws it, so a camera that
+only ever shows the placeholder is visible in the log instead of only on the tile. A package whose image is
+missing or not a bounded JPEG leaves the request failing rather than serving bytes a controller cannot
+decode, and a placeholder is never retained as a last successful image.
+
 ### Live view for a disabled camera
 
 A camera that is turned off has no video to give, so live admission consults the camera's own enablement

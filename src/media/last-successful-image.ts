@@ -2,29 +2,15 @@ import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { SnapshotProvenance } from './snapshot.js';
+import { MAXIMUM_IMAGE_BYTES, isBoundedJpeg, type SnapshotProvenance } from './snapshot.js';
 
 const SNAPSHOT_DIRECTORY = 'snapshots';
-const MAXIMUM_IMAGE_BYTES = 10 * 1024 * 1024;
 const LIVE_PRECEDENCE_MS = 120_000;
 
 interface RetainedImage {
   jpeg?: Buffer;
   provenance?: SnapshotProvenance;
   acceptedAtMs?: number;
-}
-
-/** A bounded non-empty payload delimited by the JPEG start-of-image and end-of-image markers. */
-function isBoundedJpeg(jpeg: Buffer): boolean {
-  return (
-    jpeg.length > 5 &&
-    jpeg.length <= MAXIMUM_IMAGE_BYTES &&
-    jpeg[0] === 0xff &&
-    jpeg[1] === 0xd8 &&
-    jpeg[2] === 0xff &&
-    jpeg[jpeg.length - 2] === 0xff &&
-    jpeg[jpeg.length - 1] === 0xd9
-  );
 }
 
 /**

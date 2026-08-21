@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 
 import type { CameraActions } from '@mega-yfue/eufy-sdk';
 import {
@@ -100,6 +101,9 @@ function prepareRequest(sessionID = 'synthetic-session'): PrepareStreamRequest {
 }
 
 const SNAPSHOT_SERIAL = 'SYNTHETIC0000000001';
+
+/** The image this package ships for a camera whose snapshot cannot be acquired at all. */
+const PACKAGED_PLACEHOLDER = readFileSync(new URL('../../media/Snapshot-Unavailable.jpg', import.meta.url));
 
 const SETUP_ENDPOINTS_SUCCESS = 0;
 const SETUP_ENDPOINTS_BUSY = 1;
@@ -391,13 +395,14 @@ describe('camera streaming bundle adapter', () => {
     expect(snapshotStored).toHaveBeenCalledOnce();
   });
 
-  it('fails a Refresh snapshot without a last successful image or stored acquisition', async () => {
+  it('serves the packaged unavailable placeholder when no admitted acquisition can answer', async () => {
     const target = new Accessory(
       'Synthetic unavailable refresh camera',
       uuid.generate('synthetic-unavailable-refresh-camera'),
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
     const { snapshotLive } = pendingLiveSnapshot();
+    const images = retainedImages();
     const diagnose = vi.fn();
 
     CAMERA_STREAMING_ADAPTER.attach({
@@ -406,7 +411,7 @@ describe('camera streaming bundle adapter', () => {
       accessory: target,
       hap: HAP,
       liveMedia: { prepare: vi.fn() },
-      snapshotMedia: new SnapshotAcquisition(retainedImages()),
+      snapshotMedia: new SnapshotAcquisition(images),
       snapshotMode: 'Refresh',
       audioEnabled: false,
       diagnose,
@@ -417,8 +422,16 @@ describe('camera streaming bundle adapter', () => {
       delegate: CameraStreamingDelegate;
     };
 
-    await expect(callSnapshot(controller.delegate)).rejects.toThrow('no camera snapshot image is available');
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
     expect(snapshotLive).toHaveBeenCalledOnce();
+    expect(images.write).not.toHaveBeenCalled();
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-snapshot-unavailable',
+      capability: 'camera',
+      member: 'snapshot',
+      active: true,
+      reason: 'no-acquisition',
+    });
     expect(diagnose).toHaveBeenCalledWith({
       code: 'camera-snapshot-capability-unavailable',
       capability: 'camera',
@@ -426,6 +439,45 @@ describe('camera streaming bundle adapter', () => {
       active: false,
       reason: 'recovered',
     });
+  });
+
+  it('fails a snapshot request when this package carries no usable placeholder', async () => {
+    for (const [label, packaged] of [
+      ['absent', () => undefined],
+      ['malformed', () => Buffer.from('not a jpeg at all')],
+    ] as const) {
+      const target = new Accessory(
+        `Synthetic ${label} placeholder camera`,
+        uuid.generate(`synthetic-${label}-placeholder-camera`),
+      ) as unknown as PlatformAccessory;
+      const configureController = vi.spyOn(target, 'configureController');
+      const diagnose = vi.fn();
+
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn() }) } as never,
+        evidence: snapshotEvidence(),
+        accessory: target,
+        hap: HAP,
+        liveMedia: { prepare: vi.fn() },
+        snapshotMedia: new SnapshotAcquisition(retainedImages(), packaged),
+        snapshotMode: 'Refresh',
+        audioEnabled: false,
+        diagnose,
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+      const controller = configureController.mock.calls[0][0] as CameraController & {
+        delegate: CameraStreamingDelegate;
+      };
+
+      await expect(callSnapshot(controller.delegate), label).rejects.toThrow('no camera snapshot image is available');
+      expect(
+        diagnose.mock.calls
+          .map(([condition]) => condition)
+          .filter(({ code }) => code === 'camera-snapshot-unavailable'),
+        label,
+      ).toEqual([]);
+    }
   });
 
   it('reports a Refresh camera that has no admitted snapshot acquisition at all', () => {
@@ -586,7 +638,7 @@ describe('camera streaming bundle adapter', () => {
     expect(snapshotStored).not.toHaveBeenCalled();
   });
 
-  it('rejects a selected snapshot policy without its exact SDK evidence', async () => {
+  it('serves the placeholder for a selected snapshot policy without its exact SDK evidence', async () => {
     const target = new Accessory(
       'Synthetic unevidenced snapshot camera',
       uuid.generate('synthetic-unevidenced-snapshot-camera'),
@@ -612,7 +664,7 @@ describe('camera streaming bundle adapter', () => {
       delegate: CameraStreamingDelegate;
     };
 
-    await expect(callSnapshot(controller.delegate)).rejects.toThrow('stored camera snapshot is unavailable');
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
     expect(snapshotStored).not.toHaveBeenCalled();
     expect(diagnose).toHaveBeenCalledWith({
       code: 'camera-snapshot-capability-unavailable',
@@ -693,23 +745,26 @@ describe('camera streaming bundle adapter', () => {
       evidence: snapshotEvidence(),
     } satisfies AdapterAttachmentContext);
 
-    await expect(callSnapshot(controller.delegate)).rejects.toThrow('live camera snapshot is unavailable');
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
     expect(snapshotLive).toHaveBeenCalledOnce();
     resolveSnapshot({ jpeg: Buffer.from('synthetic admitted jpeg'), width: 1280, height: 720 });
     await expect(admittedRequest).resolves.toEqual(Buffer.from('synthetic admitted jpeg'));
   });
 
-  it('exposes a Live snapshot failure without falling back to stored imagery', async () => {
+  it('serves the placeholder for a failed Live acquisition without falling back to stored imagery', async () => {
     const target = new Accessory(
       'Synthetic failed live snapshot camera',
       uuid.generate('synthetic-failed-live-snapshot-camera'),
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
-    const failure = new Error('synthetic live snapshot failure');
+    const acquired = jpeg('synthetic recovered live image');
     const snapshotStored = vi.fn(async () => Buffer.from('synthetic stored jpeg'));
-    const snapshotLive = vi.fn(async () => {
-      throw failure;
-    });
+    const snapshotLive = vi
+      .fn<() => Promise<{ jpeg: Buffer; width: number; height: number }>>()
+      .mockRejectedValueOnce(new Error('synthetic live snapshot failure'))
+      .mockResolvedValueOnce({ jpeg: acquired, width: 1280, height: 720 });
+    const diagnose = vi.fn();
+    const observed = vi.fn();
 
     CAMERA_STREAMING_ADAPTER.attach({
       device: { camera: () => ({ snapshotStored, snapshotLive, live: vi.fn() }) } as never,
@@ -720,16 +775,28 @@ describe('camera streaming bundle adapter', () => {
       snapshotMedia: new SnapshotAcquisition(),
       snapshotMode: 'Live',
       audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
+      diagnose,
+      observed,
       persist: vi.fn(),
     } satisfies AdapterAttachmentContext);
     const controller = configureController.mock.calls[0][0] as CameraController & {
       delegate: CameraStreamingDelegate;
     };
 
-    await expect(callSnapshot(controller.delegate)).rejects.toBe(failure);
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
     expect(snapshotLive).toHaveBeenCalledOnce();
+    expect(snapshotStored).not.toHaveBeenCalled();
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-snapshot-unavailable',
+      capability: 'camera',
+      member: 'snapshot',
+      active: true,
+      reason: 'no-acquisition',
+    });
+    expect(observed).not.toHaveBeenCalledWith('camera-snapshot-unavailable');
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(acquired);
+    expect(observed).toHaveBeenCalledWith('camera-snapshot-unavailable');
     expect(snapshotStored).not.toHaveBeenCalled();
   });
 
@@ -934,7 +1001,7 @@ describe('camera streaming bundle adapter', () => {
     expect(live).not.toHaveBeenCalled();
     expect(streamingStatus(management)).toBe(STREAMING_IN_USE);
 
-    await expect(callSnapshot(controller.delegate)).rejects.toThrow('synthetic still acquisition failed');
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
     expect(stop).not.toHaveBeenCalled();
     expect(streamingStatus(management)).toBe(STREAMING_IN_USE);
 

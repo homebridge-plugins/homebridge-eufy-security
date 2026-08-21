@@ -104,9 +104,18 @@ export interface SnapshotAcquisitionScope {
   readonly serial: string;
 }
 
-/** Snapshot acquisition requested without exposing the concrete media policy implementation. */
+/**
+ * Snapshot acquisition requested without exposing the concrete media policy implementation. `onPlaceholder`
+ * is called when no admitted acquisition answered and a packaged image was substituted, so a served
+ * placeholder is never mistaken for a served camera image.
+ */
 export interface SnapshotMediaAdapter {
-  acquire(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource, mode: SnapshotMode): Promise<Buffer>;
+  acquire(
+    scope: SnapshotAcquisitionScope,
+    source: SnapshotMediaSource,
+    mode: SnapshotMode,
+    onPlaceholder?: () => void,
+  ): Promise<Buffer>;
 }
 
 /** An allowlisted capability condition emitted without physical-device identity. */

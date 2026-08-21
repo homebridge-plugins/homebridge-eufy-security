@@ -1,8 +1,48 @@
 import type { CameraActions } from '@mega-yfue/eufy-sdk';
+import { readFileSync } from 'node:fs';
 
 import type { SnapshotMode } from '../configuration.js';
 
 const LIVE_REFRESH_INTERVAL_MS = 120_000;
+
+/** The largest image this plugin will accept or retain, which keeps one inside the Homebridge backup limit. */
+export const MAXIMUM_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/** A bounded non-empty payload delimited by the JPEG start-of-image and end-of-image markers. */
+export function isBoundedJpeg(jpeg: Buffer): boolean {
+  return (
+    jpeg.length > 5 &&
+    jpeg.length <= MAXIMUM_IMAGE_BYTES &&
+    jpeg[0] === 0xff &&
+    jpeg[1] === 0xd8 &&
+    jpeg[2] === 0xff &&
+    jpeg[jpeg.length - 2] === 0xff &&
+    jpeg[jpeg.length - 1] === 0xd9
+  );
+}
+
+/**
+ * The image served when no admitted acquisition can answer a snapshot request. It ships beside the package
+ * as a baseline JPEG at the largest resolution HomeKit asks for, because a controller scales what it is
+ * given and this path must not depend on an encoder being available.
+ *
+ * Resolving it relative to this module reaches the same packaged file whether the module was loaded from
+ * `src/` or from `dist/`, both of which sit one directory below the package root.
+ */
+const UNAVAILABLE_IMAGE = new URL('../../media/Snapshot-Unavailable.jpg', import.meta.url);
+let unavailableImage: Buffer | null | undefined;
+
+/** Reads the packaged unavailable image once, and nothing at all when this package does not carry one. */
+function packagedUnavailableImage(): Buffer | undefined {
+  if (unavailableImage === undefined) {
+    try {
+      unavailableImage = readFileSync(UNAVAILABLE_IMAGE);
+    } catch {
+      unavailableImage = null;
+    }
+  }
+  return unavailableImage ?? undefined;
+}
 
 interface SnapshotSource {
   snapshotStored?(): ReturnType<NonNullable<CameraActions['snapshotStored']>>;
@@ -28,9 +68,36 @@ export class SnapshotAcquisition {
   private readonly pendingLive = new WeakMap<object, Promise<Buffer>>();
   private readonly liveRefreshedAtMs = new Map<string, number>();
 
-  constructor(private readonly images?: LastSuccessfulImages) {}
+  constructor(
+    private readonly images?: LastSuccessfulImages,
+    private readonly unavailableImage: () => Buffer | undefined = packagedUnavailableImage,
+  ) {}
 
-  acquire(scope: SnapshotScope, source: SnapshotSource, mode: SnapshotMode): Promise<Buffer> {
+  /**
+   * Answers one snapshot request under the selected policy, and falls back to the packaged unavailable
+   * image when that policy produces nothing at all. The substitution is announced through `onPlaceholder`
+   * so its consumer can report that no acquisition answered, because a served placeholder would otherwise
+   * be indistinguishable from a served camera image. A missing or malformed packaged image leaves the
+   * request failing as it did before the placeholder existed, rather than serving bytes HomeKit cannot
+   * decode.
+   */
+  acquire(
+    scope: SnapshotScope,
+    source: SnapshotSource,
+    mode: SnapshotMode,
+    onPlaceholder?: () => void,
+  ): Promise<Buffer> {
+    return this.acquired(scope, source, mode).catch((error: unknown) => {
+      const placeholder = this.unavailableImage();
+      if (!placeholder || !isBoundedJpeg(placeholder)) {
+        throw error;
+      }
+      onPlaceholder?.();
+      return placeholder;
+    });
+  }
+
+  private acquired(scope: SnapshotScope, source: SnapshotSource, mode: SnapshotMode): Promise<Buffer> {
     if (mode === 'Cloud') {
       return this.stored(scope, source) ?? Promise.reject(new Error('stored camera snapshot is unavailable'));
     }

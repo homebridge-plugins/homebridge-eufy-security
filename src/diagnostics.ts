@@ -1233,6 +1233,7 @@ const MEMBERS = new Set([
   'mode',
   'open',
   'power',
+  'snapshot',
   'stop',
   'test',
 ]);
@@ -1245,6 +1246,7 @@ const REASONS = new Set([
   'hot',
   'malformed',
   'missing',
+  'no-acquisition',
   'no-primary-purpose-member',
   'no-video-within-backstop',
   'operation-failure',
@@ -1435,6 +1437,10 @@ const HOMEKIT_CONDITIONS = {
   'camera-live-session-refused': {
     summaryKey: 'log.homekit.cameraLiveSessionRefused',
     actionKey: 'log.action.enableCamera',
+  },
+  'camera-snapshot-unavailable': {
+    summaryKey: 'log.homekit.cameraSnapshotUnavailable',
+    actionKey: 'log.action.checkCameraSnapshot',
   },
 } as const;
 
