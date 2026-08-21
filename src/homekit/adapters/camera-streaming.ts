@@ -157,7 +157,7 @@ export const CAMERA_STREAMING_ADAPTER = {
     {
       id: CAMERA_SNAPSHOT_STORED.id,
       hapFit:
-        'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image',
+        'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image, and consume nothing at all while an admitted observation reports the camera disabled',
       identityEffect: 'Stored snapshots use the stable camera controller without creating another service',
       diagnostics:
         'Cloud never substitutes live media and Refresh reports missing stored acquisition only when live refresh is also unavailable; a request no admitted acquisition can answer serves the packaged unavailable image and latches one bounded reason until a later real image withdraws it',
@@ -173,6 +173,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves the packaged unavailable placeholder when no admitted acquisition can answer',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'serves the packaged disabled image without acquiring or serving a real one while a camera is off',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'never implies a disabled camera from a missing or malformed enablement observation',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -474,10 +482,12 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   }
 
   /**
-   * Answers a snapshot request from the camera's own acquisition policy, or with the packaged unavailable
-   * image when that policy produced nothing. A substitution latches one bounded reason and a later real
-   * image withdraws it, so a camera that only ever shows the placeholder is visible in the log rather than
-   * only in the Home app.
+   * Answers a snapshot request from the camera's own acquisition policy, passing it the admitted enablement
+   * observation because a camera that is off is presented rather than photographed. When the policy produces
+   * nothing, the packaged unavailable image is served and one bounded reason is latched until a later real
+   * image withdraws it, so a camera that only ever shows a placeholder is visible in the log rather than only
+   * in the Home app. A disabled camera latches nothing: its image is the intended presentation, and live view
+   * already reports why it cannot be watched.
    */
   handleSnapshotRequest(_request: never, callback: (error?: Error, buffer?: Buffer) => void): void {
     const snapshotMedia = this.binding.snapshotMedia;
@@ -486,10 +496,14 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       return;
     }
     let substituted = false;
+    const enabled = this.binding.enablement();
     void snapshotMedia
-      .acquire(this.snapshotScope, this.binding.source, this.binding.snapshotMode, () => {
-        substituted = true;
-        this.binding.reportSnapshot('no-acquisition');
+      .acquire(this.snapshotScope, this.binding.source, this.binding.snapshotMode, {
+        ...(enabled === undefined ? {} : { enabled }),
+        onPlaceholder: () => {
+          substituted = true;
+          this.binding.reportSnapshot('no-acquisition');
+        },
       })
       .then(
         (buffer) => {

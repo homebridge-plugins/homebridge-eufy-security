@@ -105,16 +105,17 @@ export interface SnapshotAcquisitionScope {
 }
 
 /**
- * Snapshot acquisition requested without exposing the concrete media policy implementation. `onPlaceholder`
- * is called when no admitted acquisition answered and a packaged image was substituted, so a served
- * placeholder is never mistaken for a served camera image.
+ * Snapshot acquisition requested without exposing the concrete media policy implementation. `enabled` carries
+ * the admitted enablement observation, because a disabled camera is presented rather than photographed, and
+ * `onPlaceholder` reports that no acquisition answered, so a served placeholder is never mistaken for a
+ * served camera image.
  */
 export interface SnapshotMediaAdapter {
   acquire(
     scope: SnapshotAcquisitionScope,
     source: SnapshotMediaSource,
     mode: SnapshotMode,
-    onPlaceholder?: () => void,
+    presentation?: { readonly enabled?: boolean; onPlaceholder?(): void },
   ): Promise<Buffer>;
 }
 

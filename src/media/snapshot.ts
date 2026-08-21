@@ -22,31 +22,46 @@ export function isBoundedJpeg(jpeg: Buffer): boolean {
 }
 
 /**
- * The image served when no admitted acquisition can answer a snapshot request. It ships beside the package
- * as a baseline JPEG at the largest resolution HomeKit asks for, because a controller scales what it is
- * given and this path must not depend on an encoder being available.
+ * The images served when a camera cannot supply one. They ship beside the package as baseline JPEGs at the
+ * largest resolution HomeKit asks for, because a controller scales what it is given and these paths must not
+ * depend on an encoder being available.
  *
- * Resolving it relative to this module reaches the same packaged file whether the module was loaded from
+ * Resolving them relative to this module reaches the same packaged files whether the module was loaded from
  * `src/` or from `dist/`, both of which sit one directory below the package root.
  */
-const UNAVAILABLE_IMAGE = new URL('../../media/Snapshot-Unavailable.jpg', import.meta.url);
-let unavailableImage: Buffer | null | undefined;
+const PACKAGED_IMAGES = {
+  disabled: new URL('../../media/camera-disabled.jpg', import.meta.url),
+  unavailable: new URL('../../media/Snapshot-Unavailable.jpg', import.meta.url),
+} as const;
 
-/** Reads the packaged unavailable image once, and nothing at all when this package does not carry one. */
-function packagedUnavailableImage(): Buffer | undefined {
-  if (unavailableImage === undefined) {
+/** Which packaged image a presentation decision calls for. */
+export type PackagedImage = keyof typeof PACKAGED_IMAGES;
+
+const packagedImages = new Map<PackagedImage, Buffer | null>();
+
+/** Reads one packaged image once, and nothing at all when this package does not carry it. */
+function packagedImage(name: PackagedImage): Buffer | undefined {
+  if (!packagedImages.has(name)) {
     try {
-      unavailableImage = readFileSync(UNAVAILABLE_IMAGE);
+      packagedImages.set(name, readFileSync(PACKAGED_IMAGES[name]));
     } catch {
-      unavailableImage = null;
+      packagedImages.set(name, null);
     }
   }
-  return unavailableImage ?? undefined;
+  return packagedImages.get(name) ?? undefined;
 }
 
 interface SnapshotSource {
   snapshotStored?(): ReturnType<NonNullable<CameraActions['snapshotStored']>>;
   snapshotLive?(): ReturnType<NonNullable<CameraActions['snapshotLive']>>;
+}
+
+/** What HomeKit knows about a camera that changes how its snapshot must be presented. */
+export interface SnapshotPresentation {
+  /** Whether the camera is enabled, when an admitted observation reports it, and nothing otherwise. */
+  readonly enabled?: boolean;
+  /** Called when the packaged unavailable image was served in place of a camera image. */
+  onPlaceholder?(): void;
 }
 
 interface SnapshotScope {
@@ -70,31 +85,49 @@ export class SnapshotAcquisition {
 
   constructor(
     private readonly images?: LastSuccessfulImages,
-    private readonly unavailableImage: () => Buffer | undefined = packagedUnavailableImage,
+    private readonly packaged: (name: PackagedImage) => Buffer | undefined = packagedImage,
   ) {}
 
   /**
-   * Answers one snapshot request under the selected policy, and falls back to the packaged unavailable
-   * image when that policy produces nothing at all. The substitution is announced through `onPlaceholder`
-   * so its consumer can report that no acquisition answered, because a served placeholder would otherwise
-   * be indistinguishable from a served camera image. A missing or malformed packaged image leaves the
-   * request failing as it did before the placeholder existed, rather than serving bytes HomeKit cannot
-   * decode.
+   * Answers one snapshot request under the selected policy.
+   *
+   * A camera an admitted observation reports as disabled is presented with the packaged disabled image and
+   * nothing else: no acquisition is attempted, and its retained image is kept but never served, because a
+   * real frame from before the camera was switched off would misrepresent what it is doing now. An absent or
+   * malformed observation is not a disabled one and falls through to the normal policy.
+   *
+   * When the selected policy produces nothing at all, the packaged unavailable image is served instead and
+   * the substitution is announced through `onPlaceholder`, so its consumer can report that no acquisition
+   * answered rather than leaving a served placeholder indistinguishable from a served camera image. A missing
+   * or malformed packaged image leaves the request failing as it did before either image existed, rather than
+   * serving bytes HomeKit cannot decode.
    */
   acquire(
     scope: SnapshotScope,
     source: SnapshotSource,
     mode: SnapshotMode,
-    onPlaceholder?: () => void,
+    presentation: SnapshotPresentation = {},
   ): Promise<Buffer> {
+    if (presentation.enabled === false) {
+      const disabled = this.presentable('disabled');
+      if (disabled) {
+        return Promise.resolve(disabled);
+      }
+    }
     return this.acquired(scope, source, mode).catch((error: unknown) => {
-      const placeholder = this.unavailableImage();
-      if (!placeholder || !isBoundedJpeg(placeholder)) {
+      const unavailable = this.presentable('unavailable');
+      if (!unavailable) {
         throw error;
       }
-      onPlaceholder?.();
-      return placeholder;
+      presentation.onPlaceholder?.();
+      return unavailable;
     });
+  }
+
+  /** One packaged image, or nothing when this package does not carry a decodable one under that name. */
+  private presentable(name: PackagedImage): Buffer | undefined {
+    const image = this.packaged(name);
+    return image && isBoundedJpeg(image) ? image : undefined;
   }
 
   private acquired(scope: SnapshotScope, source: SnapshotSource, mode: SnapshotMode): Promise<Buffer> {

@@ -220,6 +220,13 @@ adaptation process unchanged, whether it was answered from the retained image in
 live in about eight seconds. Live view therefore never has to be interrupted to answer a snapshot, and a
 snapshot that fails does not end a session.
 
+A camera an admitted observation reports as disabled is presented rather than photographed: the plugin serves
+a packaged disabled image, attempts no acquisition at all, and keeps but never serves that camera's retained
+image, because a real frame from before the camera was switched off would misrepresent what it is doing now.
+Nothing is latched for it — the image is the intended presentation, and live view already reports why a
+disabled camera cannot be watched. An absent or malformed observation is not a disabled one and falls through
+to the normal order, for the same reason the live gate fails open.
+
 When no admitted acquisition can answer a request at all, the plugin serves a packaged image rather than
 failing it, because a HomeKit tile that cannot be drawn tells a viewer nothing while an explicit
 "unavailable" frame does. The image ships as a baseline JPEG at the largest resolution HomeKit asks for and
