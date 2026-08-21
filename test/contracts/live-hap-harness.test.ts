@@ -1,9 +1,22 @@
 import { createCipheriv, createHmac } from 'node:crypto';
 
-import { describe, expect, it } from 'vitest';
+import { encode as encodeTlv, H264Level, H264Profile, writeUInt16 } from '@homebridge/hap-nodejs';
+import { describe, expect, it, vi } from 'vitest';
 
 // @ts-expect-error the live harness is untyped operator tooling consumed only by these measurement contracts
-import { MeasuredVideoStream, describeSequenceParameterSet } from '../../scripts/hap-live-harness.mjs';
+import * as harness from '../../scripts/hap-live-harness.mjs';
+
+const {
+  MeasuredVideoStream,
+  describeSequenceParameterSet,
+  describeSupportedVideoStreamConfiguration,
+  judgeWindow,
+  refuseUnadvertised,
+  selectedVideoConfiguration,
+  unadvertisedSelection,
+  untlv,
+  untlvList,
+} = harness;
 
 /**
  * Sequence parameter sets produced by `ffmpeg -f lavfi -i testsrc` at the resolutions, profiles, and
@@ -114,6 +127,252 @@ function measured(onNalUnit?: (nal: Buffer) => void): MeasuredVideoStream {
 
 const IDR = Buffer.concat([Buffer.from([0x65]), Buffer.alloc(600, 0x41)]);
 const SLICE = Buffer.concat([Buffer.from([0x41]), Buffer.alloc(200, 0x42)]);
+
+/**
+ * `SupportedVideoStreamConfiguration` encoded exactly the way `RTPStreamManagement` encodes it from a
+ * camera controller's streaming options, including the zero-length delimiters HAP writes between the
+ * entries of a repeated type. Written with hap-nodejs's own encoder so the fixture cannot drift from the
+ * accessory side of the contract.
+ */
+function advertisement(
+  profiles: readonly H264Profile[],
+  levels: readonly H264Level[],
+  resolutions: readonly [number, number, number][],
+): string {
+  return encodeTlv(
+    1,
+    encodeTlv(
+      1,
+      0,
+      2,
+      encodeTlv(1, [...profiles], 2, [...levels], 3, 0),
+      3,
+      resolutions.map(([width, height, fps]) => encodeTlv(1, writeUInt16(width), 2, writeUInt16(height), 3, fps)),
+    ),
+  ).toString('base64');
+}
+
+const ADVERTISED = describeSupportedVideoStreamConfiguration(
+  advertisement(
+    [H264Profile.BASELINE, H264Profile.MAIN, H264Profile.HIGH],
+    [H264Level.LEVEL3_1, H264Level.LEVEL3_2, H264Level.LEVEL4_0],
+    [
+      [320, 180, 15],
+      [640, 360, 30],
+      [1280, 720, 30],
+      [1920, 1080, 30],
+    ],
+  ),
+);
+
+const SELECTION = {
+  width: 1280,
+  height: 720,
+  fps: 30,
+  bitrate: 299,
+  profile: 'main',
+  level: '3.1',
+  videoPayloadType: 99,
+  audioPayloadType: 110,
+};
+
+type CodedParameterSet = { width: number; height: number; profile: string; level: string };
+
+/** Judges one window with a recording sink in place of a run's observation accounting. */
+function judged(coded: readonly CodedParameterSet[], expected: unknown): { passed: string[]; failed: string[] } {
+  const passed: string[] = [];
+  const failed: string[] = [];
+  const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  try {
+    judgeWindow(
+      { check: (ok: boolean, description: string) => (ok ? passed : failed).push(description) },
+      { label: 'window', window: measuredVideo(coded), seconds: 1, expected },
+    );
+  } finally {
+    log.mockRestore();
+  }
+  return { passed, failed };
+}
+
+/** One measured window carrying the given coded parameter sets, as a session snapshot would report it. */
+function measuredVideo(coded: readonly CodedParameterSet[]) {
+  return {
+    packets: 30,
+    bytes: 3_000,
+    unauthenticated: 0,
+    foreign: 0,
+    rtcpPackets: 3,
+    frames: 30,
+    keyframes: 1,
+    highestSequence: 30,
+    payloadTypes: new Set([99]),
+    ssrcs: new Set([1]),
+    distinctTimestamps: 30,
+    parameterSets: coded.map((set) => ({ ...set, frames: 30 })),
+  };
+}
+
+describe('advertised HomeKit video stream configuration', () => {
+  it('reports the profiles, levels, and resolutions one accessory advertises', () => {
+    expect(ADVERTISED).toEqual([
+      {
+        codec: 'h264',
+        profiles: ['baseline', 'main', 'high'],
+        levels: ['3.1', '3.2', '4.0'],
+        packetizationMode: 0,
+        resolutions: [
+          { width: 320, height: 180, fps: 15 },
+          { width: 640, height: 360, fps: 30 },
+          { width: 1280, height: 720, fps: 30 },
+          { width: 1920, height: 1080, fps: 30 },
+        ],
+      },
+    ]);
+  });
+
+  it('reads a single-combination advertisement without inventing the rest of the matrix', () => {
+    expect(
+      describeSupportedVideoStreamConfiguration(
+        advertisement([H264Profile.BASELINE], [H264Level.LEVEL3_1], [[640, 360, 15]]),
+      ),
+    ).toEqual([
+      {
+        codec: 'h264',
+        profiles: ['baseline'],
+        levels: ['3.1'],
+        packetizationMode: 0,
+        resolutions: [{ width: 640, height: 360, fps: 15 }],
+      },
+    ]);
+  });
+
+  it('separates the entries of a repeated type instead of concatenating them', () => {
+    const list = encodeTlv(1, [Buffer.from([1, 2]), Buffer.from([3])], 2, Buffer.from([4]), 1, Buffer.from([5]));
+
+    expect(untlvList(list, 1)).toEqual([Buffer.from([1, 2]), Buffer.from([3]), Buffer.from([5])]);
+    expect(untlv(list).get(1)).toEqual(Buffer.from([1, 2, 3, 5]));
+  });
+
+  it('accepts a selection the accessory advertised, at or below the advertised frame rate', () => {
+    expect(unadvertisedSelection(ADVERTISED, SELECTION)).toEqual([]);
+    expect(unadvertisedSelection(ADVERTISED, { ...SELECTION, fps: 15 })).toEqual([]);
+    expect(unadvertisedSelection(ADVERTISED, { ...SELECTION, profile: 'high', level: '4.0' })).toEqual([]);
+  });
+
+  it('names every part of a selection the accessory never advertised', () => {
+    const reduced = describeSupportedVideoStreamConfiguration(
+      advertisement([H264Profile.BASELINE], [H264Level.LEVEL3_1], [[640, 360, 15]]),
+    );
+
+    expect(unadvertisedSelection(reduced, SELECTION)).toEqual(['profile main', '1280x720@30']);
+    expect(unadvertisedSelection(reduced, { ...SELECTION, profile: 'baseline', width: 640, height: 360 })).toEqual([
+      '640x360@30',
+    ]);
+    expect(unadvertisedSelection(ADVERTISED, { ...SELECTION, level: '5.1' })).toEqual(['level 5.1']);
+  });
+
+  it('requires one configuration to cover the whole selection rather than several', () => {
+    const split = [
+      ...describeSupportedVideoStreamConfiguration(
+        advertisement([H264Profile.MAIN], [H264Level.LEVEL3_1], [[640, 360, 30]]),
+      ),
+      ...describeSupportedVideoStreamConfiguration(
+        advertisement([H264Profile.BASELINE], [H264Level.LEVEL4_0], [[1280, 720, 30]]),
+      ),
+    ];
+
+    expect(unadvertisedSelection(split, SELECTION)).toEqual(['1280x720@30']);
+    expect(unadvertisedSelection(split, { ...SELECTION, width: 640, height: 360 })).toEqual([]);
+  });
+
+  it('refuses a selection outside the advertised matrix before anything is negotiated', () => {
+    expect(() => refuseUnadvertised(ADVERTISED, SELECTION, 'selection')).not.toThrow();
+    expect(() => refuseUnadvertised(ADVERTISED, { ...SELECTION, level: '5.1' }, 'selection')).toThrow(
+      'the accessory does not advertise level 5.1 for the selection',
+    );
+  });
+});
+
+describe('selected HomeKit video configuration', () => {
+  it('writes the requested profile and level to the wire, not a fixed pair', () => {
+    for (const [profile, identifier] of [
+      ['baseline', H264Profile.BASELINE],
+      ['main', H264Profile.MAIN],
+      ['high', H264Profile.HIGH],
+    ] as const) {
+      const parameters = untlv(untlv(selectedVideoConfiguration({ ...SELECTION, profile }, 1)).get(2));
+
+      expect(parameters.get(1)).toEqual(Buffer.from([identifier]));
+    }
+    for (const [level, identifier] of [
+      ['3.1', H264Level.LEVEL3_1],
+      ['3.2', H264Level.LEVEL3_2],
+      ['4.0', H264Level.LEVEL4_0],
+    ] as const) {
+      const parameters = untlv(untlv(selectedVideoConfiguration({ ...SELECTION, level }, 1)).get(2));
+
+      expect(parameters.get(2)).toEqual(Buffer.from([identifier]));
+    }
+  });
+
+  it('requests the non-interleaved packetization mode the accessory advertises', () => {
+    const parameters = untlv(untlv(selectedVideoConfiguration(SELECTION, 1)).get(2));
+
+    expect(parameters.get(3)).toEqual(Buffer.from([ADVERTISED[0].packetizationMode]));
+  });
+
+  it('carries the negotiated attributes and RTP identity of the selection', () => {
+    const video = untlv(selectedVideoConfiguration(SELECTION, 0x1a2b3c4d));
+    const attributes = untlv(video.get(3));
+    const rtp = untlv(video.get(4));
+
+    expect(video.get(1)).toEqual(Buffer.from([0]));
+    expect(attributes.get(1)?.readUInt16LE(0)).toBe(1280);
+    expect(attributes.get(2)?.readUInt16LE(0)).toBe(720);
+    expect(attributes.get(3)?.[0]).toBe(30);
+    expect(rtp.get(1)?.[0]).toBe(99);
+    expect(rtp.get(2)?.readUInt32LE(0)).toBe(0x1a2b3c4d);
+    expect(rtp.get(3)?.readUInt16LE(0)).toBe(299);
+  });
+
+  it('refuses to write a profile or level outside the HomeKit vocabulary', () => {
+    expect(() => selectedVideoConfiguration({ ...SELECTION, profile: 'constrained-baseline' }, 1)).toThrow(/profile/);
+    expect(() => selectedVideoConfiguration({ ...SELECTION, level: '5.1' }, 1)).toThrow(/level/);
+  });
+});
+
+const CODED_EXACTLY = 'window coded exactly the negotiated main profile at level 3.1';
+const NEGOTIATED = { width: 1280, height: 720, profile: 'main', level: '3.1' };
+
+describe('coded fidelity of one measured window', () => {
+  it('accepts only the exact negotiated profile and level', () => {
+    expect(judged([NEGOTIATED], SELECTION).failed).toEqual([]);
+    expect(judged([{ ...NEGOTIATED, profile: 'baseline' }], SELECTION).failed).toEqual([CODED_EXACTLY]);
+    expect(judged([{ ...NEGOTIATED, level: '3.0' }], SELECTION).failed).toEqual([CODED_EXACTLY]);
+    expect(judged([{ ...NEGOTIATED, profile: 'high' }], SELECTION).failed).toEqual([CODED_EXACTLY]);
+  });
+
+  it('accepts Constrained Baseline as the realization of a Baseline selection', () => {
+    expect(judged([{ ...NEGOTIATED, profile: 'baseline' }], { ...SELECTION, profile: 'baseline' }).failed).toEqual([]);
+  });
+
+  it('fails a window whose coded dimensions are not the negotiated ones', () => {
+    expect(judged([{ ...NEGOTIATED, width: 640, height: 360 }], SELECTION).failed).toEqual([
+      'window coded the negotiated 1280x720',
+    ]);
+  });
+
+  it('fails a window that coded one wrong parameter set before a correct one', () => {
+    expect(judged([{ ...NEGOTIATED, profile: 'baseline' }, NEGOTIATED], SELECTION).failed).toEqual([CODED_EXACTLY]);
+    expect(judged([{ ...NEGOTIATED, width: 640, height: 360 }, NEGOTIATED], SELECTION).failed).toEqual([
+      'window coded the negotiated 1280x720',
+    ]);
+  });
+
+  it('fails a window that coded no parameter set at all', () => {
+    expect(judged([], SELECTION).failed).toEqual(['window coded the negotiated 1280x720', CODED_EXACTLY]);
+  });
+});
 
 describe('live HomeKit stream measurement', () => {
   it('reports negotiated identity, frames, and parameter sets from authenticated SRTP', () => {

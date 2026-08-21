@@ -125,6 +125,7 @@ to any controller and a `hap-controller` module installed outside this repositor
 | --- | --- |
 | `live-hap-snapshot-check.mjs` | HomeKit snapshot requests, retained image policy, and on-disk modes |
 | `live-hap-stream-check.mjs` | Negotiated live streaming, measured on the decrypted wire |
+| `live-hap-codec-matrix-check.mjs` | One session per advertised profile and level, judged for exact coded fidelity |
 | `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it |
 | `live-hap-capture.mjs` | One MP4 and still per camera when a maintainer must look at a frame |
 
@@ -148,11 +149,32 @@ node scripts/live-hap-stream-check.mjs \
 - a battery camera bounds a continuous stream with a power budget the plugin must extend, so use
   `--seconds 60` or more with `--battery` to cross that boundary.
 
-Adaptation codes the negotiated profile exactly, with Constrained Baseline as the realization of a
-Baseline selection. The harness still accepts a coded profile or level below the negotiated one, so a run
-against an older build passes; tightening that to an exact rule and exercising every advertised
-combination is tracked separately. Measured frame rate and bit rate are upper-bound checks, because a
-camera that delivers fewer frames than negotiated is normal.
+Every run reads the accessory's own `SupportedVideoStreamConfiguration` first, reports the advertised
+profiles, levels and resolutions, and refuses a selection outside that matrix before negotiating anything.
+An accessory answers an unadvertised selection without complaint, so a run that skipped that step would
+measure a combination no controller would ever ask for.
+
+Coded profile, level and dimensions are judged exactly. Constrained Baseline is the realization of a
+Baseline selection, which is the one substitution the negotiated contract admits; a coded profile or level
+below the negotiated one fails the run. Measured frame rate and bit rate remain upper-bound checks, because
+a camera that delivers fewer frames than negotiated is normal.
+
+`live-hap-codec-matrix-check.mjs` walks the whole advertised matrix in one pairing, one bounded session per
+profile and level, and prints what each session requested next to what it coded:
+
+```bash
+node scripts/live-hap-codec-matrix-check.mjs \
+  --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
+  --seconds 8 --homebridge-pid <homebridge pid>
+```
+
+Each combination is a complete session on a cold source, so budget minutes rather than seconds. Point
+`--width` and `--height` at one advertised resolution to sweep the profiles and levels there, or add
+`--all-resolutions` to multiply the sweep by every advertised resolution. Measured on a wired camera, all
+nine advertised profile and level combinations code exactly at `1280x720@30` and again at `1920x1080@30`:
+the encoder writes the negotiated level literally, including a level whose own frame-size limit the
+negotiated geometry exceeds, so an out-of-spec triple in the advertised matrix shows up as an exact pass
+here and has to be judged from the matrix itself rather than from a coded parameter set.
 
 The measurement itself is covered hermetically by `test/contracts/live-hap-harness.test.ts`, so a green
 live result is not the only evidence that the harness reads packets correctly.

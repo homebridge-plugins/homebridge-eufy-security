@@ -30,7 +30,8 @@
  *   node scripts/live-hap-prepared-session-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
  *     [--aid 7] [--battery] [--idle-seconds 120] [--stream-seconds 10] \
- *     [--width 1280] [--height 720] [--fps 30] [--bitrate 299] [--homebridge-pid 12345]
+ *     [--width 1280] [--height 720] [--fps 30] [--bitrate 299] [--profile main] [--level 3.1] \
+ *     [--homebridge-pid 12345]
  *
  * The idle window is the measurement: pass an `--idle-seconds` longer than any bound the plugin could
  * plausibly hold, and the late start proves whether the negotiation survived it.
@@ -46,12 +47,16 @@ import {
   STREAMING_IN_USE,
   accessoryModel,
   adaptationProcesses,
+  advertisedVideo,
   cameraStreamManagements,
   hasBattery,
   observations,
   options,
+  refuseUnadvertised,
+  reportAdvertisedVideo,
   required,
   selectCameras,
+  videoSelection,
   waitFor,
 } from './hap-live-harness.mjs';
 
@@ -63,14 +68,7 @@ const parsed = options(process.argv.slice(2));
 const address = required(parsed, 'address');
 const idleSeconds = Number(parsed.get('idle-seconds') ?? 120);
 const streamSeconds = Number(parsed.get('stream-seconds') ?? 10);
-const selection = {
-  width: Number(parsed.get('width') ?? 1280),
-  height: Number(parsed.get('height') ?? 720),
-  fps: Number(parsed.get('fps') ?? 30),
-  bitrate: Number(parsed.get('bitrate') ?? 299),
-  videoPayloadType: 99,
-  audioPayloadType: 110,
-};
+const selection = videoSelection(parsed);
 const homebridgePid = parsed.get('homebridge-pid');
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
@@ -147,6 +145,9 @@ try {
     `camera aid=${accessory.aid} model="${accessoryModel(accessory)}"` +
       ` power=${hasBattery(accessory) ? 'battery' : 'wired'} stream-managements=${streamCount}`,
   );
+  const advertised = await advertisedVideo(client, accessory);
+  reportAdvertisedVideo(advertised);
+  refuseUnadvertised(advertised, selection, 'selection');
 
   console.log(`idle prepared session, holding ${idleSeconds}s without a start`);
   const idle = new LiveSession(client, accessory, address);

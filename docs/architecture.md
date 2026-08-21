@@ -219,6 +219,14 @@ and the only Baseline form the encoder can produce. `superfast` is the cheapest 
 CABAC and therefore the cheapest one that can satisfy a Main or High selection; `ultrafast` cannot,
 because dropping CABAC forces the coded stream below the negotiated profile.
 
+HomeKit advertises profiles, levels and resolutions as independent lists, so a controller may select a
+level whose own frame-size limit the selected geometry exceeds. `libx264` writes the requested level
+literally in that case, measured on the wire for all nine advertised profile and level combinations at
+`1280x720@30` and again at `1920x1080@30`. Exact coded fidelity therefore holds for every advertised
+profile and level, and whether a profile, level and resolution triple is itself conformant is a property
+of the advertised matrix rather than of adaptation. That property is open: see
+[#1041](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1041).
+
 No hardware encoder reachable on a Homebridge host clears that bar. The encoders present in every
 bundled Linux artifact cannot express the advertised profile set at all, and the encoders that can
 express it are absent from every bundled artifact. Availability is also not qualification: an encoder

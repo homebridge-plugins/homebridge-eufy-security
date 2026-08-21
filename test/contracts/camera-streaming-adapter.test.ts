@@ -8,6 +8,7 @@ import {
   CameraController,
   Characteristic,
   decode as decodeTlv,
+  decodeWithLists as decodeTlvWithLists,
   encode as encodeTlv,
   H264Level,
   H264Profile,
@@ -155,6 +156,34 @@ async function setupEndpoints(
 function streamingStatus(management: Service): number {
   const value = management.getCharacteristic(Characteristic.StreamingStatus).value as string;
   return decodeTlv(Buffer.from(value, 'base64'))[1]![0]!;
+}
+
+/**
+ * The video codec configuration one stream management service advertises, decoded with the accessory
+ * side's own TLV reader so the expectation is what a controller reads rather than what the plugin meant.
+ * A HomeKit controller may select any profile, level, and resolution in it, so this is the complete set of
+ * combinations live qualification has to honor.
+ */
+function advertisedVideo(value: string): {
+  codec: number;
+  profiles: number[];
+  levels: number[];
+  packetizationMode: number;
+  resolutions: number[][];
+} {
+  const configuration = decodeTlvWithLists(decodeTlvWithLists(Buffer.from(value, 'base64'))[1] as Buffer);
+  const parameters = decodeTlv(configuration[2] as Buffer);
+  const attributes = configuration[3];
+  return {
+    codec: (configuration[1] as Buffer)[0]!,
+    profiles: [...parameters[1]!],
+    levels: [...parameters[2]!],
+    packetizationMode: parameters[3]![0]!,
+    resolutions: (Array.isArray(attributes) ? attributes : [attributes as Buffer]).map((entry) => {
+      const resolution = decodeTlv(entry);
+      return [readUInt16(resolution[1]!), readUInt16(resolution[2]!), resolution[3]![0]!];
+    }),
+  };
 }
 
 function jpeg(marker: string): Buffer {
@@ -635,6 +664,42 @@ describe('camera streaming bundle adapter', () => {
     await expect(callSnapshot(controller.delegate)).rejects.toBe(failure);
     expect(snapshotLive).toHaveBeenCalledOnce();
     expect(snapshotStored).not.toHaveBeenCalled();
+  });
+
+  it('advertises exactly the profile, level, and resolution matrix a live run may select', () => {
+    const target = new Accessory(
+      'Synthetic advertised matrix camera',
+      uuid.generate('synthetic-camera-advertised'),
+    ) as unknown as PlatformAccessory;
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: true,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+
+    for (const management of streamManagements(target)) {
+      const advertised = management.getCharacteristic(Characteristic.SupportedVideoStreamConfiguration).value as string;
+
+      expect(advertisedVideo(advertised)).toEqual({
+        codec: 0,
+        profiles: [H264Profile.BASELINE, H264Profile.MAIN, H264Profile.HIGH],
+        levels: [H264Level.LEVEL3_1, H264Level.LEVEL3_2, H264Level.LEVEL4_0],
+        packetizationMode: 0,
+        resolutions: [
+          [320, 180, 15],
+          [640, 360, 30],
+          [1280, 720, 30],
+          [1920, 1080, 30],
+        ],
+      });
+    }
   });
 
   it('drives negotiated prepare, start, reconfigure, and stop through the media seam', async () => {

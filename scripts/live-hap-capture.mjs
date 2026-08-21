@@ -17,7 +17,8 @@
  * Usage:
  *   node scripts/live-hap-capture.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
- *     --output /tmp/eufy-capture [--battery] [--aid 7] [--seconds 20] [--warmup 30]
+ *     --output /tmp/eufy-capture [--battery] [--aid 7] [--seconds 20] [--warmup 30] \
+ *     [--width 1280] [--height 720] [--fps 30] [--bitrate 299] [--profile main] [--level 3.1]
  *
  * A session wakes the camera and streams from it, so battery cameras are skipped unless `--battery` is
  * passed. Audio is not captured: HomeKit return audio and camera audio are separate contracts, and a
@@ -31,10 +32,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {
   LiveSession,
   accessoryModel,
+  advertisedVideo,
   hasBattery,
   options,
+  refuseUnadvertised,
+  reportAdvertisedVideo,
   required,
   selectCameras,
+  videoSelection,
   waitFor,
 } from './hap-live-harness.mjs';
 
@@ -56,7 +61,7 @@ async function capture(client, accessory, settings) {
       '-f',
       'h264',
       '-r',
-      String(settings.fps),
+      String(settings.selection.fps),
       '-i',
       'pipe:0',
       '-c:v',
@@ -85,14 +90,7 @@ async function capture(client, accessory, settings) {
     return { status: `endpoint setup refused with status ${endpoints.status}` };
   }
 
-  await session.start({
-    width: settings.width,
-    height: settings.height,
-    fps: settings.fps,
-    bitrate: settings.bitrate,
-    videoPayloadType: 99,
-    audioPayloadType: 110,
-  });
+  await session.start(settings.selection);
   if ((await waitFor(() => session.measured.report.packets > 0, settings.warmup * 1_000)) !== undefined) {
     await delay(settings.seconds * 1_000);
   }
@@ -129,10 +127,7 @@ const settings = {
   output,
   seconds: Number(parsed.get('seconds') ?? 20),
   warmup: Number(parsed.get('warmup') ?? 30),
-  width: Number(parsed.get('width') ?? 1280),
-  height: Number(parsed.get('height') ?? 720),
-  fps: Number(parsed.get('fps') ?? 30),
-  bitrate: Number(parsed.get('bitrate') ?? 299),
+  selection: videoSelection(parsed),
 };
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
@@ -161,6 +156,9 @@ try {
     console.log(
       `aid=${accessory.aid} model="${accessoryModel(accessory)}" power=${hasBattery(accessory) ? 'battery' : 'wired'}`,
     );
+    const advertised = await advertisedVideo(client, accessory);
+    reportAdvertisedVideo(advertised);
+    refuseUnadvertised(advertised, settings.selection, 'selection');
     const result = await capture(client, accessory, settings);
     console.log(
       `  ${result.status}${result.packets === undefined ? '' : ` packets=${result.packets} frames=${result.frames} keyframes=${result.keyframes} coded=${result.coded}`}`,

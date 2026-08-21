@@ -64,6 +64,10 @@ export const CAMERA_STREAMING_ADAPTER = {
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'advertises exactly the profile, level, and resolution matrix a live run may select',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'drives negotiated prepare, start, reconfigure, and stop through the media seam',
         },
         {

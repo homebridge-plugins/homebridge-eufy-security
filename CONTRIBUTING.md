@@ -55,6 +55,12 @@ keyframe cadence, and bit rate the accessory actually produced, negotiates a con
 with `--concurrent`, matches the negotiated selection against the adaptation process arguments, and
 confirms no adaptation process survives the session. It measures decrypted media and keeps none of it.
 
+`scripts/live-hap-codec-matrix-check.mjs` qualifies the whole advertised codec matrix: it reads what the
+accessory advertises, negotiates one bounded session per advertised profile and level, and requires each
+coded parameter set to carry exactly the combination its session requested. Every live script reads the
+advertisement first and refuses a selection outside it, because an accessory answers an unadvertised
+selection without complaint.
+
 Both report the accessory id, product model, and power class for every camera they touch, so a recorded
 result identifies its subject without naming rooms.
 
@@ -65,8 +71,9 @@ exists, then proves a start written after that whole window still streams. It al
 session and closes the controller connection, which must release the reservation and refuse a later start.
 
 `scripts/hap-live-harness.mjs` owns the controller session mechanics these scripts share: HAP TLV
-encoding, camera selection, endpoint setup, negotiated start, reconfigure and end commands, receiver
-reports, and SRTP measurement. Its measurement is covered hermetically by
+encoding, camera selection, the advertised video vocabulary and the refusal of a selection outside it,
+endpoint setup, negotiated start, reconfigure and end commands, receiver reports, SRTP measurement, and
+the acceptance rules that judge one measured window. Its measurement is covered hermetically by
 `test/contracts/live-hap-harness.test.ts`, so a green live result is not the only evidence that the
 harness reads packets correctly.
 
@@ -76,7 +83,7 @@ inside a git working tree, and its output must stay out of repositories, backups
 archives.
 
 Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
-a camera, so all three scripts use wired cameras unless `--battery` is passed.
+a camera, so every script uses wired cameras unless `--battery` is passed.
 
 ## Pull requests
 

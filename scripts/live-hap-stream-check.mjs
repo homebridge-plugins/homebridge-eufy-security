@@ -8,11 +8,15 @@
  * and an ffmpeg binary.
  *
  * What it observes:
+ *   - the accessory advertises the profile, level, and resolution this run requests, which is read from
+ *     `SupportedVideoStreamConfiguration` and refused before any session is negotiated, because an
+ *     accessory answers an unadvertised selection without complaint and would measure nothing;
  *   - the accessory accepts the negotiated selection and reports a streaming session;
  *   - every inbound packet authenticates with the SRTP key this controller supplied and carries the
  *     negotiated payload type and synchronisation source, with multiplexed RTCP counted separately;
- *   - the decrypted H.264 elementary stream carries the negotiated coded dimensions, profile, and level in
- *     its sequence parameter sets, so the selection is proven on the wire and not only on a command line;
+ *   - the decrypted H.264 elementary stream carries exactly the negotiated coded dimensions, profile, and
+ *     level in its sequence parameter sets, so the selection is proven on the wire and not only on a
+ *     command line;
  *   - measured frame rate, keyframe cadence, and bit rate stay inside the negotiated maxima, and video
  *     continues across the RTCP interval while receiver reports are sent from the moment the session
  *     starts, because an accessory may terminate a session that receives no RTCP inside its startup
@@ -49,6 +53,9 @@
  * `--seconds 60` or more on a battery camera to cross that boundary. The script removes its own pairing
  * before exiting.
  *
+ * `--profile` and `--level` select what this run negotiates and are judged exactly. Use
+ * `live-hap-codec-matrix-check.mjs` to walk every advertised combination in one pairing.
+ *
  * With `--instance-log` and `--jsonl` it also judges the log sections the run appended: a Homebridge
  * service log free of failure and cleanup lines, and a plugin JSONL free of error records. Only levels,
  * counts, and kebab-case condition codes are printed, never a log line, because those files carry
@@ -65,12 +72,18 @@ import {
   STREAMING_IN_USE,
   accessoryModel,
   adaptationProcesses,
+  advertisedVideo,
   cameraStreamManagements,
   hasBattery,
+  judgeWindow,
+  measuredWindow,
   observations,
   options,
+  refuseUnadvertised,
+  reportAdvertisedVideo,
   required,
   selectCameras,
+  videoSelection,
   waitFor,
 } from './hap-live-harness.mjs';
 
@@ -78,21 +91,13 @@ const FIRST_PACKET_TIMEOUT_MS = 20_000;
 const RECONFIGURE_TIMEOUT_MS = 20_000;
 const TEARDOWN_GRACE_MS = 5_000;
 const LATE_WINDOW_SECONDS = 10;
+const RECONFIGURED_WINDOW_SECONDS = 5;
 const CONCURRENT_WINDOW_SECONDS = 10;
 
 const parsed = options(process.argv.slice(2));
 const address = required(parsed, 'address');
 const seconds = Number(parsed.get('seconds') ?? 25);
-const selection = {
-  width: Number(parsed.get('width') ?? 1280),
-  height: Number(parsed.get('height') ?? 720),
-  fps: Number(parsed.get('fps') ?? 30),
-  bitrate: Number(parsed.get('bitrate') ?? 299),
-  profile: parsed.get('profile') ?? 'main',
-  level: parsed.get('level') ?? '3.1',
-  videoPayloadType: 99,
-  audioPayloadType: 110,
-};
+const selection = videoSelection(parsed);
 const reconfigured = {
   ...selection,
   width: Number(parsed.get('reconfigure-width') ?? 640),
@@ -109,7 +114,6 @@ const { HttpClient } = await import(controllerModule).catch(() => {
 const results = observations('live stream qualification');
 const check = results.check;
 
-const PROFILE_ORDER = ['baseline', 'main', 'high'];
 const FAILURE_LINE = /\b(error|failed|failure|exception|unhandled|cleanup)\b/i;
 const CONDITION_CODE = /\[([a-z][a-z0-9-]+)\]/g;
 
@@ -169,84 +173,6 @@ function judgePluginLog(mark) {
   check((levels.error ?? 0) === 0, 'the plugin JSONL recorded no error condition for the session');
 }
 
-/**
- * A coded profile or level satisfies a negotiated one when it is not higher than it. A controller that
- * offered `main` at level 3.1 decodes a constrained-baseline level-3.0 stream, so the acceptance rule is
- * an upper bound rather than equality.
- */
-function withinNegotiated(coded, negotiated) {
-  const codedProfile = PROFILE_ORDER.indexOf(coded.profile);
-  return (
-    codedProfile >= 0 &&
-    codedProfile <= PROFILE_ORDER.indexOf(negotiated.profile) &&
-    Number(coded.level) <= Number(negotiated.level)
-  );
-}
-
-/**
- * What one session carried between two of its snapshots, so a window is judged on its own. Numeric
- * counters are differenced; the payload-type and synchronisation-source sets stay whole-session, because
- * an identity that appeared once must still fail a later window.
- */
-function delta(current, previous) {
-  const window = {
-    payloadTypes: current.payloadTypes,
-    ssrcs: current.ssrcs,
-    parameterSets: current.parameterSets.slice(Math.max(previous.parameterSets.length - 1, 0)),
-  };
-  for (const [name, value] of Object.entries(current)) {
-    if (typeof value === 'number') {
-      window[name] = value - previous[name];
-    }
-  }
-  return window;
-}
-
-/**
- * Reports and judges what one measured window carried, without exposing any media content. Rates are
- * judged on the window; keyframe presence and refresh cadence are judged on the whole session, because a
- * window shorter than one group of pictures legitimately contains no keyframe of its own.
- */
-function reportWindow(label, report, elapsedSeconds, expected, session = report) {
-  const kilobitsPerSecond = (report.bytes * 8) / 1_000 / Math.max(elapsedSeconds, 1);
-  const framesPerSecond = report.frames / Math.max(elapsedSeconds, 1);
-  console.log(
-    `${label} packets=${report.packets} bytes=${report.bytes} rate=${kilobitsPerSecond.toFixed(0)}kbps` +
-      ` frames=${report.frames} (${framesPerSecond.toFixed(1)}fps) keyframes=${report.keyframes}` +
-      ` unauthenticated=${report.unauthenticated} foreign-ssrc=${report.foreign} accessory-rtcp=${report.rtcpPackets}`,
-  );
-  console.log(
-    `${label} coded=${report.parameterSets
-      .map((set) => `${set.width}x${set.height} ${set.profile}@${set.level} frames=${set.frames}`)
-      .join(' -> ')}`,
-  );
-  check(report.packets > 0, `${label} delivered authenticated video`);
-  check(report.unauthenticated === 0, `${label} authenticated every packet with the negotiated SRTP key`);
-  check(report.foreign === 0, `${label} sent nothing from another synchronisation source`);
-  check(
-    report.payloadTypes.size === 1 && report.payloadTypes.has(expected.videoPayloadType),
-    `${label} used only the negotiated payload type ${expected.videoPayloadType}`,
-  );
-  check(session.keyframes > 0, `${label} delivered at least one keyframe`);
-  if (session.keyframes > 1) {
-    check(
-      session.frames / session.keyframes <= expected.fps * 3,
-      `${label} refreshed inside the negotiated group of pictures`,
-    );
-  }
-  check(kilobitsPerSecond <= expected.bitrate * 1.5, `${label} stayed inside the negotiated ${expected.bitrate}kbps`);
-  check(framesPerSecond <= expected.fps * 1.2, `${label} stayed inside the negotiated ${expected.fps}fps`);
-  const coded = report.parameterSets.at(-1);
-  check(
-    coded?.width === expected.width && coded?.height === expected.height,
-    `${label} coded the negotiated ${expected.width}x${expected.height}`,
-  );
-  check(
-    coded !== undefined && withinNegotiated(coded, expected),
-    `${label} coded at or below the negotiated ${expected.profile} profile and level ${expected.level}`,
-  );
-}
-
 /** Adaptation processes the plugin owns, with the negotiated selection matched but never printed. */
 function observeAdaptation(label, expectedCount, applied) {
   const processes = adaptationProcesses(homebridgePid);
@@ -299,6 +225,13 @@ try {
       ` power=${hasBattery(accessory) ? 'battery' : 'wired'} stream-managements=${streamCount}`,
   );
 
+  const advertised = await advertisedVideo(client, accessory);
+  reportAdvertisedVideo(advertised);
+  refuseUnadvertised(advertised, selection, 'selection');
+  if (!parsed.has('no-reconfigure')) {
+    refuseUnadvertised(advertised, reconfigured, 'reconfigured selection');
+  }
+
   const primary = new LiveSession(client, accessory, address);
   sessions.push(primary);
   const endpoints = await primary.setup();
@@ -327,7 +260,13 @@ try {
   await delay(Math.min(seconds, LATE_WINDOW_SECONDS) * 1_000);
   const streaming = primary.measured.report;
   observeAdaptation('primary', 1, selection);
-  reportWindow('primary', delta(streaming, early), (Date.now() - observedFrom) / 1_000, selection, streaming);
+  judgeWindow(results, {
+    label: 'primary',
+    window: measuredWindow(streaming, early),
+    seconds: (Date.now() - observedFrom) / 1_000,
+    expected: selection,
+    session: streaming,
+  });
   check(streaming.packets > early.packets, 'primary continued past its first packets across the RTCP interval');
   check(
     streaming.frames > late.frames,
@@ -346,14 +285,15 @@ try {
       `reconfigure to ${reconfigured.width}x${reconfigured.height}@${reconfigured.fps} ${reconfigured.bitrate}kbps`,
     );
     const before = primary.measured.report;
-    const reconfiguredFrom = Date.now();
     await primary.reconfigure(reconfigured);
     const changed = await waitFor(() => {
       const coded = primary.measured.report.parameterSets.at(-1);
       return coded?.width === reconfigured.width && coded?.height === reconfigured.height;
     }, RECONFIGURE_TIMEOUT_MS);
     check(changed !== undefined, `reconfigured dimensions reached the wire within ${RECONFIGURE_TIMEOUT_MS / 1_000}s`);
-    await delay(5_000);
+    const reconfiguredAt = primary.measured.report;
+    const reconfiguredFrom = Date.now();
+    await delay(RECONFIGURED_WINDOW_SECONDS * 1_000);
     const after = primary.measured.report;
     check(after.packets > before.packets, 'the session continued through the reconfiguration');
     check(after.ssrcs.size === 1, 'the reconfigured session kept its negotiated synchronisation source');
@@ -363,13 +303,12 @@ try {
       'the accessory still reported an in-use streaming session',
     );
     observeAdaptation('reconfigured', 1, reconfigured);
-    reportWindow(
-      'reconfigured',
-      delta(after, before),
-      (Date.now() - reconfiguredFrom) / 1_000,
-      reconfigured,
-      delta(after, before),
-    );
+    judgeWindow(results, {
+      label: 'reconfigured',
+      window: measuredWindow(after, reconfiguredAt),
+      seconds: (Date.now() - reconfiguredFrom) / 1_000,
+      expected: reconfigured,
+    });
   }
 
   if (parsed.has('concurrent')) {
@@ -389,13 +328,13 @@ try {
       const secondaryEarly = secondary.measured.report;
       const observedConcurrentFrom = Date.now();
       await delay(CONCURRENT_WINDOW_SECONDS * 1_000);
-      reportWindow(
-        'concurrent',
-        delta(secondary.measured.report, secondaryEarly),
-        (Date.now() - observedConcurrentFrom) / 1_000,
-        selection,
-        secondary.measured.report,
-      );
+      judgeWindow(results, {
+        label: 'concurrent',
+        window: measuredWindow(secondary.measured.report, secondaryEarly),
+        seconds: (Date.now() - observedConcurrentFrom) / 1_000,
+        expected: selection,
+        session: secondary.measured.report,
+      });
       check(
         primary.measured.report.packets > concurrentFrom.packets,
         'the first session kept streaming while the concurrent session ran',

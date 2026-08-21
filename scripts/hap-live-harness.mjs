@@ -29,6 +29,7 @@ export const ACCESSORY_INFORMATION = '0000003E';
 export const MODEL = '00000021';
 export const SETUP_ENDPOINTS = '00000118';
 export const SELECTED_RTP_STREAM_CONFIGURATION = '00000117';
+export const SUPPORTED_VIDEO_STREAM_CONFIGURATION = '00000114';
 export const STREAMING_STATUS = '00000120';
 
 /** Streaming status an accessory publishes for one stream management service. */
@@ -41,8 +42,15 @@ export const ENDPOINTS_BUSY = 1;
 const AES_CM_128_HMAC_SHA1_80 = 0;
 const H264 = 0;
 const AAC_ELD = 2;
+const NON_INTERLEAVED = 0;
 const SESSION_COMMANDS = { end: 0, start: 1, reconfigure: 4 };
 const SRTP_AUTHENTICATION_TAG = 10;
+/**
+ * HomeKit's H.264 profile and level vocabulary. A position in each list is the identifier that carries
+ * that name on the wire, both in what an accessory advertises and in what a controller selects.
+ */
+const HAP_PROFILES = ['baseline', 'main', 'high'];
+const HAP_LEVELS = ['3.1', '3.2', '4.0'];
 const PROFILE_NAMES = new Map([
   [66, 'baseline'],
   [77, 'main'],
@@ -129,6 +137,137 @@ export function untlv(buffer) {
   return values;
 }
 
+/**
+ * The separate entries of one repeated TLV type, split on the zero-length delimiter HAP writes between
+ * them. `untlv` concatenates a repeated type, which reads a list of single-byte identifiers correctly and
+ * loses the boundaries of a list of structures, so a caller that needs the entries reads them here. A
+ * repeated record that follows its own type without a delimiter is a value longer than one record and is
+ * reassembled rather than treated as another entry.
+ */
+export function untlvList(buffer, type) {
+  const entries = [];
+  let offset = 0;
+  let previousType = -1;
+  let delimited = true;
+  while (offset + 2 <= buffer.length) {
+    const recordType = buffer[offset];
+    const length = buffer[offset + 1];
+    const fragment = buffer.subarray(offset + 2, offset + 2 + length);
+    offset += 2 + length;
+    if (recordType === 0 && length === 0) {
+      delimited = true;
+      continue;
+    }
+    if (recordType === type) {
+      if (previousType === type && !delimited) {
+        entries[entries.length - 1] = Buffer.concat([entries.at(-1), fragment]);
+      } else {
+        entries.push(fragment);
+      }
+    }
+    previousType = recordType;
+    delimited = false;
+  }
+  return entries;
+}
+
+/**
+ * The video codec configurations one accessory advertises in `SupportedVideoStreamConfiguration`, in
+ * HomeKit's own vocabulary. This is the accessory's complete statement of what a controller may select,
+ * and an accessory validates a selection against nothing, so a run reads it to know that its request is
+ * one the accessory offered rather than one it merely tolerated.
+ */
+export function describeSupportedVideoStreamConfiguration(value) {
+  return untlvList(Buffer.from(value, 'base64'), 1).map((configuration) => {
+    const fields = untlv(configuration);
+    const parameters = untlv(fields.get(2) ?? Buffer.alloc(0));
+    const codec = fields.get(1)?.[0];
+    return {
+      codec: codec === H264 ? 'h264' : `codec-${codec}`,
+      profiles: [...(parameters.get(1) ?? [])].map((identifier) => HAP_PROFILES[identifier] ?? `profile-${identifier}`),
+      levels: [...(parameters.get(2) ?? [])].map((identifier) => HAP_LEVELS[identifier] ?? `level-${identifier}`),
+      packetizationMode: parameters.get(3)?.[0],
+      resolutions: untlvList(configuration, 3).map((entry) => {
+        const attributes = untlv(entry);
+        return {
+          width: attributes.get(1).readUInt16LE(0),
+          height: attributes.get(2).readUInt16LE(0),
+          fps: attributes.get(3)[0],
+        };
+      }),
+    };
+  });
+}
+
+/**
+ * The parts of a selection no single advertised configuration covers, empty when the accessory offered it.
+ * Every part must be covered by the same configuration, because a profile from one and a resolution from
+ * another is a combination the accessory never advertised. A frame rate at or below an advertised
+ * resolution's rate is covered, because a controller legitimately asks for fewer frames than a resolution
+ * can carry.
+ */
+export function unadvertisedSelection(configurations, selection) {
+  const h264 = configurations.filter((configuration) => configuration.codec === 'h264');
+  if (h264.length === 0) {
+    return ['any H.264 configuration'];
+  }
+  const shortfalls = h264.map((configuration) => {
+    const missing = [];
+    if (!configuration.profiles.includes(selection.profile)) {
+      missing.push(`profile ${selection.profile}`);
+    }
+    if (!configuration.levels.includes(selection.level)) {
+      missing.push(`level ${selection.level}`);
+    }
+    if (
+      !configuration.resolutions.some(
+        (resolution) =>
+          resolution.width === selection.width &&
+          resolution.height === selection.height &&
+          selection.fps <= resolution.fps,
+      )
+    ) {
+      missing.push(`${selection.width}x${selection.height}@${selection.fps}`);
+    }
+    return missing;
+  });
+  return shortfalls.reduce((fewest, missing) => (missing.length < fewest.length ? missing : fewest));
+}
+
+/** Reports one accessory's advertised video vocabulary, which bounds every selection a run may request. */
+export function reportAdvertisedVideo(configurations) {
+  for (const configuration of configurations) {
+    console.log(
+      `advertised codec=${configuration.codec} profiles=[${configuration.profiles.join(',')}]` +
+        ` levels=[${configuration.levels.join(',')}] packetization-mode=${configuration.packetizationMode}` +
+        ` resolutions=[${configuration.resolutions
+          .map((entry) => `${entry.width}x${entry.height}@${entry.fps}`)
+          .join(',')}]`,
+    );
+  }
+}
+
+/**
+ * Refuses a selection outside the advertised matrix before anything is negotiated. An accessory answers an
+ * unadvertised selection without complaint, so a run that requested one would measure a combination no
+ * controller would ever ask for and report it as evidence.
+ */
+export function refuseUnadvertised(configurations, selection, label) {
+  const missing = unadvertisedSelection(configurations, selection);
+  if (missing.length > 0) {
+    throw new Error(`the accessory does not advertise ${missing.join(' or ')} for the ${label}`);
+  }
+}
+
+/** The identifier that carries one name on the wire, refusing a name HomeKit has no vocabulary for. */
+function identifier(names, name, kind) {
+  const index = names.indexOf(name);
+  if (index < 0) {
+    throw new Error(`unknown H.264 ${kind} ${name}; the HomeKit vocabulary is ${names.join(', ')}`);
+  }
+  return index;
+}
+
 export function uint16(value) {
   const buffer = Buffer.alloc(2);
   buffer.writeUInt16LE(value);
@@ -188,6 +327,33 @@ export function cameraCharacteristics(accessory, index = 0) {
       throw new Error(`camera service is missing characteristic ${prefix}`);
     }
     return `${accessory.aid}.${found.iid}`;
+  };
+}
+
+/**
+ * What one of a camera's stream management services advertises for video, read from the accessory itself
+ * so a run is judged against the accessory's own statement rather than a copy of it kept here.
+ */
+export async function advertisedVideo(client, accessory, streamIndex = 0) {
+  const characteristic = cameraCharacteristics(accessory, streamIndex)(SUPPORTED_VIDEO_STREAM_CONFIGURATION);
+  const response = await client.getCharacteristics([characteristic]);
+  return describeSupportedVideoStreamConfiguration(response.characteristics[0].value);
+}
+
+/**
+ * The video selection one run negotiates, from its options. Profile and level belong to the selection
+ * because they are written to the wire and then judged against what the accessory coded.
+ */
+export function videoSelection(parsed) {
+  return {
+    width: Number(parsed.get('width') ?? 1280),
+    height: Number(parsed.get('height') ?? 720),
+    fps: Number(parsed.get('fps') ?? 30),
+    bitrate: Number(parsed.get('bitrate') ?? 299),
+    profile: parsed.get('profile') ?? 'main',
+    level: parsed.get('level') ?? '3.1',
+    videoPayloadType: 99,
+    audioPayloadType: 110,
   };
 }
 
@@ -557,6 +723,40 @@ export class MeasuredVideoStream {
 }
 
 /**
+ * The selected video configuration a controller writes for one session command. Profile and level are
+ * carried from the selection rather than pinned, because a run that judges coded fidelity must be able to
+ * request any combination the accessory advertised.
+ */
+export function selectedVideoConfiguration(selection, ssrc) {
+  return tlv(
+    1,
+    H264,
+    2,
+    tlv(
+      1,
+      identifier(HAP_PROFILES, selection.profile, 'profile'),
+      2,
+      identifier(HAP_LEVELS, selection.level, 'level'),
+      3,
+      NON_INTERLEAVED,
+    ),
+    3,
+    tlv(1, uint16(selection.width), 2, uint16(selection.height), 3, selection.fps),
+    4,
+    tlv(
+      1,
+      selection.videoPayloadType,
+      2,
+      uint32(ssrc),
+      3,
+      uint16(selection.bitrate),
+      4,
+      Buffer.from([0, 0, 0x80, 0x3f]),
+    ),
+  );
+}
+
+/**
  * One negotiated live session on one camera, driven the way a controller drives it: endpoint setup with
  * controller-supplied SRTP keys, a selected configuration, keepalive receiver reports, an optional
  * mid-session reconfiguration, and an explicit end.
@@ -673,25 +873,7 @@ export class LiveSession {
    * being reported later as a session that merely produced nothing.
    */
   async write(command, selection) {
-    const video = tlv(
-      1,
-      H264,
-      2,
-      tlv(1, 1, 2, 0, 3, 1),
-      3,
-      tlv(1, uint16(selection.width), 2, uint16(selection.height), 3, selection.fps),
-      4,
-      tlv(
-        1,
-        selection.videoPayloadType,
-        2,
-        uint32(this.videoSsrc),
-        3,
-        uint16(selection.bitrate),
-        4,
-        Buffer.from([0, 0, 0x80, 0x3f]),
-      ),
-    );
+    const video = selectedVideoConfiguration(selection, this.videoSsrc);
     const audio = tlv(
       1,
       AAC_ELD,
@@ -740,4 +922,79 @@ export async function waitFor(predicate, timeoutMs, intervalMs = 250) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return undefined;
+}
+
+/**
+ * What one session carried between two of its snapshots, so a window is judged on its own. Numeric
+ * counters are differenced; the payload-type and synchronisation-source sets stay whole-session, because
+ * an identity that appeared once must still fail a later window. The parameter set in force at the
+ * earlier snapshot is retained, because a window that codes no new set is still coding that one.
+ */
+export function measuredWindow(current, previous) {
+  const window = {
+    payloadTypes: current.payloadTypes,
+    ssrcs: current.ssrcs,
+    parameterSets: current.parameterSets.slice(Math.max(previous.parameterSets.length - 1, 0)),
+  };
+  for (const [name, value] of Object.entries(current)) {
+    if (typeof value === 'number') {
+      window[name] = value - previous[name];
+    }
+  }
+  return window;
+}
+
+/**
+ * Reports and judges what one measured window carried against the selection it was negotiated from,
+ * without exposing any media content. Rates are judged on the window; keyframe presence and refresh
+ * cadence are judged on `session`, the cumulative report the window belongs to, because a window shorter
+ * than one group of pictures legitimately contains no keyframe of its own.
+ *
+ * Every coded parameter set in the window must carry exactly the negotiated dimensions, profile, and
+ * level. HomeKit negotiates a stream a controller has committed to decode, so a lower profile or level is
+ * a fidelity failure rather than a courtesy, and one correct set later in a window does not excuse a wrong
+ * set earlier in it. Constrained Baseline is the realization of a Baseline selection and is reported as
+ * `baseline`, which is the one substitution the negotiated contract admits.
+ */
+export function judgeWindow(results, { label, window, seconds, expected, session = window }) {
+  const kilobitsPerSecond = (window.bytes * 8) / 1_000 / Math.max(seconds, 1);
+  const framesPerSecond = window.frames / Math.max(seconds, 1);
+  console.log(
+    `${label} packets=${window.packets} bytes=${window.bytes} rate=${kilobitsPerSecond.toFixed(0)}kbps` +
+      ` frames=${window.frames} (${framesPerSecond.toFixed(1)}fps) keyframes=${window.keyframes}` +
+      ` unauthenticated=${window.unauthenticated} foreign-ssrc=${window.foreign} accessory-rtcp=${window.rtcpPackets}`,
+  );
+  console.log(
+    `${label} coded=${window.parameterSets
+      .map((set) => `${set.width}x${set.height} ${set.profile}@${set.level} frames=${set.frames}`)
+      .join(' -> ')}`,
+  );
+  results.check(window.packets > 0, `${label} delivered authenticated video`);
+  results.check(window.unauthenticated === 0, `${label} authenticated every packet with the negotiated SRTP key`);
+  results.check(window.foreign === 0, `${label} sent nothing from another synchronisation source`);
+  results.check(
+    window.payloadTypes.size === 1 && window.payloadTypes.has(expected.videoPayloadType),
+    `${label} used only the negotiated payload type ${expected.videoPayloadType}`,
+  );
+  results.check(session.keyframes > 0, `${label} delivered at least one keyframe`);
+  if (session.keyframes > 1) {
+    results.check(
+      session.frames / session.keyframes <= expected.fps * 3,
+      `${label} refreshed inside the negotiated group of pictures`,
+    );
+  }
+  results.check(
+    kilobitsPerSecond <= expected.bitrate * 1.5,
+    `${label} stayed inside the negotiated ${expected.bitrate}kbps`,
+  );
+  results.check(framesPerSecond <= expected.fps * 1.2, `${label} stayed inside the negotiated ${expected.fps}fps`);
+  const coded = window.parameterSets;
+  results.check(
+    coded.length > 0 && coded.every((set) => set.width === expected.width && set.height === expected.height),
+    `${label} coded the negotiated ${expected.width}x${expected.height}`,
+  );
+  results.check(
+    coded.length > 0 && coded.every((set) => set.profile === expected.profile && set.level === expected.level),
+    `${label} coded exactly the negotiated ${expected.profile} profile at level ${expected.level}`,
+  );
 }
