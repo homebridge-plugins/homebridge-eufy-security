@@ -414,7 +414,14 @@ function outputArguments(
   ];
 }
 
-/** Raw SDK frames cannot prove profile, level, frame rate, and bitrate, so negotiated video is transcoded. */
+/**
+ * Raw SDK frames cannot prove profile, level, frame rate, and bitrate, so negotiated video is transcoded.
+ *
+ * `superfast` is the cheapest `libx264` preset that retains CABAC, and therefore the cheapest one whose
+ * coded stream can carry a negotiated Main or High profile; `ultrafast` drops CABAC and codes Constrained
+ * Baseline whatever `-profile:v` asks for. `-tune zerolatency` pins the same `sliced_threads`, `bframes`
+ * and `rc_lookahead` at either preset, so this costs computation rather than frame delay.
+ */
 function videoArguments(
   frame: LiveVideoFrame,
   selection: NegotiatedLiveVideo,
@@ -427,7 +434,7 @@ function videoArguments(
     '-c:v',
     'libx264',
     '-preset',
-    'ultrafast',
+    'superfast',
     '-tune',
     'zerolatency',
     '-profile:v',

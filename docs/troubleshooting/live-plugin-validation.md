@@ -148,9 +148,11 @@ node scripts/live-hap-stream-check.mjs \
 - a battery camera bounds a continuous stream with a power budget the plugin must extend, so use
   `--seconds 60` or more with `--battery` to cross that boundary.
 
-A coded profile or level below the negotiated one is a pass: a controller that offered `main` at level
-3.1 decodes the constrained-baseline stream low-latency adaptation produces. Measured frame rate and bit
-rate are upper-bound checks, because a camera that delivers fewer frames than negotiated is normal.
+Adaptation codes the negotiated profile exactly, with Constrained Baseline as the realization of a
+Baseline selection. The harness still accepts a coded profile or level below the negotiated one, so a run
+against an older build passes; tightening that to an exact rule and exercising every advertised
+combination is tracked separately. Measured frame rate and bit rate are upper-bound checks, because a
+camera that delivers fewer frames than negotiated is normal.
 
 The measurement itself is covered hermetically by `test/contracts/live-hap-harness.test.ts`, so a green
 live result is not the only evidence that the harness reads packets correctly.

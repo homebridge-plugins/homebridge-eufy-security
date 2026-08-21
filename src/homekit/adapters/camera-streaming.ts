@@ -84,6 +84,10 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/live-media.test.ts',
+          behavior: 'transcodes H.264 when passthrough compliance cannot be proven from SDK frames',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
           behavior: 'starts and retains video when source audio is absent or its separate process fails',
         },
         {

@@ -275,6 +275,10 @@ describe('live media adaptation', () => {
       expect.arrayContaining([
         '-c:v',
         'libx264',
+        '-preset',
+        'superfast',
+        '-tune',
+        'zerolatency',
         '-profile:v',
         'main',
         '-level:v',
