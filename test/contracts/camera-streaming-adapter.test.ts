@@ -942,6 +942,53 @@ describe('camera streaming bundle adapter', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('serves a retained image during an active live session without waiting for a live acquisition', async () => {
+    const target = new Accessory(
+      'Synthetic warm retained camera',
+      uuid.generate('synthetic-warm-retained-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn();
+    const prepare = vi.fn(
+      async () => ({ videoPort: 41000, start, reconfigure: vi.fn(), stop }) satisfies PreparedLiveMedia,
+    );
+    const retained = jpeg('synthetic retained still');
+    const { snapshotLive } = pendingLiveSnapshot();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ snapshotLive, live: vi.fn() }) } as never,
+      evidence: snapshotEvidence('snapshotLive'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      snapshotMedia: new SnapshotAcquisition(retainedImages([[SNAPSHOT_SERIAL, retained]])),
+      snapshotMode: 'Refresh',
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const management = streamManagements(target)[0]!;
+    const sessionID = '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a000b';
+
+    await expect(setupEndpoints(management, hapConnection(), sessionID)).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+    await callStream(controller.delegate, startRequest(sessionID, 1));
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(retained);
+
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(streamingStatus(management)).toBe(STREAMING_IN_USE);
+  });
+
   it('keeps two concurrent negotiated sessions independent on one camera', async () => {
     const target = new Accessory(
       'Synthetic concurrent camera',
@@ -1476,6 +1523,7 @@ describe('camera streaming bundle adapter', () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expect(streamingStatus(management)).toBe(STREAMING_AVAILABLE);
+    expect(management.getCharacteristic(Characteristic.Active).value).toBe(Characteristic.Active.ACTIVE);
     expect(
       diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-live-session-refused'),
     ).toEqual([

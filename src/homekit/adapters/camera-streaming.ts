@@ -9,6 +9,7 @@ import type {
   StreamRequestCallback,
 } from 'homebridge';
 
+import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
 import type {
   AdapterAttachmentContext,
   AttachedAdapter,
@@ -89,6 +90,10 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves a snapshot during an active live session without disturbing its media',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'serves a retained image during an active live session without waiting for a live acquisition',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -251,9 +256,9 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     ...(context.snapshotMedia ? { snapshotMedia: context.snapshotMedia } : {}),
     audioEnabled: context.audioEnabled !== false,
     snapshotMode,
-    enabled: enablementObservation(context, camera),
+    enablement: enablementObservation(context, camera),
     reportSession: liveSessionReporter(context),
-    reportAdmission: liveAdmissionReporter(context),
+    reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
   };
   if (existing) {
     existing.owner = owner;
@@ -350,43 +355,25 @@ function snapshotUnavailable(active: boolean, member: 'snapshotStored' | 'snapsh
 
 /**
  * Latches why the most recent live session ended without usable video and clears that condition once a
- * later session reaches the negotiated output. Only the media domain's bounded reason vocabulary is
- * reported; no device identity, address, key, media byte, or SDK message crosses this seam.
+ * later session reaches the negotiated output.
  */
 function liveSessionReporter(context: AdapterAttachmentContext): (outcome: LiveSessionOutcome) => void {
-  return (outcome) => {
-    if (outcome.outcome === 'streaming') {
-      context.observed(CAMERA_LIVE_SESSION_CONDITION);
-      return;
-    }
-    context.diagnose({
-      code: CAMERA_LIVE_SESSION_CONDITION,
-      capability: 'camera',
-      member: 'live',
-      active: true,
-      reason: outcome.reason,
-    });
-  };
+  const condition = cameraLiveCondition(context, CAMERA_LIVE_SESSION_CONDITION);
+  return (outcome) => condition(outcome.outcome === 'streaming' ? undefined : outcome.reason);
 }
 
 /**
- * Latches why live view is unavailable while an admitted observation says the camera is disabled, and
- * clears that condition when a session is admitted again. Only the bounded refusal vocabulary is
- * reported; no device identity, address, key, or media byte crosses this seam.
+ * Latches one bounded reason for a camera live condition and withdraws it when the condition recovers.
+ * Only the reason vocabulary its caller owns is reported; no device identity, address, key, media byte, or
+ * SDK message crosses this seam.
  */
-function liveAdmissionReporter(context: AdapterAttachmentContext): (refusal?: LiveAdmissionRefusal) => void {
-  return (refusal) => {
-    if (!refusal) {
-      context.observed(CAMERA_LIVE_REFUSED_CONDITION);
+function cameraLiveCondition(context: AdapterAttachmentContext, code: string): (reason?: string) => void {
+  return (reason) => {
+    if (reason === undefined) {
+      context.observed(code);
       return;
     }
-    context.diagnose({
-      code: CAMERA_LIVE_REFUSED_CONDITION,
-      capability: 'camera',
-      member: 'live',
-      active: true,
-      reason: refusal,
-    });
+    context.diagnose({ code, capability: 'camera', member: 'live', active: true, reason });
   };
 }
 
@@ -394,14 +381,14 @@ function liveAdmissionReporter(context: AdapterAttachmentContext): (refusal?: Li
  * Reads whether this camera is enabled, or nothing at all when it has no such observation.
  *
  * The SDK exposes enablement as an evidence-gated boolean read and privacy mode as a write with no
- * readback, so enablement is the only observation live admission can consult; a camera whose manifest
- * omits the row, whose value is not a boolean, or whose read faults is treated as unobserved and streams
- * exactly as it would without the gate, because refusing on an absent observation would withdraw live
- * view from a working camera.
+ * readback, so enablement is the only observation live admission can consult. The requirement deliberately
+ * does not demand a writable member, because a camera that reports its state without accepting a change is
+ * still observed. A camera whose manifest omits the row, whose value is not a boolean, or whose read faults
+ * is treated as unobserved and streams exactly as it would without the gate, because refusing on an absent
+ * observation would withdraw live view from a working camera.
  */
 function enablementObservation(context: AdapterAttachmentContext, camera: CameraActions): () => boolean | undefined {
-  const installed = context.evidence.get(CAMERA_ENABLED_READ.id);
-  if (installed?.kind !== CAMERA_ENABLED_READ.kind || installed.type !== CAMERA_ENABLED_READ.type) {
+  if (!satisfiesMemberRequirements(context.evidence, [CAMERA_ENABLED_READ])) {
     return () => undefined;
   }
   return () => {
@@ -436,7 +423,7 @@ interface LiveCameraBinding {
   readonly snapshotMedia?: SnapshotMediaAdapter;
   readonly audioEnabled: boolean;
   readonly snapshotMode: SnapshotMode;
-  readonly enabled: () => boolean | undefined;
+  readonly enablement: () => boolean | undefined;
   readonly reportSession: (outcome: LiveSessionOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
 }
@@ -487,7 +474,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
    * HAP offers, so no port, handle, or process is opened for it at all.
    */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    if (this.refuseDisabled('disabled')) {
+    if (this.refuseWhenDisabled('disabled')) {
       callback(new Error('camera is disabled'));
       return;
     }
@@ -574,7 +561,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       callback();
       return;
     }
-    if (this.refuseDisabled('disabled')) {
+    if (this.refuseWhenDisabled('disabled')) {
       this.release(request.sessionID);
       callback(new Error('camera is disabled'));
       return;
@@ -632,8 +619,8 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   }
 
   /** Reports one refusal when an admitted observation says the camera is disabled. */
-  private refuseDisabled(refusal: LiveAdmissionRefusal): boolean {
-    if (this.binding.enabled() !== false) {
+  private refuseWhenDisabled(refusal: LiveAdmissionRefusal): boolean {
+    if (this.binding.enablement() !== false) {
       return false;
     }
     this.refused = true;
@@ -660,7 +647,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       return;
     }
     this.supervision = setInterval(() => {
-      if (!this.refuseDisabled('disabled-mid-session')) {
+      if (!this.refuseWhenDisabled('disabled-mid-session')) {
         return;
       }
       for (const sessionID of [...this.sessions.keys()]) {

@@ -40,6 +40,7 @@ export const STREAMING_IN_USE = 1;
 /** `SetupEndpoints` answer status: a busy service already carries a session. */
 export const ENDPOINTS_ACCEPTED = 0;
 export const ENDPOINTS_BUSY = 1;
+export const ENDPOINTS_REFUSED = 2;
 
 const AES_CM_128_HMAC_SHA1_80 = 0;
 const H264 = 0;

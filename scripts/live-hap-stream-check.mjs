@@ -3,9 +3,9 @@
  *
  * Pairs a real HAP controller against a running Homebridge instance and drives complete negotiated live
  * sessions for a represented camera: `SetupEndpoints`, start, a mid-session snapshot, an optional
- * mid-session reconfiguration, an optional concurrent second session, then an explicit end. It exists because negotiated live media
- * cannot be qualified hermetically: it needs an authenticated account, a reachable camera, P2P transport,
- * and an ffmpeg binary.
+ * mid-session reconfiguration, an optional concurrent second session, then an explicit end. It exists
+ * because negotiated live media cannot be qualified hermetically: it needs an authenticated account, a
+ * reachable camera, P2P transport, and an ffmpeg binary.
  *
  * What it observes:
  *   - the accessory advertises the profile, level, and resolution this run requests, which is read from
@@ -47,7 +47,8 @@
  * Usage:
  *   node scripts/live-hap-stream-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
- *     [--aid 7] [--serial T8XXXXXXXXXXXXXX] [--battery] [--seconds 25] [--width 1280] [--height 720] [--fps 30] [--bitrate 299] \
+ *     [--aid 7] [--serial T8XXXXXXXXXXXXXX] [--battery] [--seconds 25] [--width 1280] [--height 720] \
+ *     [--fps 30] [--bitrate 299] \
  *     [--profile main] [--level 3.1] [--no-reconfigure] [--no-snapshot] [--concurrent] \
  *     [--reconfigure-width 640] [--reconfigure-height 360] [--reconfigure-fps 15] \
  *     [--reconfigure-bitrate 150] [--snapshot-settle-ms 25000] [--homebridge-pid 12345] \

@@ -145,6 +145,10 @@ AES-256-GCM encrypted envelope; it has no plaintext evidence export or upload ro
 - The runtime registry is the only in-process source of operational SDK devices.
 - The persisted snapshot is an allowlisted read model for UI and diagnostics, not a second operational
   registry.
+- Maintainer acceptance tooling under `scripts/` may deliberately open a second SDK owner, against a copy of
+  the persisted storage root so it cannot rotate or stage the records a running plugin owns. That is a
+  qualification path, never a runtime one: nothing in `src/` may take that shortcut, and the one tool that
+  writes to a device is excluded from the published package.
 
 ## Media boundary
 
@@ -229,8 +233,11 @@ path is deliberately not gated for the same reason.
 
 Enablement is the only observation available for this. The SDK exposes privacy mode as a write with no
 readback — nothing reports it back — and on the camera families whose power rides the privacy envelope the
-privacy wire is not aliased into enablement either, so a camera in privacy mode is not distinguishable
-here. A camera whose manifest omits the observation, reports it as something other than a boolean read, or
+privacy wire is not aliased into enablement either, so a camera in privacy mode is not distinguishable here,
+and on those families a camera that has been switched off may not be either. That gap is
+[eufy-sdk#48](https://github.com/mega-yfue/eufy-sdk/issues/48).
+
+A camera whose manifest omits the observation, reports it as something other than a boolean read, or
 faults while reading it is treated as unobserved and streams exactly as it would without the gate:
 refusing on an absent observation would withdraw live view from a working camera, which is the worse
 failure of the two.

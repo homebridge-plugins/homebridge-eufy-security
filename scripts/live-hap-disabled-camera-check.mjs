@@ -10,7 +10,9 @@
  *   2. turning the camera off ends that session, releases its adaptation, and returns the accessory to an
  *      available streaming status, with the plugin recording the bounded refusal reason and NO media
  *      failure reason — which is what distinguishes the gate firing from the source dying;
- *   3. a new session is refused while the camera stays off, opening no transport at all;
+ *   3. a new session is refused while the camera stays off, opening no transport at all. Only HAP's `ERROR`
+ *      status proves the gate: a `BUSY` answer means a session was still holding that stream management
+ *      service and proves nothing, so it is reported as unverified rather than as a pass;
  *   4. snapshots stay reachable while the camera is off, because presentation for a disabled camera lives
  *      on the snapshot path rather than behind the stream management `Active` characteristic;
  *   5. turning the camera back on admits a session again, and the delay before it does is measured rather
@@ -20,6 +22,14 @@
  * SDK reports no event when a camera is switched off, so the plugin re-reads the observation while a
  * session is active and can only act once that read changes. This script measures that delay; it does not
  * assert a bound on it, because the bound belongs to whatever the measurement shows.
+ *
+ * Measured on a wired camera, steps 2 to 5 do not pass today, and the reason is upstream: a long-lived SDK
+ * client's read-through refresh never updates the enablement observation
+ * ([eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47)), so the value this plugin re-reads never
+ * moves inside a session. The same switch-off IS observed after a plugin restart, which is how the refusal
+ * half is qualified today: turn the camera off, restart, then run `live-hap-stream-check.mjs` against it and
+ * expect an `ERROR` answer plus one `camera-live-session-refused` condition. Keep running this script as
+ * the regression that will start passing when the upstream observation moves.
  *
  * DEVICE WRITE. Unlike every other live script here, this one turns a real camera off and on again
  * through the typed SDK, so it needs explicit maintainer approval and a camera named by serial. It always
@@ -46,6 +56,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { openCameraPower, shortSerial } from './eufy-camera-power.mjs';
 import {
   ENDPOINTS_ACCEPTED,
+  ENDPOINTS_BUSY,
+  ENDPOINTS_REFUSED,
   LiveSession,
   STREAMING_AVAILABLE,
   STREAMING_IN_USE,
@@ -215,7 +227,15 @@ try {
   sessions.push(refused);
   const refusal = await refused.setup();
   console.log(`endpoint setup while disabled returned status ${refusal.status}`);
-  check(refusal.status !== ENDPOINTS_ACCEPTED, 'the accessory refused endpoint setup while the camera was off');
+  check(
+    refusal.status === ENDPOINTS_REFUSED,
+    'the accessory answered endpoint setup with an error while the camera was off',
+  );
+  if (refusal.status === ENDPOINTS_BUSY) {
+    results.unverified(
+      'the refusal was answered BUSY, so a session still held that stream management service and nothing was proven',
+    );
+  }
   check(
     (await refused.streamingStatus()) === STREAMING_AVAILABLE,
     'a refused setup left the stream management available rather than reserved',
