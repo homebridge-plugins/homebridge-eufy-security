@@ -168,6 +168,35 @@ and an absolute grace would fail a source that legitimately warms for longer tha
 Each failure reports one bounded reason through the HomeKit diagnostic seam, so `media/` reports outcomes
 without importing diagnostics.
 
+### Prepared session lifetime
+
+A prepared live session is bounded by the controller's HAP connection rather than by a plugin timer.
+`SetupEndpoints` must answer with the accessory's ports before the controller decides whether to start, so
+the video reservation, and the audio one when audio is negotiated, are made during preparation and
+necessarily outlive that answer. Reserving them at start instead is not available: the answer has to carry
+ports the plugin already owns. HomeKit ends a session that was set up but neither started nor ended only
+when its HAP connection closes; neither the protocol nor the accessory bounds that gap, and the gap itself
+belongs to the controller, so nothing observable from this side can say how long a legitimate one is.
+
+The plugin therefore holds the reservation for exactly as long as HomeKit still reports the session as set
+up. No SDK handle, adaptation process, or device session exists in that window, so an idle prepared
+session costs one or two UDP ports and one of the accessory's two stream management services, and a
+controller that negotiates and only later starts still finds a valid answer. Releasing on a plugin timer
+would need a duration for the negotiate-to-start gap that no available observation supports, and choosing
+such a duration by guesswork is what truncated the SDK warm-up window once already. The failure it would
+cause is not a silent one: a start for a session the plugin has released is refused, either by the
+accessory when the release also force-stopped the session or by the delegate when it did not, and HomeKit
+closes the session on that error and renegotiates. So the cost of a wrong duration is a lost negotiation
+rather than a session answering on nothing, and that cost has no upside while the reservation holds
+nothing but ports. Two abandoned preparations on one connection do leave that camera unable to negotiate
+until the connection closes; that consequence is recorded here instead of being hidden behind a timer.
+
+What the plugin does owe is one release path. A stop request, a force-stop after a video failure, a failed
+stream request, and adapter detachment all release the same recorded session exactly once, and a
+preparation that completes after its session was cancelled or replaced releases its own reservation
+immediately. A session HomeKit has ended is not retained, so a later request for it is refused before it
+can reach stopped media.
+
 The last successful image is plugin state rather than SDK state. The SDK retains a stored-only image
 only in memory for the lifetime of its session, so a restart or a cold camera would otherwise leave
 HomeKit with no image at all. `media/` therefore retains one validated source JPEG per camera under

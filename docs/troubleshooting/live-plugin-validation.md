@@ -118,13 +118,14 @@ operation class has separate explicit approval.
 
 The harnesses in `scripts/` pair a real HAP controller against a dedicated Homebridge instance, so live
 camera acceptance does not depend on adding a bridge in the Home app. Each script documents its own
-prerequisites and options in its file header; all three need a Homebridge instance that is **not** paired
+prerequisites and options in its file header; all of them need a Homebridge instance that is **not** paired
 to any controller and a `hap-controller` module installed outside this repository.
 
 | Script | What it qualifies |
 | --- | --- |
 | `live-hap-snapshot-check.mjs` | HomeKit snapshot requests, retained image policy, and on-disk modes |
 | `live-hap-stream-check.mjs` | Negotiated live streaming, measured on the decrypted wire |
+| `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it |
 | `live-hap-capture.mjs` | One MP4 and still per camera when a maintainer must look at a frame |
 
 `live-hap-stream-check.mjs` decrypts and authenticates the inbound SRTP with the keys it supplied, so it
@@ -153,6 +154,20 @@ rate are upper-bound checks, because a camera that delivers fewer frames than ne
 
 The measurement itself is covered hermetically by `test/contracts/live-hap-harness.test.ts`, so a green
 live result is not the only evidence that the harness reads packets correctly.
+
+`live-hap-prepared-session-check.mjs` covers the case a Home app cannot be asked for: a controller that
+negotiates endpoints and then never starts. It holds one prepared session idle for `--idle-seconds`,
+confirming through the accessory's own streaming status and the bound UDP ports on the host that the
+reservation is still held, that no adaptation process exists for the whole window, and that a start
+written after it still streams. It then abandons a prepared session and closes the controller connection,
+which must release the reservation, return the stream management service to available, and refuse a start
+for the released session.
+
+```bash
+node scripts/live-hap-prepared-session-check.mjs \
+  --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
+  --idle-seconds 600 --homebridge-pid <homebridge pid>
+```
 
 ## 7. Record the result safely
 

@@ -4,8 +4,9 @@
  * It owns everything a real controller needs to negotiate one live session against a running Homebridge
  * instance without a Home app: command-line options, HAP TLV encoding, camera selection, endpoint setup,
  * negotiated start, reconfigure and end commands, RTCP receiver reports, and measurement of the inbound
- * SRTP the accessory produces. `live-hap-stream-check.mjs`, `live-hap-capture.mjs`, and
- * `live-hap-snapshot-check.mjs` consume it so one implementation of the protocol carries every result.
+ * SRTP the accessory produces. `live-hap-stream-check.mjs`, `live-hap-capture.mjs`,
+ * `live-hap-prepared-session-check.mjs`, and `live-hap-snapshot-check.mjs` consume it so one implementation
+ * of the protocol carries every result.
  *
  * `MeasuredVideoStream` authenticates and decrypts inbound SRTP with the keys this controller supplied,
  * depacketizes H.264, and reports what the accessory actually encoded: negotiated payload type and
@@ -29,6 +30,13 @@ export const MODEL = '00000021';
 export const SETUP_ENDPOINTS = '00000118';
 export const SELECTED_RTP_STREAM_CONFIGURATION = '00000117';
 export const STREAMING_STATUS = '00000120';
+
+/** Streaming status an accessory publishes for one stream management service. */
+export const STREAMING_AVAILABLE = 0;
+export const STREAMING_IN_USE = 1;
+/** `SetupEndpoints` answer status: a busy service already carries a session. */
+export const ENDPOINTS_ACCEPTED = 0;
+export const ENDPOINTS_BUSY = 1;
 
 const AES_CM_128_HMAC_SHA1_80 = 0;
 const H264 = 0;
@@ -60,6 +68,38 @@ export function required(parsed, name) {
     throw new Error(`missing --${name}; see the header of this script for usage`);
   }
   return value;
+}
+
+/**
+ * Pass, fail, and unverified accounting for one live run, including the summary it exits with, so every
+ * check in this directory reports and fails a live observation the same way.
+ */
+export function observations(subject) {
+  let failures = 0;
+  let unverified = 0;
+  return {
+    check(passed, description) {
+      console.log(`  ${passed ? 'pass' : 'FAIL'} ${description}`);
+      if (!passed) {
+        failures += 1;
+      }
+    },
+    /** Records an observation this run could not make, reported without failing it. */
+    unverified(description) {
+      unverified += 1;
+      console.log(description);
+    },
+    /** Prints what the run concluded and sets a failing exit code when any observation failed. */
+    summarize() {
+      if (unverified > 0) {
+        console.log(`${subject} left ${unverified} observation(s) unverified`);
+      }
+      if (failures > 0) {
+        console.error(`${subject} reported ${failures} failing observation(s)`);
+        process.exitCode = 1;
+      }
+    },
+  };
 }
 
 /** HAP TLV8 encoding, fragmenting any value longer than one record. */
@@ -627,7 +667,12 @@ export class LiveSession {
     );
   }
 
-  write(command, selection) {
+  /**
+   * Writes one session-control command. An accessory answers a refused write with a per-characteristic
+   * status rather than a transport error, so a refusal is raised here instead of resolving as accepted and
+   * being reported later as a session that merely produced nothing.
+   */
+  async write(command, selection) {
     const video = tlv(
       1,
       H264,
@@ -668,7 +713,7 @@ export class LiveSession {
       4,
       0,
     );
-    return this.client.setCharacteristics({
+    const response = await this.client.setCharacteristics({
       [this.characteristic(SELECTED_RTP_STREAM_CONFIGURATION)]: tlv(
         1,
         tlv(1, this.identifier, 2, command),
@@ -678,6 +723,10 @@ export class LiveSession {
         audio,
       ).toString('base64'),
     });
+    const refused = (response?.characteristics ?? []).find((entry) => (entry.status ?? 0) !== 0);
+    if (refused) {
+      throw new Error(`accessory refused the session command with status ${refused.status}`);
+    }
   }
 }
 

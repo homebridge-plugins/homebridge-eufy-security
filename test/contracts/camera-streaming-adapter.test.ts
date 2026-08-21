@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+
 import type { CameraActions } from '@mega-yfue/eufy-sdk';
 import {
   Accessory,
@@ -5,14 +7,18 @@ import {
   AudioStreamingSamplerate,
   CameraController,
   Characteristic,
+  decode as decodeTlv,
+  encode as encodeTlv,
   H264Level,
   H264Profile,
   HAPStatus,
   HapStatusError,
+  readUInt16,
   Service,
   SRTPCryptoSuites,
   StreamRequestTypes,
   uuid,
+  writeUInt16,
 } from '@homebridge/hap-nodejs';
 import type {
   CameraStreamingDelegate,
@@ -92,6 +98,64 @@ function prepareRequest(sessionID = 'synthetic-session'): PrepareStreamRequest {
 }
 
 const SNAPSHOT_SERIAL = 'SYNTHETIC0000000001';
+
+const SETUP_ENDPOINTS_SUCCESS = 0;
+const SETUP_ENDPOINTS_BUSY = 1;
+const SETUP_ENDPOINTS_ERROR = 2;
+const STREAMING_AVAILABLE = 0;
+const STREAMING_IN_USE = 1;
+
+/**
+ * The HAP connection surface `RTPStreamManagement` consumes while setting up endpoints. A real
+ * controller connection is only an address plus a `closed` event, which is the whole reason a prepared
+ * session's lifetime can be scoped to it.
+ */
+function hapConnection(): EventEmitter & { localAddress: string; getLocalAddress(): string } {
+  const connection = new EventEmitter() as EventEmitter & { localAddress: string; getLocalAddress(): string };
+  connection.localAddress = '192.0.2.20';
+  connection.getLocalAddress = () => '192.0.2.20';
+  return connection;
+}
+
+function streamManagements(accessory: PlatformAccessory): Service[] {
+  return accessory.services.filter((service) => service.UUID === Service.CameraRTPStreamManagement.UUID);
+}
+
+function setupEndpointsWrite(sessionID: string): string {
+  return encodeTlv(
+    1,
+    uuid.write(sessionID),
+    3,
+    encodeTlv(1, 0, 2, '192.0.2.10', 3, writeUInt16(50100), 4, writeUInt16(50101)),
+    4,
+    encodeTlv(1, SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80, 2, Buffer.alloc(16, 1), 3, Buffer.alloc(14, 2)),
+    5,
+    encodeTlv(1, SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80, 2, Buffer.alloc(16, 3), 3, Buffer.alloc(14, 4)),
+  ).toString('base64');
+}
+
+/** Writes `SetupEndpoints` the way a controller does and reads back the answer the accessory serves. */
+async function setupEndpoints(
+  management: Service,
+  connection: ReturnType<typeof hapConnection>,
+  sessionID: string,
+): Promise<{ status: number; videoPort?: number }> {
+  const characteristic = management.getCharacteristic(Characteristic.SetupEndpoints);
+  await characteristic.handleSetRequest(setupEndpointsWrite(sessionID), connection as never);
+  const answer = decodeTlv(
+    Buffer.from((await characteristic.handleGetRequest(connection as never)) as string, 'base64'),
+  );
+  const address = answer[3] ? decodeTlv(answer[3]) : undefined;
+  return {
+    status: answer[2]![0]!,
+    ...(address ? { videoPort: readUInt16(address[3]!) } : {}),
+  };
+}
+
+function streamingStatus(management: Service): number {
+  const value = management.getCharacteristic(Characteristic.StreamingStatus).value as string;
+  return decodeTlv(Buffer.from(value, 'base64'))[1]![0]!;
+}
 
 function jpeg(marker: string): Buffer {
   return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from(marker, 'utf8'), Buffer.from([0xff, 0xd9])]);
@@ -786,6 +850,143 @@ describe('camera streaming bundle adapter', () => {
 
     await expect(pending).rejects.toThrow('cancelled');
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('holds a prepared session that never starts until its HAP connection closes', async () => {
+    const target = new Accessory(
+      'Synthetic idle camera',
+      uuid.generate('synthetic-idle-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const sessions = [41000, 41002].map((videoPort) => ({
+      videoPort,
+      start: vi.fn(async () => undefined),
+      reconfigure: vi.fn(),
+      stop: vi.fn(),
+    }));
+    const prepare = vi.fn(async () => sessions[prepare.mock.calls.length - 1] as PreparedLiveMedia);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    expect(configureController).toHaveBeenCalledOnce();
+    const [first, second] = streamManagements(target);
+    const connection = hapConnection();
+    vi.useFakeTimers();
+
+    await expect(setupEndpoints(first!, connection, '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0001')).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+    expect(streamingStatus(first!)).toBe(STREAMING_IN_USE);
+
+    await expect(setupEndpoints(first!, connection, '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0002')).resolves.toEqual({
+      status: SETUP_ENDPOINTS_BUSY,
+    });
+    await expect(setupEndpoints(second!, connection, '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0003')).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41002,
+    });
+    expect(prepare).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    expect(sessions.map((session) => session.stop.mock.calls.length)).toEqual([0, 0]);
+    expect(streamingStatus(first!)).toBe(STREAMING_IN_USE);
+    expect(streamingStatus(second!)).toBe(STREAMING_IN_USE);
+
+    connection.emit('closed');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sessions[0]!.stop).toHaveBeenCalledOnce();
+    expect(sessions[1]!.stop).toHaveBeenCalledOnce();
+    expect(sessions[0]!.start).not.toHaveBeenCalled();
+    expect(streamingStatus(first!)).toBe(STREAMING_AVAILABLE);
+    expect(streamingStatus(second!)).toBe(STREAMING_AVAILABLE);
+    await expect(
+      first!.getCharacteristic(Characteristic.SetupEndpoints).handleGetRequest(connection as never),
+    ).resolves.toBe(encodeTlv(2, SETUP_ENDPOINTS_ERROR).toString('base64'));
+  });
+
+  it('forgets a session HomeKit closed after a video failure instead of restarting its media', async () => {
+    const target = new Accessory(
+      'Synthetic force-stopped camera',
+      uuid.generate('synthetic-force-stopped-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn();
+    let failVideo: (() => void) | undefined;
+    const prepare = vi.fn(async (transport: { onVideoFailure?(): void }) => {
+      failVideo = () => transport.onVideoFailure?.();
+      return { videoPort: 41000, start, reconfigure: vi.fn(), stop } satisfies PreparedLiveMedia;
+    });
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const management = streamManagements(target)[0]!;
+    const connection = hapConnection();
+    const sessionID = '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0004';
+
+    await expect(setupEndpoints(management, connection, sessionID)).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+
+    failVideo?.();
+    expect(streamingStatus(management)).toBe(STREAMING_AVAILABLE);
+
+    await expect(
+      callStream(controller.delegate, {
+        sessionID,
+        type: StreamRequestTypes.START,
+        video: {
+          codec: 0,
+          profile: H264Profile.MAIN,
+          level: H264Level.LEVEL3_1,
+          packetizationMode: 0,
+          width: 1280,
+          height: 720,
+          fps: 30,
+          pt: 99,
+          ssrc: 1,
+          max_bit_rate: 300,
+          rtcp_interval: 0.5,
+          mtu: 1200,
+        },
+      } as StreamingRequest),
+    ).rejects.toThrow('live media session was not prepared');
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+
+    await expect(
+      callStream(controller.delegate, { sessionID, type: StreamRequestTypes.STOP }),
+    ).resolves.toBeUndefined();
+    expect(stop).toHaveBeenCalledOnce();
+
+    await expect(setupEndpoints(management, connection, '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0005')).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
   });
 
   it('latches one live-session failure reason and clears it when a later session streams', async () => {

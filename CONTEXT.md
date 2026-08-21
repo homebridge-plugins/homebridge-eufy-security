@@ -174,6 +174,12 @@ _Avoid_: Session pre-warm, recording delay
 Plugin-owned translation of SDK media source truth into a HomeKit-negotiated codec, framing, timing, and transport contract.
 _Avoid_: Device decoding, SDK media transport
 
+**Prepared live session**:
+A live session whose endpoints are negotiated and whose output ports are reserved, holding no source,
+adaptation process, or device session until it is started. Its lifetime belongs to the controller
+connection that negotiated it, not to a plugin deadline.
+_Avoid_: Session pre-warm, active stream, idle stream
+
 **Adaptation host capability**:
 A media facility supplied by the host installation rather than by the device or the plugin, such as the
 encoders present in the resolved adaptation executable. It varies per installation, is neither device

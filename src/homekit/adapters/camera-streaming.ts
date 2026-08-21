@@ -72,6 +72,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'holds a prepared session that never starts until its HAP connection closes',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'forgets a session HomeKit closed after a video failure instead of restarting its media',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'latches one live-session failure reason and clears it when a later session streams',
         },
         {
@@ -386,6 +394,13 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     );
   }
 
+  /**
+   * Answers `SetupEndpoints` with reservations whose lifetime is the controller's HAP connection. A
+   * prepared session holds one UDP port for video, a second when audio is negotiated, and no SDK handle,
+   * process, or device session; HomeKit bounds it by that connection rather than by a timer, so a
+   * controller that negotiates and then waits keeps a valid answer instead of being invalidated by a
+   * plugin deadline.
+   */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
     const generation = Symbol('camera-stream-prepare');
     this.prepareGenerations.set(request.sessionID, generation);
@@ -396,9 +411,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
           callback(new Error('live media preparation was cancelled'));
           return;
         }
-        this.prepareGenerations.delete(request.sessionID);
-        const replaced = this.sessions.get(request.sessionID);
-        replaced?.prepared.stop();
+        this.release(request.sessionID);
         this.sessions.set(request.sessionID, session);
         callback(undefined, response);
       },
@@ -419,7 +432,10 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       targetAddress: request.targetAddress,
       video: mediaTarget(request.video, this.hap),
       ...(this.audioEnabled ? { audio: mediaTarget(request.audio, this.hap) } : {}),
-      onVideoFailure: () => this.controller?.forceStopStreamingSession(request.sessionID),
+      onVideoFailure: () => {
+        this.controller?.forceStopStreamingSession(request.sessionID);
+        this.release(request.sessionID);
+      },
       onSessionOutcome: (outcome) => this.reportSession(outcome),
     });
     return {
@@ -446,20 +462,19 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   }
 
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
-    const session = this.sessions.get(request.sessionID);
     if (request.type === 'stop') {
-      this.prepareGenerations.delete(request.sessionID);
-      session?.prepared.stop();
-      this.sessions.delete(request.sessionID);
+      this.release(request.sessionID);
       callback();
       return;
     }
+    const session = this.sessions.get(request.sessionID);
     if (!session) {
       callback(new Error('live media session was not prepared'));
       return;
     }
     if (request.type === 'reconfigure') {
       if (!session.selection) {
+        this.release(request.sessionID);
         callback(new Error('live media session has not started'));
         return;
       }
@@ -488,17 +503,32 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       })
       .then(
         () => callback(),
-        (error: unknown) => callback(error instanceof Error ? error : new Error('stream failed')),
+        (error: unknown) => {
+          this.release(request.sessionID);
+          callback(error instanceof Error ? error : new Error('stream failed'));
+        },
       );
   }
 
   stop(): void {
     this.acceptingSessions = false;
-    this.prepareGenerations.clear();
-    for (const session of this.sessions.values()) {
-      session.prepared.stop();
+    for (const sessionID of [...this.sessions.keys()]) {
+      this.release(sessionID);
     }
-    this.sessions.clear();
+    this.prepareGenerations.clear();
+  }
+
+  /**
+   * Releases the reservations of one recorded session exactly once, whatever ended it. HomeKit ends a
+   * session without delivering a stop request when it force-stops one or when a stream request reports an
+   * error, so those paths release here too and no ended session is retained. A preparation cancelled
+   * before it was recorded releases itself where it completes.
+   */
+  private release(sessionID: string): void {
+    this.prepareGenerations.delete(sessionID);
+    const session = this.sessions.get(sessionID);
+    this.sessions.delete(sessionID);
+    session?.prepared.stop();
   }
 }
 

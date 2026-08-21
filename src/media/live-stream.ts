@@ -108,6 +108,12 @@ export class FfmpegLiveMedia {
     private readonly reservePort: MediaPortFactory = reserveMediaPort,
   ) {}
 
+  /**
+   * Reserves the negotiated output ports so `SetupEndpoints` can be answered with them, and returns a
+   * session that holds nothing else: no SDK handle, adaptation process, or device session exists until
+   * `start`. The reservation therefore lives for as long as its HomeKit consumer keeps the session, and
+   * `stop` releases every reservation exactly once however the session ended.
+   */
   async prepare(transport: LiveMediaTransport): Promise<PreparedLiveMedia> {
     const videoPort = await this.reservePort(transport.addressVersion);
     const targetAddress = transport.addressVersion === 'ipv6' ? `[${transport.targetAddress}]` : transport.targetAddress;

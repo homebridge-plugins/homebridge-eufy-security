@@ -59,11 +59,15 @@ import { readFileSync, statSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
+  ENDPOINTS_ACCEPTED,
   LiveSession,
+  STREAMING_AVAILABLE,
+  STREAMING_IN_USE,
   accessoryModel,
   adaptationProcesses,
   cameraStreamManagements,
   hasBattery,
+  observations,
   options,
   required,
   selectCameras,
@@ -102,14 +106,8 @@ const { HttpClient } = await import(controllerModule).catch(() => {
   throw new Error(`hap-controller is unavailable at ${controllerModule}; install it outside this repository`);
 });
 
-let failures = 0;
-let unverified = 0;
-function check(passed, description) {
-  console.log(`  ${passed ? 'pass' : 'FAIL'} ${description}`);
-  if (!passed) {
-    failures += 1;
-  }
-}
+const results = observations('live stream qualification');
+const check = results.check;
 
 const PROFILE_ORDER = ['baseline', 'main', 'high'];
 const FAILURE_LINE = /\b(error|failed|failure|exception|unhandled|cleanup)\b/i;
@@ -132,8 +130,7 @@ function appended(mark) {
 /** Judges the Homebridge service log section this run produced by level and condition code only. */
 function judgeInstanceLog(mark) {
   if (!mark) {
-    unverified += 1;
-    console.log('instance-log=not-observed (pass --instance-log to verify it)');
+    results.unverified('instance-log=not-observed (pass --instance-log to verify it)');
     return;
   }
   const lines = appended(mark);
@@ -148,8 +145,7 @@ function judgeInstanceLog(mark) {
 /** Judges the plugin JSONL section this run produced by level and condition code only. */
 function judgePluginLog(mark) {
   if (!mark) {
-    unverified += 1;
-    console.log('plugin-jsonl=not-observed (pass --jsonl to verify it)');
+    results.unverified('plugin-jsonl=not-observed (pass --jsonl to verify it)');
     return;
   }
   const records = appended(mark).flatMap((line) => {
@@ -255,8 +251,7 @@ function reportWindow(label, report, elapsedSeconds, expected, session = report)
 function observeAdaptation(label, expectedCount, applied) {
   const processes = adaptationProcesses(homebridgePid);
   if (processes === undefined) {
-    console.log(`${label} adaptation processes=not-observed (pass --homebridge-pid to verify them)`);
-    unverified += 1;
+    results.unverified(`${label} adaptation processes=not-observed (pass --homebridge-pid to verify them)`);
     return;
   }
   console.log(`${label} adaptation processes=${processes.length}`);
@@ -307,7 +302,7 @@ try {
   const primary = new LiveSession(client, accessory, address);
   sessions.push(primary);
   const endpoints = await primary.setup();
-  if (endpoints.status !== 0) {
+  if (endpoints.status !== ENDPOINTS_ACCEPTED) {
     throw new Error(`accessory refused endpoint setup with status ${endpoints.status}`);
   }
   console.log(
@@ -363,7 +358,10 @@ try {
     check(after.packets > before.packets, 'the session continued through the reconfiguration');
     check(after.ssrcs.size === 1, 'the reconfigured session kept its negotiated synchronisation source');
     check(after.unauthenticated === before.unauthenticated, 'the reconfigured session kept the negotiated SRTP key');
-    check((await primary.streamingStatus()) === 1, 'the accessory still reported an in-use streaming session');
+    check(
+      (await primary.streamingStatus()) === STREAMING_IN_USE,
+      'the accessory still reported an in-use streaming session',
+    );
     observeAdaptation('reconfigured', 1, reconfigured);
     reportWindow(
       'reconfigured',
@@ -379,8 +377,11 @@ try {
     const secondary = new LiveSession(client, accessory, address, { streamIndex: 1 });
     sessions.push(secondary);
     const secondaryEndpoints = await secondary.setup();
-    check(secondaryEndpoints.status === 0, 'a concurrent second session was accepted for endpoint setup');
-    if (secondaryEndpoints.status === 0) {
+    check(
+      secondaryEndpoints.status === ENDPOINTS_ACCEPTED,
+      'a concurrent second session was accepted for endpoint setup',
+    );
+    if (secondaryEndpoints.status === ENDPOINTS_ACCEPTED) {
       const concurrentFrom = primary.measured.report;
       await secondary.start(selection);
       const secondaryFirst = await waitFor(() => secondary.measured.report.packets > 0, FIRST_PACKET_TIMEOUT_MS);
@@ -408,14 +409,20 @@ try {
         'the first session survived the end of the concurrent session',
       );
       observeAdaptation('after-concurrent-end', 1);
-      check((await secondary.streamingStatus()) === 0, 'the concurrent stream management returned to available');
+      check(
+        (await secondary.streamingStatus()) === STREAMING_AVAILABLE,
+        'the concurrent stream management returned to available',
+      );
     }
   }
 
   await primary.end();
   await delay(TEARDOWN_GRACE_MS);
   observeAdaptation('after-end', 0);
-  check((await primary.streamingStatus()) === 0, 'the accessory returned to an available streaming status');
+  check(
+    (await primary.streamingStatus()) === STREAMING_AVAILABLE,
+    'the accessory returned to an available streaming status',
+  );
   judgeInstanceLog(instanceLog);
   judgePluginLog(pluginLog);
 } finally {
@@ -427,10 +434,4 @@ try {
   console.log('removed the temporary controller pairing');
 }
 
-if (unverified > 0) {
-  console.log(`live stream qualification left ${unverified} observation(s) unverified`);
-}
-if (failures > 0) {
-  console.error(`live stream qualification reported ${failures} failing observation(s)`);
-  process.exitCode = 1;
-}
+results.summarize();

@@ -58,7 +58,13 @@ confirms no adaptation process survives the session. It measures decrypted media
 Both report the accessory id, product model, and power class for every camera they touch, so a recorded
 result identifies its subject without naming rooms.
 
-`scripts/hap-live-harness.mjs` owns the controller session mechanics all three scripts share: HAP TLV
+`scripts/live-hap-prepared-session-check.mjs` qualifies the reservation a prepared live session holds: it
+writes `SetupEndpoints`, never starts, and observes for as long as `--idle-seconds` that the accessory
+still reports the session as set up, that the answered port stays bound, and that no adaptation process
+exists, then proves a start written after that whole window still streams. It also abandons a prepared
+session and closes the controller connection, which must release the reservation and refuse a later start.
+
+`scripts/hap-live-harness.mjs` owns the controller session mechanics these scripts share: HAP TLV
 encoding, camera selection, endpoint setup, negotiated start, reconfigure and end commands, receiver
 reports, and SRTP measurement. Its measurement is covered hermetically by
 `test/contracts/live-hap-harness.test.ts`, so a green live result is not the only evidence that the
