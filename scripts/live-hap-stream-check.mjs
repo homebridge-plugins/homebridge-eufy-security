@@ -2,8 +2,8 @@
  * Live HomeKit stream qualification.
  *
  * Pairs a real HAP controller against a running Homebridge instance and drives complete negotiated live
- * sessions for a represented camera: `SetupEndpoints`, start, an optional mid-session reconfiguration, an
- * optional concurrent second session, then an explicit end. It exists because negotiated live media
+ * sessions for a represented camera: `SetupEndpoints`, start, a mid-session snapshot, an optional
+ * mid-session reconfiguration, an optional concurrent second session, then an explicit end. It exists because negotiated live media
  * cannot be qualified hermetically: it needs an authenticated account, a reachable camera, P2P transport,
  * and an ffmpeg binary.
  *
@@ -21,6 +21,11 @@
  *     continues across the RTCP interval while receiver reports are sent from the moment the session
  *     starts, because an accessory may terminate a session that receives no RTCP inside its startup
  *     grace, well before a slow camera has delivered a first frame;
+ *   - a snapshot requested while the session is streaming is served as a structurally complete JPEG and
+ *     leaves that session on its negotiated synchronisation source and SRTP key, with one adaptation
+ *     process still running, because both acquisitions share one warm SDK source. As in
+ *     `live-hap-snapshot-check.mjs`, the first request may legitimately be refused when the camera has no
+ *     retained image yet and no stored acquisition, so a refused first round only settles and retries;
  *   - a mid-session reconfiguration changes the coded dimensions on the wire without ending the session
  *     or changing its synchronisation source;
  *   - a concurrent second session on the same camera streams alongside the first, and ending one leaves
@@ -42,10 +47,10 @@
  * Usage:
  *   node scripts/live-hap-stream-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
- *     [--aid 7] [--battery] [--seconds 25] [--width 1280] [--height 720] [--fps 30] [--bitrate 299] \
- *     [--profile main] [--level 3.1] [--no-reconfigure] [--concurrent] \
+ *     [--aid 7] [--serial T8XXXXXXXXXXXXXX] [--battery] [--seconds 25] [--width 1280] [--height 720] [--fps 30] [--bitrate 299] \
+ *     [--profile main] [--level 3.1] [--no-reconfigure] [--no-snapshot] [--concurrent] \
  *     [--reconfigure-width 640] [--reconfigure-height 360] [--reconfigure-fps 15] \
- *     [--reconfigure-bitrate 150] [--homebridge-pid 12345] \
+ *     [--reconfigure-bitrate 150] [--snapshot-settle-ms 25000] [--homebridge-pid 12345] \
  *     [--instance-log /tmp/hb-check/instance.log] [--jsonl /tmp/hb-check/homebridge-eufy/logs/homebridge-eufy.jsonl]
  *
  * A live session wakes the camera and streams from it, so wired cameras are used unless `--battery` is
@@ -62,7 +67,6 @@
  * support-sensitive context even though plugin output is allowlisted. Both files must be readable by the
  * account running this script, so run it as the account that owns the Homebridge storage.
  */
-import { readFileSync, statSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
@@ -73,9 +77,12 @@ import {
   accessoryModel,
   adaptationProcesses,
   advertisedVideo,
+  appendedLines,
   cameraStreamManagements,
+  conditionCodes,
   hasBattery,
   judgeWindow,
+  logMark,
   measuredWindow,
   observations,
   options,
@@ -83,6 +90,7 @@ import {
   reportAdvertisedVideo,
   required,
   selectCameras,
+  snapshotImage,
   videoSelection,
   waitFor,
 } from './hap-live-harness.mjs';
@@ -92,6 +100,7 @@ const RECONFIGURE_TIMEOUT_MS = 20_000;
 const TEARDOWN_GRACE_MS = 5_000;
 const LATE_WINDOW_SECONDS = 10;
 const RECONFIGURED_WINDOW_SECONDS = 5;
+const SNAPSHOT_WINDOW_SECONDS = 5;
 const CONCURRENT_WINDOW_SECONDS = 10;
 
 const parsed = options(process.argv.slice(2));
@@ -105,6 +114,7 @@ const reconfigured = {
   fps: Number(parsed.get('reconfigure-fps') ?? 15),
   bitrate: Number(parsed.get('reconfigure-bitrate') ?? 150),
 };
+const snapshotSettleMs = Number(parsed.get('snapshot-settle-ms') ?? 25_000);
 const homebridgePid = parsed.get('homebridge-pid');
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
@@ -115,21 +125,6 @@ const results = observations('live stream qualification');
 const check = results.check;
 
 const FAILURE_LINE = /\b(error|failed|failure|exception|unhandled|cleanup)\b/i;
-const CONDITION_CODE = /\[([a-z][a-z0-9-]+)\]/g;
-
-/** Byte length of a log file now, so only the section this run appends is ever read. */
-function logMark(path) {
-  if (!path) {
-    return undefined;
-  }
-  return { path, offset: statSync(path).size };
-}
-
-/** Reads only what a run appended to a log, without exposing any line of it. */
-function appended(mark) {
-  const content = readFileSync(mark.path, 'utf8').slice(mark.offset);
-  return content.split('\n').filter((line) => line.trim().length > 0);
-}
 
 /** Judges the Homebridge service log section this run produced by level and condition code only. */
 function judgeInstanceLog(mark) {
@@ -137,9 +132,9 @@ function judgeInstanceLog(mark) {
     results.unverified('instance-log=not-observed (pass --instance-log to verify it)');
     return;
   }
-  const lines = appended(mark);
+  const lines = appendedLines(mark);
   const failing = lines.filter((line) => FAILURE_LINE.test(line));
-  const codes = new Set(lines.flatMap((line) => [...line.matchAll(CONDITION_CODE)].map((match) => match[1])));
+  const codes = conditionCodes(lines);
   console.log(
     `instance-log lines=${lines.length} conditions=[${[...codes].join(',')}] failure-lines=${failing.length}`,
   );
@@ -152,7 +147,7 @@ function judgePluginLog(mark) {
     results.unverified('plugin-jsonl=not-observed (pass --jsonl to verify it)');
     return;
   }
-  const records = appended(mark).flatMap((line) => {
+  const records = appendedLines(mark).flatMap((line) => {
     try {
       return [JSON.parse(line)];
     } catch {
@@ -214,6 +209,7 @@ try {
   const cameras = selectCameras(accessories, {
     battery: parsed.has('battery'),
     ...(parsed.has('aid') ? { aid: parsed.get('aid') } : {}),
+    ...(parsed.has('serial') ? { serial: parsed.get('serial') } : {}),
   });
   const accessory = cameras[0];
   if (!accessory) {
@@ -279,6 +275,49 @@ try {
     streaming.frames > early.frames,
     'primary kept delivering complete video frames while source audio was silent or absent',
   );
+
+  if (!parsed.has('no-snapshot') && streaming.packets > 0) {
+    const beforeSnapshot = primary.measured.report;
+    let served;
+    for (const round of [1, 2]) {
+      const requestedAt = Date.now();
+      try {
+        served = await snapshotImage(client, accessory.aid);
+        console.log(
+          `mid-session snapshot round=${round} after ${Date.now() - requestedAt}ms` +
+            ` bytes=${served.bytes} digest=${served.digest}`,
+        );
+        break;
+      } catch (error) {
+        console.log(
+          `mid-session snapshot round=${round} refused: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (round === 1) {
+        await delay(snapshotSettleMs);
+      }
+    }
+    check(
+      served !== undefined,
+      'the accessory served a snapshot while its live session was streaming, once its acquisition had settled',
+    );
+    if (served) {
+      check(served.structural, 'the mid-session snapshot was a structurally complete JPEG');
+    }
+    await delay(SNAPSHOT_WINDOW_SECONDS * 1_000);
+    const afterSnapshot = primary.measured.report;
+    check(afterSnapshot.packets > beforeSnapshot.packets, 'the live session kept streaming across the snapshot');
+    check(afterSnapshot.ssrcs.size === 1, 'the snapshot left the session on its negotiated synchronisation source');
+    check(
+      afterSnapshot.unauthenticated === beforeSnapshot.unauthenticated,
+      'the snapshot left the session on its negotiated SRTP key',
+    );
+    check(
+      (await primary.streamingStatus()) === STREAMING_IN_USE,
+      'the accessory still reported an in-use streaming session after the snapshot',
+    );
+    observeAdaptation('after-snapshot', 1, selection);
+  }
 
   if (!parsed.has('no-reconfigure') && streaming.packets > 0) {
     console.log(

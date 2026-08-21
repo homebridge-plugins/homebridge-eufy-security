@@ -207,6 +207,52 @@ per-file backup limit; the allowlisted diagnostics archive never reads plugin st
 evidence cannot contain camera imagery. Retained provenance and its acceptance time stay in memory, so
 a restored image is treated as the oldest acceptable fallback.
 
+A snapshot requested while a live session is streaming is served by the snapshot policy that camera
+already has, and changes nothing about the session. The two acquisitions are separate consumers of one warm
+SDK source rather than competitors: the retained-image and stored policies do not touch the source at all,
+and a live still shares the source the session is already using. Measured on the wire, a snapshot taken
+mid-session leaves the session's synchronisation source, its SRTP key, its in-use status, and its single
+adaptation process unchanged, whether it was answered from the retained image in milliseconds or acquired
+live in about eight seconds. Live view therefore never has to be interrupted to answer a snapshot, and a
+snapshot that fails does not end a session.
+
+### Live view for a disabled camera
+
+A camera that is turned off has no video to give, so live admission consults the camera's own enablement
+observation. `SetupEndpoints` is the only refusal point HAP offers, so a refusal happens there, before any
+port, SDK handle, or adaptation process exists, and it carries HAP's single `ERROR` status: the Home app
+shows a generic streaming failure and the explanation is a plugin condition rather than a protocol field.
+The stream management `Active` characteristic stays true throughout, because `hap-nodejs` treats it as
+"this stream management is usable" and short-circuits snapshots and streams before the delegate is
+consulted; setting it false would make presentation for a disabled camera unreachable, and the snapshot
+path is deliberately not gated for the same reason.
+
+Enablement is the only observation available for this. The SDK exposes privacy mode as a write with no
+readback — nothing reports it back — and on the camera families whose power rides the privacy envelope the
+privacy wire is not aliased into enablement either, so a camera in privacy mode is not distinguishable
+here. A camera whose manifest omits the observation, reports it as something other than a boolean read, or
+faults while reading it is treated as unobserved and streams exactly as it would without the gate:
+refusing on an absent observation would withdraw live view from a working camera, which is the worse
+failure of the two.
+
+Mid-session the plugin re-reads that observation while a session is active, rather than waiting for an
+event, because no event exists: the camera capability declares none, the property-change list the SDK
+computes when it applies params is discarded by every caller, and the registry republishes only when a
+device is added, removed, or gains a capability. Re-reading is cheap — the read is served from memory and
+its own freshness policy, not the tick, bounds how often it reaches the network — and it is armed only
+while a session exists, so an idle camera is never polled. When the observation says disabled, HomeKit is
+told the session ended, because a force-stop does not reach the delegate, and the same single release path
+stops adaptation and the SDK consumer.
+
+What that mechanism cannot do is invent the observation's freshness. Measured on a wired camera: turning
+it off is visible to a newly constructed SDK client about thirty seconds later and to a restarted plugin
+immediately, but a long-lived client's read-through refresh never updated the value at all — the plugin
+still read the camera as enabled after four minutes and many reads. So a session already streaming when
+the camera is switched off ends today only if the device volunteers the parameter over its realtime wire.
+The refusal path, which reads the observation as it stood when the registry was built, is unaffected and is
+proven on the wire. The remaining half is an SDK observation gap rather than a policy question, and is
+tracked as [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47).
+
 ### Live adaptation encoder
 
 Live adaptation always encodes with `libx264` at `-preset superfast -tune zerolatency`. Hardware

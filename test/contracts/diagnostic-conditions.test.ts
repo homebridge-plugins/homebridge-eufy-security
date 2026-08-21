@@ -306,6 +306,54 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
   });
 
+  it('allowlists a refused live session for a disabled camera without device material', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    const serial = 'T8000P0000000000';
+
+    for (const reason of ['disabled', 'disabled-mid-session']) {
+      conditions.reportHomeKit(
+        { code: 'camera-live-session-refused', capability: 'camera', member: 'live', active: true, reason },
+        [serial],
+      );
+    }
+    conditions.reportHomeKit(
+      {
+        code: 'camera-live-session-refused',
+        capability: 'camera',
+        member: 'live',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[camera-live-session-refused] Live view is unavailable because the camera is turned off',
+    );
+    expect(warn.mock.calls[0]![0]).toContain('Turn the camera on in the Eufy app');
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual([
+      'disabled',
+      'disabled-mid-session',
+      'recovered',
+    ]);
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-live-session-refused',
+      capability: 'camera',
+      member: 'live',
+      active: true,
+      summaryKey: 'log.homekit.cameraLiveSessionRefused',
+      actionKey: 'log.action.enableCamera',
+      affectedAccessoryCount: 1,
+    });
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
   it('emits only allowlisted bounded HomeKit event traces in debug output', () => {
     const debug = vi.fn();
 

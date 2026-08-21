@@ -19,14 +19,16 @@
  *
  * Measurement is verified hermetically by `test/contracts/live-hap-harness.test.ts`.
  */
-import { createCipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { execFileSync } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
 
 export const CAMERA_RTP_STREAM_MANAGEMENT = '00000110-0000-1000-8000-0026BB765291';
 export const BATTERY = '00000096-0000-1000-8000-0026BB765291';
 export const ACCESSORY_INFORMATION = '0000003E';
 export const MODEL = '00000021';
+const SERIAL_NUMBER = '00000030';
 export const SETUP_ENDPOINTS = '00000118';
 export const SELECTED_RTP_STREAM_CONFIGURATION = '00000117';
 export const SUPPORTED_VIDEO_STREAM_CONFIGURATION = '00000114';
@@ -294,13 +296,29 @@ export function hasBattery(accessory) {
 }
 
 /**
- * Camera accessories a run may stream from. A live session wakes the camera, so battery accessories are
- * excluded unless they are asked for explicitly by `--battery` or by accessory id.
+ * Serial number one accessory reports. Private to this module: a serial identifies a physical device, so
+ * it may be matched against a maintainer's own argument but never returned to a caller that prints.
  */
-export function selectCameras(accessories, { battery = false, aid } = {}) {
+function accessorySerial(accessory) {
+  const information = accessory.services.find((service) =>
+    service.type.toUpperCase().startsWith(ACCESSORY_INFORMATION),
+  );
+  const serial = information?.characteristics.find((entry) => entry.type.toUpperCase().startsWith(SERIAL_NUMBER));
+  return typeof serial?.value === 'string' ? serial.value : undefined;
+}
+
+/**
+ * Camera accessories a run may stream from. A live session wakes the camera, so battery accessories are
+ * excluded unless they are asked for explicitly by `--battery`, by accessory id, or by serial. A serial
+ * is how a run that also drives the device through the SDK proves both halves address one camera.
+ */
+export function selectCameras(accessories, { battery = false, aid, serial } = {}) {
   const cameras = accessories.filter((accessory) =>
     accessory.services.some((service) => service.type.toUpperCase() === CAMERA_RTP_STREAM_MANAGEMENT),
   );
+  if (serial !== undefined) {
+    return cameras.filter((accessory) => accessorySerial(accessory) === serial);
+  }
   if (aid !== undefined) {
     return cameras.filter((accessory) => accessory.aid === Number(aid));
   }
@@ -338,6 +356,58 @@ export async function advertisedVideo(client, accessory, streamIndex = 0) {
   const characteristic = cameraCharacteristics(accessory, streamIndex)(SUPPORTED_VIDEO_STREAM_CONFIGURATION);
   const response = await client.getCharacteristics([characteristic]);
   return describeSupportedVideoStreamConfiguration(response.characteristics[0].value);
+}
+
+/**
+ * Byte length of a log file now, so a run only ever reads the section it goes on to append. Returns
+ * nothing when no path was supplied, which callers report as an unverified observation.
+ */
+export function logMark(path) {
+  if (!path) {
+    return undefined;
+  }
+  return { path, offset: statSync(path).size };
+}
+
+/** The non-empty lines one run appended to a marked log, without exposing any of them to a caller. */
+export function appendedLines(mark) {
+  return readFileSync(mark.path, 'utf8')
+    .slice(mark.offset)
+    .split('\n')
+    .filter((line) => line.trim().length > 0);
+}
+
+/**
+ * The bounded condition codes a Homebridge log section reported. The plugin prints one `[code] summary`
+ * line per condition transition, so the codes are readable without reading a line of context.
+ */
+export function conditionCodes(lines) {
+  return new Set(lines.flatMap((line) => [...line.matchAll(/\[([a-z][a-z0-9-]+)\]/g)].map((match) => match[1])));
+}
+
+/**
+ * Whether an image is a structurally complete JPEG: a start-of-image marker and an end-of-image marker.
+ * Enough to tell a served or retained image from a truncated one without decoding it.
+ */
+export function isStructuralJpeg(image) {
+  return (
+    image.length > 4 &&
+    image.subarray(0, 3).toString('hex') === 'ffd8ff' &&
+    image.subarray(-2).toString('hex') === 'ffd9'
+  );
+}
+
+/**
+ * One HomeKit snapshot request, the same `/resource` request a Home app tile issues. Only the length, a
+ * short digest, and structural validity are returned, so no caller can print camera imagery.
+ */
+export async function snapshotImage(client, aid, { width = 1280, height = 720 } = {}) {
+  const image = await client.getImage(width, height, aid);
+  return {
+    bytes: image.length,
+    digest: createHash('sha256').update(image).digest('hex').slice(0, 12),
+    structural: isStructuralJpeg(image),
+  };
 }
 
 /**
@@ -912,11 +982,15 @@ export class LiveSession {
   }
 }
 
-/** Waits for a predicate, polling at a bounded interval, and reports how long it took. */
+/**
+ * Waits for a predicate, polling at a bounded interval, and reports how long it took. The predicate is
+ * awaited, so a condition that has to be read from the accessory is expressed directly rather than
+ * through a variable a caller keeps in step.
+ */
 export async function waitFor(predicate, timeoutMs, intervalMs = 250) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) {
+    if (await predicate()) {
       return Date.now() - startedAt;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));

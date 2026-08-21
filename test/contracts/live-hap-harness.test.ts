@@ -1,4 +1,7 @@
-import { createCipheriv, createHmac } from 'node:crypto';
+import { createCipheriv, createHash, createHmac } from 'node:crypto';
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { encode as encodeTlv, H264Level, H264Profile, writeUInt16 } from '@homebridge/hap-nodejs';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,13 +12,19 @@ import * as harness from '../../scripts/hap-live-harness.mjs';
 const {
   MeasuredVideoStream,
   describeSequenceParameterSet,
+  appendedLines,
+  conditionCodes,
   describeSupportedVideoStreamConfiguration,
+  isStructuralJpeg,
   judgeWindow,
+  logMark,
   refuseUnadvertised,
   selectedVideoConfiguration,
+  snapshotImage,
   unadvertisedSelection,
   untlv,
   untlvList,
+  waitFor,
 } = harness;
 
 /**
@@ -211,6 +220,73 @@ function measuredVideo(coded: readonly CodedParameterSet[]) {
     parameterSets: coded.map((set) => ({ ...set, frames: 30 })),
   };
 }
+
+describe('observed live conditions', () => {
+  it('waits for a condition that has to be read from the accessory', async () => {
+    const status = { value: 1 };
+    const read = vi.fn(async () => status.value);
+    setTimeout(() => {
+      status.value = 0;
+    }, 20);
+
+    const elapsed = await waitFor(async () => (await read()) === 0, 2_000, 5);
+
+    expect(elapsed).toBeGreaterThanOrEqual(20);
+    expect(read.mock.calls.length).toBeGreaterThan(1);
+    expect(await waitFor(async () => false, 30, 5)).toBeUndefined();
+  });
+
+  it('reads only the section of a log a run appended, and reports its condition codes', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'live-harness-log-')), 'instance.log');
+    writeFileSync(file, 'earlier [camera-live-session-failed] a previous run\n');
+
+    const mark = logMark(file);
+    appendFileSync(
+      file,
+      '[camera-live-session-refused] Live view is unavailable because the camera is turned off\n' +
+        '\n' +
+        'plain line with no condition\n',
+    );
+
+    expect(appendedLines(mark)).toHaveLength(2);
+    expect(conditionCodes(appendedLines(mark))).toEqual(new Set(['camera-live-session-refused']));
+    expect(logMark(undefined)).toBeUndefined();
+  });
+});
+
+describe('served HomeKit snapshot imagery', () => {
+  it('accepts only a structurally complete JPEG', () => {
+    const complete = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff]),
+      Buffer.from('synthetic entropy'),
+      Buffer.from([0xff, 0xd9]),
+    ]);
+
+    expect(isStructuralJpeg(complete)).toBe(true);
+    expect(isStructuralJpeg(complete.subarray(0, complete.length - 2))).toBe(false);
+    expect(isStructuralJpeg(complete.subarray(1))).toBe(false);
+    expect(isStructuralJpeg(Buffer.alloc(0))).toBe(false);
+  });
+
+  it('reports one served image by size and digest rather than by its bytes', async () => {
+    const image = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff]),
+      Buffer.from('synthetic served entropy'),
+      Buffer.from([0xff, 0xd9]),
+    ]);
+    const getImage = vi.fn(async () => image);
+
+    const served = await snapshotImage({ getImage }, 7, { width: 640, height: 360 });
+
+    expect(getImage).toHaveBeenCalledWith(640, 360, 7);
+    expect(served).toEqual({
+      bytes: image.length,
+      digest: createHash('sha256').update(image).digest('hex').slice(0, 12),
+      structural: true,
+    });
+    expect(Object.values(served)).not.toContain(image);
+  });
+});
 
 describe('advertised HomeKit video stream configuration', () => {
   it('reports the profiles, levels, and resolutions one accessory advertises', () => {

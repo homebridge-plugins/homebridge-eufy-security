@@ -30,7 +30,8 @@
  * Usage:
  *   node scripts/live-hap-snapshot-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
- *     [--storage /tmp/hb-check/homebridge-eufy] [--battery] [--limit 1] [--settle-ms 25000]
+ *     [--storage /tmp/hb-check/homebridge-eufy] [--serial T8XXXXXXXXXXXXXX] [--battery] [--limit 1]
+ *     [--settle-ms 25000]
  *
  * Behavior notes this check exercises:
  *   - `Refresh` with no retained image fails the first request while starting one live refresh.
@@ -40,12 +41,20 @@
  * It never prints serials, device names, addresses, or image bytes, and it removes its own pairing
  * before exiting. Wired cameras are used by default because a live acquisition wakes the camera.
  */
-import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { accessoryModel, hasBattery, options, required, selectCameras } from './hap-live-harness.mjs';
+import {
+  accessoryModel,
+  hasBattery,
+  isStructuralJpeg,
+  observations,
+  options,
+  required,
+  selectCameras,
+  snapshotImage,
+} from './hap-live-harness.mjs';
 
 function retained(storage) {
   const directory = join(storage, 'snapshots');
@@ -66,7 +75,7 @@ function retained(storage) {
         mode: (statSync(file).mode & 0o777).toString(8),
         directoryMode: (statSync(directory).mode & 0o777).toString(8),
         opaque: /^[0-9a-f]{64}\.jpg$/.test(name),
-        structural: image.subarray(0, 3).toString('hex') === 'ffd8ff' && image.subarray(-2).toString('hex') === 'ffd9',
+        structural: isStructuralJpeg(image),
       };
     }),
   };
@@ -75,6 +84,8 @@ function retained(storage) {
 const parsed = options(process.argv.slice(2));
 const settleMs = Number(parsed.get('settle-ms') ?? 25_000);
 const storage = parsed.get('storage');
+const results = observations('live snapshot qualification');
+const check = results.check;
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
   throw new Error(`hap-controller is unavailable at ${controllerModule}; install it outside this repository`);
@@ -90,11 +101,13 @@ const client = new HttpClient(
 await client.pairSetup(required(parsed, 'pin'));
 console.log('paired one temporary controller');
 
-let failures = 0;
 try {
   const { accessories } = await client.getAccessories();
   const cameras = selectCameras(accessories, { battery: true });
-  const streamable = selectCameras(accessories, { battery: parsed.has('battery') });
+  const streamable = selectCameras(accessories, {
+    battery: parsed.has('battery'),
+    ...(parsed.has('serial') ? { serial: parsed.get('serial') } : {}),
+  });
   const selected = streamable.slice(0, Number(parsed.get('limit') ?? streamable.length));
   console.log(`cameras=${cameras.length} selected=${selected.length}`);
   for (const candidate of selected) {
@@ -109,13 +122,13 @@ try {
   for (const { aid } of selected) {
     for (const round of [1, 2]) {
       try {
-        const image = await client.getImage(1280, 720, aid);
-        const digest = createHash('sha256').update(image).digest('hex').slice(0, 12);
-        console.log(`aid=${aid} round=${round} served bytes=${image.length} digest=${digest}`);
+        const image = await snapshotImage(client, aid);
+        console.log(`aid=${aid} round=${round} served bytes=${image.bytes} digest=${image.digest}`);
+        check(image.structural, `aid=${aid} round=${round} served a structurally complete JPEG`);
       } catch (error) {
         console.log(`aid=${aid} round=${round} refused: ${error instanceof Error ? error.message : String(error)}`);
         if (round === 2) {
-          failures += 1;
+          check(false, `aid=${aid} served a snapshot once a live refresh had settled`);
         }
       }
       if (round === 1) {
@@ -134,13 +147,14 @@ try {
       console.log(
         `  name-opaque=${image.opaque} directory-mode=${image.directoryMode} file-mode=${image.mode} bytes=${image.bytes} structural-jpeg=${image.structural}`,
       );
-      if (!image.opaque || image.mode !== '600' || image.directoryMode !== '700' || !image.structural) {
-        failures += 1;
-      }
+      check(
+        image.opaque && image.mode === '600' && image.directoryMode === '700' && image.structural,
+        'a retained image uses an opaque name, owner-only modes, and structural JPEG bytes',
+      );
     }
-    if (images.length === 0) {
-      failures += 1;
-    }
+    check(images.length > 0, 'the plugin retained at least one last successful image');
+  } else {
+    results.unverified('retained image custody was not verified; pass --storage to include it');
   }
 } finally {
   await client.removePairing(client.pairingProtocol.iOSDevicePairingID);
@@ -148,7 +162,4 @@ try {
   console.log('removed the temporary controller pairing');
 }
 
-if (failures > 0) {
-  console.error(`live snapshot qualification reported ${failures} failing observation(s)`);
-  process.exitCode = 1;
-}
+results.summarize();

@@ -31,6 +31,7 @@ import type {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdapterAttachmentContext, LiveSessionOutcome, PreparedLiveMedia } from '../../src/homekit/adapter.js';
+import type { DeviceMemberEvidence } from '../../src/device/member-evidence.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
 import { SnapshotAcquisition, type LastSuccessfulImages } from '../../src/media/snapshot.js';
 
@@ -135,14 +136,21 @@ function setupEndpointsWrite(sessionID: string): string {
   ).toString('base64');
 }
 
-/** Writes `SetupEndpoints` the way a controller does and reads back the answer the accessory serves. */
+/**
+ * Writes `SetupEndpoints` the way a controller does and reads back the answer the accessory serves. A
+ * refused preparation fails the write and leaves an `ERROR` answer for the next read, which is what a
+ * controller observes, so both halves are reported.
+ */
 async function setupEndpoints(
   management: Service,
   connection: ReturnType<typeof hapConnection>,
   sessionID: string,
-): Promise<{ status: number; videoPort?: number }> {
+): Promise<{ status: number; videoPort?: number; refusedWrite?: true }> {
   const characteristic = management.getCharacteristic(Characteristic.SetupEndpoints);
-  await characteristic.handleSetRequest(setupEndpointsWrite(sessionID), connection as never);
+  const refusedWrite = await characteristic.handleSetRequest(setupEndpointsWrite(sessionID), connection as never).then(
+    () => false,
+    () => true,
+  );
   const answer = decodeTlv(
     Buffer.from((await characteristic.handleGetRequest(connection as never)) as string, 'base64'),
   );
@@ -150,6 +158,7 @@ async function setupEndpoints(
   return {
     status: answer[2]![0]!,
     ...(address ? { videoPort: readUInt16(address[3]!) } : {}),
+    ...(refusedWrite ? { refusedWrite: true as const } : {}),
   };
 }
 
@@ -231,6 +240,64 @@ function snapshotEvidence(
         ] as const,
     ),
   ]);
+}
+
+/**
+ * The admitted enabled observation a camera reports alongside its live media. Overrides express a
+ * manifest that reports the row with different semantics, which must not be trusted as an enablement
+ * observation.
+ */
+function enabledEvidence(
+  evidence: AdapterAttachmentContext['evidence'],
+  overrides: Partial<DeviceMemberEvidence> = {},
+): AdapterAttachmentContext['evidence'] {
+  return new Map([
+    ...evidence,
+    [
+      'camera.enabled.read',
+      { id: 'camera.enabled.read', kind: 'read' as const, type: 'bool' as const, writable: true, ...overrides },
+    ],
+  ]);
+}
+
+/** A camera whose enabled observation can be moved, counting every read the adapter performs. */
+function observedCamera(initial: boolean | string | undefined, faulty = false) {
+  const state = { value: initial, reads: 0 };
+  return {
+    state,
+    camera: {
+      get enabled(): unknown {
+        state.reads += 1;
+        if (faulty) {
+          throw new Error('synthetic enabled observation fault');
+        }
+        return state.value;
+      },
+      live: vi.fn(),
+      snapshotLive: vi.fn(async () => ({ jpeg: jpeg('synthetic disabled still'), width: 1280, height: 720 })),
+    },
+  };
+}
+
+function startRequest(sessionID: string, ssrc: number): StreamingRequest {
+  return {
+    sessionID,
+    type: StreamRequestTypes.START,
+    video: {
+      codec: 0,
+      profile: H264Profile.MAIN,
+      level: H264Level.LEVEL3_1,
+      packetizationMode: 0,
+      width: 1280,
+      height: 720,
+      fps: 30,
+      pt: 99,
+      ssrc,
+      max_bit_rate: 300,
+      rtcp_interval: 0.5,
+      mtu: 1200,
+    },
+  } as StreamingRequest;
 }
 
 describe('camera streaming bundle adapter', () => {
@@ -797,6 +864,84 @@ describe('camera streaming bundle adapter', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('serves a snapshot during an active live session without disturbing its media', async () => {
+    const target = new Accessory(
+      'Synthetic overlapping camera',
+      uuid.generate('synthetic-overlapping-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const start = vi.fn(async () => undefined);
+    const reconfigure = vi.fn();
+    const stop = vi.fn();
+    const prepare = vi.fn(async () => ({ videoPort: 41000, start, reconfigure, stop }) satisfies PreparedLiveMedia);
+    const still = jpeg('synthetic overlapping still');
+    const snapshotLive = vi
+      .fn<() => Promise<{ jpeg: Buffer; width: number; height: number }>>()
+      .mockResolvedValueOnce({ jpeg: still, width: 1280, height: 720 })
+      .mockRejectedValueOnce(new Error('synthetic still acquisition failed'));
+    const live = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ snapshotLive, live }) } as never,
+      evidence: snapshotEvidence('snapshotLive'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      snapshotMedia: new SnapshotAcquisition(retainedImages()),
+      snapshotMode: 'Live',
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const management = streamManagements(target)[0]!;
+    const connection = hapConnection();
+    const sessionID = '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0006';
+
+    await expect(setupEndpoints(management, connection, sessionID)).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+    await callStream(controller.delegate, {
+      sessionID,
+      type: StreamRequestTypes.START,
+      video: {
+        codec: 0,
+        profile: H264Profile.MAIN,
+        level: H264Level.LEVEL3_1,
+        packetizationMode: 0,
+        width: 1280,
+        height: 720,
+        fps: 30,
+        pt: 99,
+        ssrc: 1,
+        max_bit_rate: 300,
+        rtcp_interval: 0.5,
+        mtu: 1200,
+      },
+    } as StreamingRequest);
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(still);
+
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(reconfigure).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(live).not.toHaveBeenCalled();
+    expect(streamingStatus(management)).toBe(STREAMING_IN_USE);
+
+    await expect(callSnapshot(controller.delegate)).rejects.toThrow('synthetic still acquisition failed');
+    expect(stop).not.toHaveBeenCalled();
+    expect(streamingStatus(management)).toBe(STREAMING_IN_USE);
+
+    await callStream(controller.delegate, { sessionID, type: StreamRequestTypes.STOP });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it('keeps two concurrent negotiated sessions independent on one camera', async () => {
     const target = new Accessory(
       'Synthetic concurrent camera',
@@ -1110,5 +1255,242 @@ describe('camera streaming bundle adapter', () => {
     expect(observed).toHaveBeenCalledExactlyOnceWith('camera-live-session-failed');
     expect(liveConditions()).toHaveLength(1);
     expect(JSON.stringify(diagnose.mock.calls)).not.toContain(SNAPSHOT_SERIAL);
+  });
+
+  it('refuses a live session while the admitted enabled observation says the camera is disabled', async () => {
+    const target = new Accessory(
+      'Synthetic disabled camera',
+      uuid.generate('synthetic-disabled-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const prepare = vi.fn(
+      async () =>
+        ({
+          videoPort: 41000,
+          start: vi.fn(async () => undefined),
+          reconfigure: vi.fn(),
+          stop: vi.fn(),
+        }) satisfies PreparedLiveMedia,
+    );
+    const diagnose = vi.fn();
+    const observed = vi.fn();
+    const { state, camera } = observedCamera(false);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enabledEvidence(snapshotEvidence('snapshotLive')),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      snapshotMedia: new SnapshotAcquisition(retainedImages()),
+      snapshotMode: 'Live',
+      audioEnabled: false,
+      diagnose,
+      observed,
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const management = streamManagements(target)[0]!;
+    const connection = hapConnection();
+
+    await expect(setupEndpoints(management, connection, '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0007')).resolves.toEqual({
+      status: SETUP_ENDPOINTS_ERROR,
+      refusedWrite: true,
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(streamingStatus(management)).toBe(STREAMING_AVAILABLE);
+    expect(management.getCharacteristic(Characteristic.Active).value).toBe(Characteristic.Active.ACTIVE);
+    expect(diagnose.mock.calls.map(([condition]) => condition)).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'camera-live-session-refused',
+          capability: 'camera',
+          member: 'live',
+          active: true,
+          reason: 'disabled',
+        },
+      ]),
+    );
+    expect(observed).not.toHaveBeenCalledWith('camera-live-session-refused');
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(jpeg('synthetic disabled still'));
+
+    state.value = true;
+    await expect(setupEndpoints(management, connection, '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0007')).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+    expect(observed).toHaveBeenCalledWith('camera-live-session-refused');
+    expect(JSON.stringify(diagnose.mock.calls)).not.toContain(SNAPSHOT_SERIAL);
+  });
+
+  it('gates a live session only on an exactly evidenced boolean enablement observation', async () => {
+    const cases = [
+      { label: 'unevidenced', evidence: snapshotEvidence(), camera: observedCamera(false) },
+      {
+        label: 'malformed',
+        evidence: enabledEvidence(snapshotEvidence(), { type: 'string' }),
+        camera: observedCamera('off'),
+      },
+      { label: 'faulty', evidence: enabledEvidence(snapshotEvidence()), camera: observedCamera(undefined, true) },
+      { label: 'unobserved', evidence: enabledEvidence(snapshotEvidence()), camera: observedCamera(undefined) },
+    ];
+
+    for (const { label, evidence, camera } of cases) {
+      const target = new Accessory(
+        `Synthetic ${label} camera`,
+        uuid.generate(`synthetic-${label}-camera-stream`),
+      ) as unknown as PlatformAccessory;
+      const configureController = vi.spyOn(target, 'configureController');
+      const prepare = vi.fn(
+        async () =>
+          ({
+            videoPort: 41000,
+            start: vi.fn(async () => undefined),
+            reconfigure: vi.fn(),
+            stop: vi.fn(),
+          }) satisfies PreparedLiveMedia,
+      );
+      const diagnose = vi.fn();
+
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: { sn: SNAPSHOT_SERIAL, camera: () => camera.camera } as never,
+        evidence,
+        accessory: target,
+        hap: HAP,
+        liveMedia: { prepare },
+        audioEnabled: false,
+        diagnose,
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+      const management = streamManagements(target)[0]!;
+
+      await expect(
+        setupEndpoints(management, hapConnection(), '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0008'),
+        label,
+      ).resolves.toEqual({ status: SETUP_ENDPOINTS_SUCCESS, videoPort: 41000 });
+      expect(prepare, label).toHaveBeenCalledOnce();
+      expect(
+        diagnose.mock.calls
+          .map(([condition]) => condition)
+          .filter(({ code }) => code === 'camera-live-session-refused'),
+        label,
+      ).toEqual([]);
+    }
+  });
+
+  it('refuses a start for a camera observed disabled after its session was prepared', async () => {
+    const target = new Accessory(
+      'Synthetic late disabled camera',
+      uuid.generate('synthetic-late-disabled-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn();
+    const prepare = vi.fn(
+      async () => ({ videoPort: 41000, start, reconfigure: vi.fn(), stop }) satisfies PreparedLiveMedia,
+    );
+    const { state, camera } = observedCamera(true);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enabledEvidence(snapshotEvidence()),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const sessionID = '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a0009';
+
+    await expect(setupEndpoints(streamManagements(target)[0]!, hapConnection(), sessionID)).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+
+    state.value = false;
+    await expect(callStream(controller.delegate, startRequest(sessionID, 1))).rejects.toThrow('disabled');
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('terminates an active session and stops its media when the camera is later observed disabled', async () => {
+    const target = new Accessory(
+      'Synthetic supervised camera',
+      uuid.generate('synthetic-supervised-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn();
+    const prepare = vi.fn(
+      async () => ({ videoPort: 41000, start, reconfigure: vi.fn(), stop }) satisfies PreparedLiveMedia,
+    );
+    const { state, camera } = observedCamera(true);
+    const diagnose = vi.fn();
+    const observed = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enabledEvidence(snapshotEvidence()),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      audioEnabled: false,
+      diagnose,
+      observed,
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+    const management = streamManagements(target)[0]!;
+    const connection = hapConnection();
+    const sessionID = '4faf7f01-2ff6-4dea-9c1a-4d0b1e1a000a';
+    vi.useFakeTimers();
+
+    const idleReads = state.reads;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(state.reads).toBe(idleReads);
+
+    await expect(setupEndpoints(management, connection, sessionID)).resolves.toEqual({
+      status: SETUP_ENDPOINTS_SUCCESS,
+      videoPort: 41000,
+    });
+    await callStream(controller.delegate, startRequest(sessionID, 1));
+    expect(streamingStatus(management)).toBe(STREAMING_IN_USE);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(stop).not.toHaveBeenCalled();
+    expect(state.reads).toBeGreaterThan(idleReads);
+
+    state.value = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(streamingStatus(management)).toBe(STREAMING_AVAILABLE);
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-live-session-refused'),
+    ).toEqual([
+      {
+        code: 'camera-live-session-refused',
+        capability: 'camera',
+        member: 'live',
+        active: true,
+        reason: 'disabled-mid-session',
+      },
+    ]);
+
+    const terminatedReads = state.reads;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(state.reads).toBe(terminatedReads);
+    expect(stop).toHaveBeenCalledOnce();
   });
 });

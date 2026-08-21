@@ -127,6 +127,7 @@ to any controller and a `hap-controller` module installed outside this repositor
 | `live-hap-stream-check.mjs` | Negotiated live streaming, measured on the decrypted wire |
 | `live-hap-codec-matrix-check.mjs` | One session per advertised profile and level, judged for exact coded fidelity |
 | `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it |
+| `live-hap-disabled-camera-check.mjs` | Live view, snapshots, and recovery for a camera that is turned off |
 | `live-hap-capture.mjs` | One MP4 and still per camera when a maintainer must look at a frame |
 
 `live-hap-stream-check.mjs` decrypts and authenticates the inbound SRTP with the keys it supplied, so it
@@ -178,6 +179,35 @@ here and has to be judged from the matrix itself rather than from a coded parame
 
 The measurement itself is covered hermetically by `test/contracts/live-hap-harness.test.ts`, so a green
 live result is not the only evidence that the harness reads packets correctly.
+
+`live-hap-stream-check.mjs` also requests one snapshot in the middle of the session. The session must keep
+its synchronisation source, its SRTP key, its in-use status, and its single adaptation process across it. A
+first request may legitimately be refused on a camera that has no retained image yet and no stored
+acquisition, exactly as in `live-hap-snapshot-check.mjs`, so a refused first round settles for
+`--snapshot-settle-ms` and retries. Use `--serial` to pin the run to one camera when a fleet has several
+wired ones, and remember that snapshot acquisition is per-camera: a camera whose live still never succeeds
+fails this step for reasons that have nothing to do with streaming.
+
+`live-hap-disabled-camera-check.mjs` is the only live script that writes to a device, so it needs explicit
+approval and a camera named by `--serial`. It streams while the camera is enabled, turns it off, measures
+how long the plugin takes to end the session, confirms a new session is refused while it stays off,
+confirms snapshots stay reachable, then turns it back on and confirms a session is admitted again. It
+restores the camera's original state in a `finally` block, and it refuses to start from a camera that is
+already off so it can only ever restore what it changed.
+
+```bash
+node scripts/live-hap-disabled-camera-check.mjs \
+  --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
+  --serial T8XXXXXXXXXXXXXX --eufy-storage /tmp/hb-check/homebridge-eufy \
+  --homebridge-pid <homebridge pid> --instance-log /tmp/hb-check/instance.log
+```
+
+Refusal is proven by an `ERROR` status from `SetupEndpoints` together with the
+`camera-live-session-refused` condition in the Homebridge log; a `BUSY` status means a session was still
+holding that stream management service and proves nothing. Mid-session termination depends on the
+enablement observation actually changing inside a running plugin, which
+[eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) currently prevents, so expect that step to
+report a timeout until it is fixed.
 
 `live-hap-prepared-session-check.mjs` covers the case a Home app cannot be asked for: a controller that
 negotiates endpoints and then never starts. It holds one prepared session idle for `--idle-seconds`,

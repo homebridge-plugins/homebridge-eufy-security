@@ -1239,6 +1239,8 @@ const MEMBERS = new Set([
 const REASONS = new Set([
   'adaptation-failed',
   'capability-not-supported',
+  'disabled',
+  'disabled-mid-session',
   'expired',
   'hot',
   'malformed',
@@ -1429,6 +1431,10 @@ const HOMEKIT_CONDITIONS = {
   'camera-live-session-failed': {
     summaryKey: 'log.homekit.cameraLiveSessionFailed',
     actionKey: 'log.action.retryLiveView',
+  },
+  'camera-live-session-refused': {
+    summaryKey: 'log.homekit.cameraLiveSessionRefused',
+    actionKey: 'log.action.enableCamera',
   },
 } as const;
 
