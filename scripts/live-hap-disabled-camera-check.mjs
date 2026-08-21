@@ -26,7 +26,10 @@
  * Measured on a wired camera, steps 2 to 5 do not pass today, and the reason is upstream: a long-lived SDK
  * client's read-through refresh never updates the enablement observation
  * ([eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47)), so the value this plugin re-reads never
- * moves inside a session. The same switch-off IS observed after a plugin restart, which is how the refusal
+ * moves inside a session. The qualification those steps belong to is tracked as issue #1043, gated on that
+ * upstream fix; a failing run here is that gate, not a defect in this script.
+ *
+ * The same switch-off IS observed after a plugin restart, which is how the refusal
  * half is qualified today: turn the camera off, restart, then run `live-hap-stream-check.mjs` against it and
  * expect an `ERROR` answer plus one `camera-live-session-refused` condition. Keep running this script as
  * the regression that will start passing when the upstream observation moves.

@@ -274,8 +274,9 @@ immediately, but a long-lived client's read-through refresh never updated the va
 still read the camera as enabled after four minutes and many reads. So a session already streaming when
 the camera is switched off ends today only if the device volunteers the parameter over its realtime wire.
 The refusal path, which reads the observation as it stood when the registry was built, is unaffected and is
-proven on the wire. The remaining half is an SDK observation gap rather than a policy question, and is
-tracked as [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47).
+proven on the wire. The remaining half is an SDK observation gap rather than a policy question, tracked
+upstream as [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) and qualified here by
+[#1043](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1043), which is gated on it.
 
 ### Live adaptation encoder
 
