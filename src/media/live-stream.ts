@@ -131,6 +131,7 @@ export class FfmpegLiveMedia {
     let negotiated: NegotiatedLiveMedia | undefined;
     let stopped = false;
     let receivedVideoKeyframe = false;
+    let reconfigurationPending = false;
     let videoInput: Pick<LiveVideoFrame, 'codec' | 'width' | 'height'> | undefined;
     let audioInputCodec: LiveAudioFrame['codec'] | undefined;
     let rtcpDeadline: ReturnType<typeof setTimeout> | undefined;
@@ -197,9 +198,13 @@ export class FfmpegLiveMedia {
      * Adaptation reached the negotiated output, so the session is bounded from here by RTCP liveness
      * rather than by the start backstop. The initial grace is armed from this point because media may
      * legitimately start well after the session does.
+     *
+     * A selection HomeKit has already replaced does not discharge the deadline for its replacement, however
+     * much it keeps reporting: FFmpeg reports progress on a timer whether or not new media reaches it, so
+     * only the adaptation that carries the current selection can say that selection is being served.
      */
-    const observeAdaptationProgress = (): void => {
-      if (stopped) {
+    const observeAdaptationProgress = (reporter: LiveMediaProcess): void => {
+      if (stopped || (reconfigurationPending && reporter === videoProcess)) {
         return;
       }
       clearTimeout(videoStartBackstop);
@@ -217,6 +222,15 @@ export class FfmpegLiveMedia {
       transport.onSessionOutcome?.({ outcome: 'streaming' });
     };
 
+    /**
+     * Writes one source access unit to the adaptation that is entitled to code it.
+     *
+     * A changed source codec or geometry cannot be coded by the current process at all, so those frames wait
+     * for the keyframe that lets a replacement start. A reconfigured HomeKit selection changes only the
+     * output, so the current process keeps coding and keeps the previous selection on the wire until that
+     * same keyframe arrives; a controller reconfigures precisely when it is unhappy with what it receives,
+     * and the source is then often the very thing not producing keyframes.
+     */
     const writeVideo = (frame: LiveVideoFrame): void => {
       if (stopped || !negotiated) {
         return;
@@ -227,13 +241,14 @@ export class FfmpegLiveMedia {
         }
         receivedVideoKeyframe = true;
       }
-      if (
-        videoProcess &&
-        (videoInput?.codec !== frame.codec || videoInput.width !== frame.width || videoInput.height !== frame.height)
-      ) {
-        if (!frame.keyframe) {
-          return;
-        }
+      const inputChanged =
+        videoInput !== undefined &&
+        (videoInput.codec !== frame.codec || videoInput.width !== frame.width || videoInput.height !== frame.height);
+      if (videoProcess && inputChanged && !frame.keyframe) {
+        return;
+      }
+      if (videoProcess && frame.keyframe && (inputChanged || reconfigurationPending)) {
+        reconfigurationPending = false;
         stopProcess(videoProcess);
         videoProcess = undefined;
       }
@@ -249,7 +264,7 @@ export class FfmpegLiveMedia {
           const lines = `${progressRemainder}${chunk.toString()}`.split(/\r?\n/);
           progressRemainder = lines.pop()?.slice(-64) ?? '';
           if (lines.some((line) => line.startsWith('progress='))) {
-            observeAdaptationProgress();
+            observeAdaptationProgress(child);
           }
         });
         child.stdin.on('error', () => {
@@ -356,15 +371,20 @@ export class FfmpegLiveMedia {
         source.on('error', () => failVideo('source-error'));
         source.on('stop', () => failVideo('source-stopped'));
       },
+      /**
+       * Acknowledges a reconfigured selection and applies it at the next source keyframe.
+       *
+       * Nothing is torn down here: the current adaptation keeps the previous selection on the wire until the
+       * replacement has a keyframe to start from. The deferral is still bounded, because a session that never
+       * applies the selection HomeKit asked for must end and be renegotiated rather than silently serve the
+       * old one forever.
+       */
       reconfigure(video): void {
         if (!negotiated) {
           return;
         }
         negotiated = { ...negotiated, video };
-        stopProcess(videoProcess);
-        videoProcess = undefined;
-        videoInput = undefined;
-        receivedVideoKeyframe = false;
+        reconfigurationPending = videoProcess !== undefined;
         clearTimeout(videoStartBackstop);
         videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), VIDEO_START_BACKSTOP_MS);
         videoStartBackstop.unref?.();
@@ -374,13 +394,27 @@ export class FfmpegLiveMedia {
   }
 }
 
+/**
+ * Options every adapted elementary stream applies to its own input.
+ *
+ * A piped elementary stream carries no container, so FFmpeg's initial stream analysis is the only thing
+ * standing between the first written access unit and the first coded frame. The caller already declares the
+ * format, so that analysis has nothing left to discover and is bounded to its minimum; leaving it at the
+ * default delays first output by seconds and scales that delay with the source keyframe interval.
+ *
+ * Nothing asks FFmpeg to discard or reinterpret what it read. Discarding the analysed packets throws away the
+ * leading keyframe the caller waited for, and a raw A-law demuxer stops emitting timestamps entirely, so both
+ * cost media that was already in hand.
+ */
 function commonArguments(inputFormat: string, inputOptions: readonly string[] = []): string[] {
   return [
     '-hide_banner',
     '-loglevel',
     'warning',
-    '-fflags',
-    '+genpts+nobuffer',
+    '-probesize',
+    '32',
+    '-analyzeduration',
+    '1',
     '-progress',
     'pipe:2',
     '-nostats',
@@ -417,6 +451,11 @@ function outputArguments(
 /**
  * Raw SDK frames cannot prove profile, level, frame rate, and bitrate, so negotiated video is transcoded.
  *
+ * Access units arrive as they are captured and carry no timeline of their own, so the input is timestamped
+ * by arrival. Asking FFmpeg to generate presentation timestamps instead makes it interpolate them from a
+ * frame rate a bare Annex-B pipe never states, which collapses the whole session onto one instant; the
+ * constant-rate output then resolves the collision by discarding almost every frame it was given.
+ *
  * `superfast` is the cheapest `libx264` preset that retains CABAC, and therefore the cheapest one whose
  * coded stream can carry a negotiated Main or High profile; `ultrafast` drops CABAC and codes Constrained
  * Baseline whatever `-profile:v` asks for. `-tune zerolatency` pins the same `sliced_threads`, `bframes`
@@ -429,7 +468,7 @@ function videoArguments(
   target: LiveMediaTarget,
 ): string[] {
   return [
-    ...commonArguments(frame.codec === 'h265' ? 'hevc' : frame.codec),
+    ...commonArguments(frame.codec === 'h265' ? 'hevc' : frame.codec, ['-use_wallclock_as_timestamps', '1']),
     '-an',
     '-c:v',
     'libx264',
@@ -463,20 +502,33 @@ function videoArguments(
   ];
 }
 
+/**
+ * Adapts one source audio elementary stream to the negotiated AAC-ELD output.
+ *
+ * The SDK reports no sample rate or channel count, because a station sends neither; 16 kHz mono is the
+ * assumption every Eufy client applies. Raw A-law carries nothing at all and must be told that assumption,
+ * while an ADTS input states its own rate in every frame header and rejects the option outright, which fails
+ * the process before it reads a byte.
+ *
+ * `libfdk_aac` selects its transport from the requested output framing, and AAC-ELD cannot be carried in
+ * ADTS, so without an explicit global header the encoder refuses to initialise at all.
+ */
 function audioArguments(
   frame: LiveAudioFrame,
   selection: NegotiatedLiveAudio,
   targetAddress: string,
   target: LiveMediaTarget,
 ): string[] {
-  const inputFormat = frame.codec === 'g711a' ? 'alaw' : 'aac';
+  const rawAlaw = frame.codec === 'g711a';
   return [
-    ...commonArguments(inputFormat, ['-ar', '16k', '-ac', '1']),
+    ...commonArguments(rawAlaw ? 'alaw' : 'aac', rawAlaw ? ['-ar', '16k', '-ac', '1'] : []),
     '-vn',
     '-c:a',
     'libfdk_aac',
     '-profile:a',
     'aac_eld',
+    '-flags',
+    '+global_header',
     '-ar',
     `${selection.sampleRate}k`,
     '-ac',

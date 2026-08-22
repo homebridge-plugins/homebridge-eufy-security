@@ -278,6 +278,27 @@ proven on the wire. The remaining half is an SDK observation gap rather than a p
 upstream as [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) and qualified here by
 [#1043](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1043), which is gated on it.
 
+### Live adaptation input timeline
+
+A live source hands over an elementary stream through a pipe, and a pipe carries no container timeline.
+The only timeline available is when each access unit arrived, so that is the one adaptation uses. Asking
+FFmpeg to generate presentation timestamps instead makes it interpolate them from a frame rate a bare
+Annex-B stream never states: the whole session collapses onto one instant and the constant-rate output
+then resolves the timestamp collision by discarding almost every frame it was given. Measured on a real
+camera, 326 source access units produced two coded frames.
+
+For the same reason nothing asks FFmpeg to discard or reinterpret what it has already read. The initial
+analysis window is bounded to its minimum instead, because the caller declares the input format and the
+analysis has nothing left to discover; that bound is what makes time to first output independent of the
+source keyframe interval, and it is the only part of the window a plugin can shorten without losing media.
+
+Audio keeps its own clock. An ADTS or A-law elementary stream states its rate, so its timeline is real
+without help, and the SDK reports neither a sample rate nor a channel count because a station sends
+neither. Only raw A-law has to be told the 16 kHz mono assumption every Eufy client applies; telling an
+ADTS demuxer the same thing fails the process before it reads a byte. That two-clock arrangement is
+correct per stream and wrong across them when a source hands over a prebuffer in one burst: see
+[#1046](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1046).
+
 ### Live adaptation encoder
 
 Live adaptation always encodes with `libx264` at `-preset superfast -tune zerolatency`. Hardware
@@ -289,6 +310,27 @@ realization of a negotiated Baseline selection: it is a strict subset that any B
 and the only Baseline form the encoder can produce. `superfast` is the cheapest preset that retains
 CABAC and therefore the cheapest one that can satisfy a Main or High selection; `ultrafast` cannot,
 because dropping CABAC forces the coded stream below the negotiated profile.
+
+AAC-ELD output requires an explicit global header. `libfdk_aac` picks its transport from the framing the
+output asks for and defaults to ADTS, which cannot carry AAC-ELD at all, so without that header the
+encoder refuses to initialize and the negotiated audio codec is unreachable.
+
+### Reconfigured selection lifetime
+
+A reconfigured selection is applied at the next source keyframe, and the adaptation carrying the previous
+selection keeps running until then. A controller reconfigures a session precisely when it is unhappy with
+what it is receiving, so the source is frequently the very thing not producing keyframes; ending the only
+adaptation that is still producing output would replace a degraded picture with none at all.
+
+The deferral is bounded by the same start backstop a session begins with, because a session that never
+applies the selection HomeKit asked for has to end and be renegotiated rather than serve the old one
+indefinitely. Only the adaptation carrying the current selection can discharge that bound: FFmpeg reports
+progress on a timer whether or not new media reaches it, so a superseded process would otherwise clear a
+deadline it can no longer satisfy.
+
+A changed source codec or geometry is different in kind. The running process cannot code those frames at
+all, so they are withheld until a keyframe lets a replacement start, and the negotiated output identity is
+unchanged across that swap.
 
 HomeKit advertises profiles, levels and resolutions as independent lists, so a controller may select a
 level whose own frame-size limit the selected geometry exceeds. `libx264` writes the requested level

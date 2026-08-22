@@ -134,6 +134,18 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/live-media.test.ts',
+          behavior: 'timestamps live video by arrival and bounds the analysis that precedes a first coded frame',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'tells only a raw a-law input the sample rate assumption its format cannot carry',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'requests the global header AAC-ELD needs to leave the encoder at all',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
           behavior: 'starts and retains video when source audio is absent or its separate process fails',
         },
         {
@@ -142,7 +154,15 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/live-media.test.ts',
+          behavior: 'keeps the previous selection on the wire until a reconfigured one has a keyframe to start from',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
           behavior: 'readapts a changed source codec at its next keyframe without changing negotiated output',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'bounds a deferred reconfiguration even while the superseded selection keeps reporting progress',
         },
         {
           file: 'test/contracts/live-media.test.ts',

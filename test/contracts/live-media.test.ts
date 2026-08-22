@@ -8,6 +8,7 @@ import {
   FfmpegLiveMedia,
   type LiveMediaProcess,
   type LiveSessionOutcome,
+  type NegotiatedLiveAudio,
   type NegotiatedLiveVideo,
 } from '../../src/media/live-stream.js';
 
@@ -22,6 +23,15 @@ const NEGOTIATED_VIDEO: NegotiatedLiveVideo = {
   ssrc: 1234,
   mtu: 1200,
   rtcpInterval: 0.5,
+};
+
+const AAC_ELD_16: NegotiatedLiveAudio = {
+  codec: 'AAC-eld',
+  channels: 1,
+  sampleRate: 16,
+  maxBitRate: 24,
+  payloadType: 110,
+  ssrc: 5678,
 };
 
 const KEYFRAME = {
@@ -50,6 +60,15 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
 
 type SyntheticProcess = LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean };
 
+/**
+ * The options one adaptation process applies to its input, which is everything before `-i`. FFmpeg reads
+ * the same option name on either side of the input, so an input contract has to be judged on this slice
+ * rather than on the whole argument list.
+ */
+function inputOptions(args: readonly string[]): string[] {
+  return args.slice(0, args.indexOf('-i'));
+}
+
 function process(): SyntheticProcess {
   const events = new EventEmitter();
   return {
@@ -61,18 +80,26 @@ function process(): SyntheticProcess {
   };
 }
 
-/** One prepared single-video session that records every adaptation process and reported outcome. */
-async function liveSession(source?: { live(): Promise<LiveStreamHandle> }) {
+/**
+ * One prepared session that records every adaptation process, the arguments it was given, and every
+ * reported outcome. `audio` negotiates the second output so the audio adaptation contracts share this setup.
+ */
+async function liveSession(
+  source?: { live(): Promise<LiveStreamHandle> },
+  { audio }: { audio?: NegotiatedLiveAudio } = {},
+) {
   const stream = new SyntheticLiveStream();
   const onVideoFailure = vi.fn();
   const outcomes: LiveSessionOutcome[] = [];
   const children: SyntheticProcess[] = [];
+  const spawned: string[][] = [];
   let receiverReport: (() => void) | undefined;
   const media = new FfmpegLiveMedia(
     '/synthetic/ffmpeg',
-    () => {
+    (_executable, args) => {
       const child = process();
       children.push(child);
+      spawned.push([...args]);
       return child;
     },
     async () => ({
@@ -92,6 +119,16 @@ async function liveSession(source?: { live(): Promise<LiveStreamHandle> }) {
       srtpKey: Buffer.alloc(16),
       srtpSalt: Buffer.alloc(14),
     },
+    ...(audio
+      ? {
+          audio: {
+            port: 50101,
+            srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' as const,
+            srtpKey: Buffer.alloc(16),
+            srtpSalt: Buffer.alloc(14),
+          },
+        }
+      : {}),
     onVideoFailure,
     onSessionOutcome: (outcome) => outcomes.push(outcome),
   });
@@ -99,9 +136,11 @@ async function liveSession(source?: { live(): Promise<LiveStreamHandle> }) {
     prepared,
     stream,
     children,
+    spawned,
     onVideoFailure,
     outcomes,
-    start: (): Promise<void> => prepared.start(source ?? { live: async () => stream }, { video: NEGOTIATED_VIDEO }),
+    start: (): Promise<void> =>
+      prepared.start(source ?? { live: async () => stream }, { video: NEGOTIATED_VIDEO, ...(audio ? { audio } : {}) }),
     receiverReport: (): void => receiverReport?.(),
   };
 }
@@ -217,6 +256,20 @@ describe('live media adaptation', () => {
     expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'source-stopped' }]);
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
     vi.useRealTimers();
+  });
+
+  it('timestamps live video by arrival and bounds the analysis that precedes a first coded frame', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const options = inputOptions(session.spawned[0]!);
+    expect(options).toEqual(
+      expect.arrayContaining(['-use_wallclock_as_timestamps', '1', '-probesize', '32', '-analyzeduration', '1']),
+    );
+    expect(options.join(' ')).not.toContain('genpts');
+    expect(options.join(' ')).not.toContain('nobuffer');
+    session.prepared.stop();
   });
 
   it('transcodes H.264 when passthrough compliance cannot be proven from SDK frames', async () => {
@@ -445,6 +498,53 @@ describe('live media adaptation', () => {
     prepared.stop();
   });
 
+  it('keeps the previous selection on the wire until a reconfigured one has a keyframe to start from', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+    expect(session.children).toHaveLength(1);
+    const coding = vi.spyOn(session.children[0]!.stdin, 'write');
+
+    session.prepared.reconfigure({ ...NEGOTIATED_VIDEO, width: 640, height: 360, maxBitRate: 132 });
+    session.stream.video({ ...KEYFRAME, keyframe: false });
+
+    expect(session.children).toHaveLength(1);
+    expect(session.children[0]!.kill).not.toHaveBeenCalled();
+    expect(coding).toHaveBeenCalledWith(KEYFRAME.data);
+
+    session.stream.video(KEYFRAME);
+
+    expect(session.children).toHaveLength(2);
+    expect(session.children[0]!.kill).toHaveBeenCalled();
+    expect(session.spawned[1]).toContain(
+      'scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2',
+    );
+    session.prepared.stop();
+  });
+
+  it('bounds a deferred reconfiguration even while the superseded selection keeps reporting progress', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('progress=continue\n');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.outcomes).toEqual([{ outcome: 'streaming' }]);
+
+    session.prepared.reconfigure({ ...NEGOTIATED_VIDEO, width: 640, height: 360, maxBitRate: 132 });
+    for (let elapsed = 0; elapsed < 32_000; elapsed += 2_000) {
+      session.receiverReport();
+      session.children[0]!.stderr.push('progress=continue\n');
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'no-video-within-backstop' },
+    ]);
+    vi.useRealTimers();
+  });
+
   it('readapts a changed source codec at its next keyframe without changing negotiated output', async () => {
     const stream = new SyntheticLiveStream();
     const spawned: string[][] = [];
@@ -628,18 +728,53 @@ describe('live media adaptation', () => {
     stream.audio({ codec: 'aac-lc', data: Buffer.from([0xff, 0xf1, 1]) });
     stream.audio({ codec: 'g711a', data: Buffer.from([1, 2, 3]) });
     expect(children).toHaveLength(2);
-    expect(spawnedArgs[0]).toEqual(
-      expect.arrayContaining(['-f', 'aac', '-ar', '16k', '-ac', '1', '-c:a', 'libfdk_aac', 'aac_eld']),
-    );
-    expect(spawnedArgs[1]).toEqual(
-      expect.arrayContaining(['-f', 'alaw', '-ar', '16k', '-ac', '1', '-c:a', 'libfdk_aac', 'aac_eld']),
-    );
+    expect(spawnedArgs[0]).toEqual(expect.arrayContaining(['-f', 'aac', '-c:a', 'libfdk_aac', 'aac_eld']));
+    expect(spawnedArgs[1]).toEqual(expect.arrayContaining(['-f', 'alaw', '-c:a', 'libfdk_aac', 'aac_eld']));
 
     children[0].emit('exit', 0, null);
     stream.audio({ codec: 'g711a', data: Buffer.from([4, 5, 6]) });
 
     expect(children).toHaveLength(2);
     expect(children[1].kill).not.toHaveBeenCalled();
+  });
+
+  it('tells only a raw a-law input the sample rate assumption its format cannot carry', async () => {
+    const session = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await session.start();
+
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.from([0xff, 0xf1, 1]) });
+    expect(inputOptions(session.spawned[0]!)).not.toContain('-ar');
+    expect(inputOptions(session.spawned[0]!)).not.toContain('-ac');
+
+    session.stream.audio({ codec: 'g711a', data: Buffer.from([1, 2, 3]) });
+    expect(inputOptions(session.spawned[1]!)).toEqual(expect.arrayContaining(['-ar', '16k', '-ac', '1']));
+    session.prepared.stop();
+  });
+
+  it('requests the global header AAC-ELD needs to leave the encoder at all', async () => {
+    const session = await liveSession(undefined, {
+      audio: { ...AAC_ELD_16, sampleRate: 24, maxBitRate: 32 },
+    });
+    await session.start();
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.from([0xff, 0xf1, 1]) });
+
+    expect(session.spawned[0]).toEqual(
+      expect.arrayContaining([
+        '-c:a',
+        'libfdk_aac',
+        '-profile:a',
+        'aac_eld',
+        '-flags',
+        '+global_header',
+        '-ar',
+        '24k',
+        '-ac',
+        '1',
+        '-b:a',
+        '32k',
+      ]),
+    );
+    session.prepared.stop();
   });
 
   it('bounds startup when a long GOP supplies no keyframe', async () => {
