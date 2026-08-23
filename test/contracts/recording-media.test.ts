@@ -21,7 +21,7 @@ const NEGOTIATED: NegotiatedRecording = {
   level: '4.0',
   iFrameIntervalMs: 4_000,
   fragmentLengthMs: 4_000,
-  audio: { codec: 'AAC-eld', channels: 1, sampleRate: 24, maxBitRate: 32 },
+  audio: { codec: 'AAC-lc', channels: 1, sampleRate: 32, maxBitRate: 32 },
 };
 
 /** One ISO base media box, the unit the adapted output is split on. */
@@ -354,14 +354,23 @@ describe('recording media adaptation', () => {
     await session.consumed.iteration;
   });
 
-  it('requests AAC-ELD at the negotiated recording sample rate and channel count', async () => {
-    const session = recordingSession();
+  it('codes the recorded audio profile and sample rate the controller selected', async () => {
+    const low = recordingSession();
     await settle();
-    expect(session.spawned[0]).toEqual(
-      expect.arrayContaining(['-c:a', 'libfdk_aac', '-profile:a', 'aac_eld', '-ar', '24k', '-ac', '1', '-b:a', '32k']),
+    expect(low.spawned[0]).toEqual(
+      expect.arrayContaining(['-c:a', 'libfdk_aac', '-profile:a', 'aac_low', '-ar', '32k', '-ac', '1', '-b:a', '32k']),
     );
-    session.recording.stop();
-    await session.consumed.iteration;
+    low.recording.stop();
+    await low.consumed.iteration;
+
+    const eld = recordingSession({
+      ...NEGOTIATED,
+      audio: { codec: 'AAC-eld', channels: 1, sampleRate: 16, maxBitRate: 24 },
+    });
+    await settle();
+    expect(eld.spawned[0]).toEqual(expect.arrayContaining(['-profile:a', 'aac_eld', '-ar', '16k', '-b:a', '24k']));
+    eld.recording.stop();
+    await eld.consumed.iteration;
   });
 
   it('stops the source and its adaptation promptly when a recording is cancelled', async () => {

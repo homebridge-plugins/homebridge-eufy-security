@@ -54,6 +54,25 @@ const RECORDING_PREBUFFER_MS = 4_000;
 const RECORDING_FRAGMENT_LENGTH_MS = 4_000;
 
 /**
+ * The recorded audio sample rates this camera advertises, in kHz.
+ *
+ * A station sends 16 kHz mono, so every higher rate is resampled on the way out rather than being source
+ * truth. They are still advertised because the adaptation genuinely produces each of them, and a controller
+ * that finds no rate it accepts selects no recording configuration at all.
+ */
+const RECORDING_AUDIO_SAMPLE_RATES = [16, 24, 32, 48] as const;
+
+/** The HomeKit identifier for each advertised recorded audio sample rate. */
+const RECORDING_SAMPLE_RATES = (
+  hap: HomeKitDefinitions,
+): Record<(typeof RECORDING_AUDIO_SAMPLE_RATES)[number], number> => ({
+  16: hap.AudioRecordingSamplerate.KHZ_16,
+  24: hap.AudioRecordingSamplerate.KHZ_24,
+  32: hap.AudioRecordingSamplerate.KHZ_32,
+  48: hap.AudioRecordingSamplerate.KHZ_48,
+});
+
+/**
  * The exact enablement observation a live session is admitted against. The row itself belongs to the
  * camera controls bundle; this bundle only consumes it, and only when the manifest reports it as a
  * boolean read, because no other member shape carries that meaning.
@@ -274,7 +293,7 @@ export const CAMERA_STREAMING_ADAPTER = {
     {
       id: CAMERA_RECORD_FRAGMENTS.id,
       hapFit:
-        'Official Camera Recording Management transports negotiated fragmented MP4 recordings over a HomeKit Data Stream, honouring the selected profile, level, geometry, frame rate, bit rate, keyframe cadence, fragment length, AAC-ELD audio, and recording-audio state',
+        'Official Camera Recording Management transports negotiated fragmented MP4 recordings over a HomeKit Data Stream, honouring the selected profile, level, geometry, frame rate, bit rate, keyframe cadence, fragment length, recorded audio profile and sample rate, and recording-audio state',
       identityEffect:
         'Recording adds the official recording management, operating mode, and data stream services to the stable camera controller without creating another accessory or service key',
       diagnostics:
@@ -311,6 +330,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'adapts a recording to exactly the configuration a controller selected',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'advertises both recorded audio profiles and every sample rate it can produce',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'records the audio profile and sample rate a controller selected',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -402,7 +429,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/recording-media.test.ts',
-          behavior: 'requests AAC-ELD at the negotiated recording sample rate and channel count',
+          behavior: 'codes the recorded audio profile and sample rate the controller selected',
         },
         {
           file: 'test/contracts/recording-media.test.ts',
@@ -641,14 +668,12 @@ function recordingOptions(context: AdapterAttachmentContext, press: boolean) {
       ] as [number, number, number][],
     },
     audio: {
-      codecs: [
-        {
-          type: hap.AudioRecordingCodecType.AAC_ELD,
-          audioChannels: 1,
-          bitrateMode: hap.AudioBitrate.VARIABLE,
-          samplerate: [hap.AudioRecordingSamplerate.KHZ_16, hap.AudioRecordingSamplerate.KHZ_24],
-        },
-      ],
+      codecs: [hap.AudioRecordingCodecType.AAC_LC, hap.AudioRecordingCodecType.AAC_ELD].map((type) => ({
+        type,
+        audioChannels: 1,
+        bitrateMode: hap.AudioBitrate.VARIABLE,
+        samplerate: RECORDING_AUDIO_SAMPLE_RATES.map((rate) => RECORDING_SAMPLE_RATES(hap)[rate]),
+      })),
     },
   };
 }
@@ -1210,9 +1235,9 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
    * Translates one selected HomeKit recording configuration into the media domain's vocabulary.
    *
    * Audio is withheld whenever HomeKit's own recording-audio state is off, whenever the user turned this
-   * camera's audio off, and whenever a controller selected a codec this camera never advertised, because
-   * a recording with no audio track is the truthful answer in all three cases and a substituted codec
-   * would not be.
+   * camera's audio off, and whenever a controller selected a codec or sample rate this camera never
+   * advertised, because a recording with no audio track is the truthful answer in every one of those cases
+   * and a substituted codec would not be.
    */
   private negotiated(
     binding: RecordingCameraBinding,
@@ -1240,13 +1265,21 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
     if (!binding.audioEnabled || !this.recordingAudioActive()) {
       return undefined;
     }
-    if (configuration.audioCodec.type !== this.hap.AudioRecordingCodecType.AAC_ELD) {
+    const codec =
+      configuration.audioCodec.type === this.hap.AudioRecordingCodecType.AAC_ELD
+        ? ('AAC-eld' as const)
+        : configuration.audioCodec.type === this.hap.AudioRecordingCodecType.AAC_LC
+          ? ('AAC-lc' as const)
+          : undefined;
+    const rates = RECORDING_SAMPLE_RATES(this.hap);
+    const sampleRate = RECORDING_AUDIO_SAMPLE_RATES.find((rate) => rates[rate] === configuration.audioCodec.samplerate);
+    if (!codec || sampleRate === undefined) {
       return undefined;
     }
     return {
-      codec: 'AAC-eld',
+      codec,
       channels: configuration.audioCodec.audioChannels ?? 1,
-      sampleRate: configuration.audioCodec.samplerate === this.hap.AudioRecordingSamplerate.KHZ_24 ? 24 : 16,
+      sampleRate,
       maxBitRate: configuration.audioCodec.bitrate,
     };
   }

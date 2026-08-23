@@ -38,9 +38,9 @@ export interface RecordingMediaProcess extends MediaProcess {
 export type RecordingMediaProcessFactory = (executable: string, args: readonly string[]) => RecordingMediaProcess;
 
 export interface NegotiatedRecordedAudio {
-  readonly codec: 'AAC-eld';
+  readonly codec: 'AAC-lc' | 'AAC-eld';
   readonly channels: number;
-  readonly sampleRate: 16 | 24;
+  readonly sampleRate: 16 | 24 | 32 | 48;
   readonly maxBitRate: number;
 }
 
@@ -519,7 +519,7 @@ function recordingArguments(negotiated: NegotiatedRecording): string[] {
           '-c:a',
           'libfdk_aac',
           '-profile:a',
-          'aac_eld',
+          negotiated.audio.codec === 'AAC-eld' ? 'aac_eld' : 'aac_low',
           '-ar',
           `${negotiated.audio.sampleRate}k`,
           '-ac',

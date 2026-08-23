@@ -1763,9 +1763,9 @@ function selectRecordingConfiguration(
     bitRate = 2_000,
     iFrameInterval = 4_000,
     resolution = [1920, 1080, 30],
-    audioCodec = AudioRecordingCodecType.AAC_ELD,
+    audioCodec = AudioRecordingCodecType.AAC_LC,
     audioChannels = 1,
-    samplerate = AudioRecordingSamplerate.KHZ_24,
+    samplerate = AudioRecordingSamplerate.KHZ_32,
     audioBitrate = 32,
   }: SelectedRecording = {},
 ): Promise<unknown> {
@@ -2109,7 +2109,7 @@ describe('camera recording bundle adapter', () => {
         level: '3.1',
         iFrameIntervalMs: 4_000,
         fragmentLengthMs: 4_000,
-        audio: { codec: 'AAC-eld', channels: 1, sampleRate: 24, maxBitRate: 32 },
+        audio: { codec: 'AAC-lc', channels: 1, sampleRate: 32, maxBitRate: 32 },
       },
     ]);
 
@@ -2123,6 +2123,63 @@ describe('camera recording bundle adapter', () => {
       { data: Buffer.from('final'), isLast: true },
     ]);
     expect(media.sessions[0].stop).toHaveBeenCalled();
+  });
+
+  it('advertises both recorded audio profiles and every sample rate it can produce', () => {
+    const { controller } = attachRecordingCamera('Synthetic recording audio camera');
+    const advertised = decodeTlvWithLists(
+      Buffer.from(
+        controller.recordingManagement!.recordingManagementService.getCharacteristic(
+          Characteristic.SupportedAudioRecordingConfiguration,
+        ).value as string,
+        'base64',
+      ),
+      1,
+    );
+    const codecs = (advertised[1] as Buffer[]).map((entry) => {
+      const inner = decodeTlvWithLists(entry, 3);
+      return {
+        type: (inner[1] as Buffer)[0],
+        rates: (decodeTlvWithLists(inner[2] as Buffer, 3)[3] as Buffer[]).map((rate) => rate[0]),
+      };
+    });
+    expect(codecs.map(({ type }) => type)).toEqual([AudioRecordingCodecType.AAC_LC, AudioRecordingCodecType.AAC_ELD]);
+    for (const { rates } of codecs) {
+      expect(rates).toEqual([
+        AudioRecordingSamplerate.KHZ_16,
+        AudioRecordingSamplerate.KHZ_24,
+        AudioRecordingSamplerate.KHZ_32,
+        AudioRecordingSamplerate.KHZ_48,
+      ]);
+    }
+  });
+
+  it('records the audio profile and sample rate a controller selected', async () => {
+    for (const [codec, rate, expected, expectedRate] of [
+      [AudioRecordingCodecType.AAC_LC, AudioRecordingSamplerate.KHZ_48, 'AAC-lc', 48],
+      [AudioRecordingCodecType.AAC_ELD, AudioRecordingSamplerate.KHZ_16, 'AAC-eld', 16],
+    ] as const) {
+      const media = recordingMedia();
+      const connection = hapConnection();
+      const { controller, delegate } = attachRecordingCamera(`Synthetic recording audio ${expected} ${expectedRate}`, {
+        recordingMedia: media.adapter,
+      });
+      await selectRecordingConfiguration(controller, connection, { audioCodec: codec, samplerate: rate });
+      controller.recordingManagement!.recordingManagementService.updateCharacteristic(
+        Characteristic.RecordingAudioActive,
+        true,
+      );
+      const stream = consumeRecordingStream(delegate, 61);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(media.negotiations[0].audio).toEqual({
+        codec: expected,
+        channels: 1,
+        sampleRate: expectedRate,
+        maxBitRate: 32,
+      });
+      media.sessions[0].push({ data: Buffer.from('final'), last: true });
+      await stream.iteration;
+    }
   });
 
   it('records no audio while HomeKit withdraws recording audio', async () => {

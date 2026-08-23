@@ -100,9 +100,9 @@ export interface LiveMediaAdapter {
 }
 
 export interface NegotiatedRecordedAudio {
-  readonly codec: 'AAC-eld';
+  readonly codec: 'AAC-lc' | 'AAC-eld';
   readonly channels: number;
-  readonly sampleRate: 16 | 24;
+  readonly sampleRate: 16 | 24 | 32 | 48;
   readonly maxBitRate: number;
 }
 
