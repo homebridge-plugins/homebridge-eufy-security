@@ -129,6 +129,7 @@ to any controller and a `hap-controller` module installed outside this repositor
 | `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it |
 | `live-hap-disabled-camera-check.mjs` | Live view, snapshots, and recovery for a camera that is turned off |
 | `live-hap-capture.mjs` | One MP4 and still per camera when a maintainer must look at a frame |
+| `live-hksv-check.mjs` | Negotiated HomeKit Secure Video output, measured on the adapted fragments |
 
 `live-hap-stream-check.mjs` decrypts and authenticates the inbound SRTP with the keys it supplied, so it
 judges what the accessory actually encoded rather than what a command line asked for: negotiated payload
@@ -222,6 +223,50 @@ node scripts/live-hap-prepared-session-check.mjs \
   --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
   --idle-seconds 600 --homebridge-pid <homebridge pid>
 ```
+
+`live-hksv-check.mjs` is the one check here that does not pair a controller. HomeKit transports a recording
+over a HomeKit Data Stream, and `hap-controller` does not implement one, so an unpaired controller cannot
+open a recording stream at all. The check drives the plugin's own recording adaptation directly instead,
+with a configuration a controller could select, and judges the bytes that came out rather than the command
+line that asked for them: the initialization segment, the boxes each fragment is made of, the coded
+profile, level and dimensions read from the sequence parameter set inside `avcC`, whether every fragment
+opens on a sample a decoder can start from, each fragment's span on the media timeline, whether an audio
+track is present, and how long first output and cancellation took.
+
+```bash
+node scripts/live-hksv-check.mjs \
+  --storage /tmp/hb-check/homebridge-eufy --serial T8XXXXXXXXXXXXXX --seconds 35
+node scripts/live-hksv-check.mjs \
+  --storage … --serial … --no-audio --width 1280 --height 720 --fps 15 --bitrate 800 \
+  --profile main --level 3.1 --fragment-ms 2000 --iframe-ms 2000
+```
+
+It opens a second realtime owner against a copy of the storage root, so **stop the instance under test
+first**; it needs a built `dist/`, because it reuses the plugin's own adaptation and persistence; and it
+never writes media to disk.
+
+Two results are expected and are not defects. First output on a cold source sits at the edge of HomeKit's
+ten-second budget — 10.2 s and 10.7 s on the two wired cameras measured — because the SDK owns source
+warm-up and the plugin's own adaptation latency is already minimised. Bringing it reliably inside that
+budget needs pre-event media from an already-warm source, which is
+[#1000](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1000), so the run reports the
+measured latency as an unverified observation rather than as a pass or a failure. A fragment's span may also
+exceed the selected fragment length by up to one source frame, because a boundary can only land on a coded
+frame and a camera may code slower than the frame rate that was selected; the check measures that frame
+interval from the fragment rather than assuming the negotiated one.
+
+The measurement itself is covered hermetically by `test/contracts/live-hksv-harness.test.ts`, so a green
+live result is not the only evidence that the check reads a fragmented MP4 correctly.
+
+A camera that is switched off answers this check with `source-error` and no output, which is correct: the
+recording delegate refuses such a camera before opening a transport at all, so the failure only appears
+when the check is pointed straight at the adaptation.
+
+What this check does not cover is the HomeKit Data Stream transport and playback in the Home app. The
+recording delegate's HAP surface — the advertised container and trigger, the configuration a controller
+selects, recording-audio state, cancellation, and the failure conditions — is covered hermetically against
+the real HAP definitions in `test/contracts/camera-streaming-adapter.test.ts`. Playable recordings with
+expected audio remain a paired Home app acceptance step.
 
 ## 7. Record the result safely
 

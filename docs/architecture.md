@@ -315,6 +315,63 @@ AAC-ELD output requires an explicit global header. `libfdk_aac` picks its transp
 output asks for and defaults to ADTS, which cannot carry AAC-ELD at all, so without that header the
 encoder refuses to initialize and the negotiated audio codec is unreachable.
 
+### Recorded fragment adaptation
+
+A HomeKit Secure Video recording is adapted from the SDK's fragment recording, not from the live
+elementary streams. That input is a container with its own timeline, which is what makes a fragment's
+duration and a track's alignment meaningful, and it is the only input a pre-event window can ever be
+drained into. Nothing therefore generates or overrides timestamps on the way in, which is the opposite of
+the live path and for the same underlying reason: adaptation uses the best timeline its input actually
+carries.
+
+The SDK's own fragments are Eufy source truth and cannot be passed through: they carry the camera's codec,
+profile, level, geometry, frame rate and keyframe cadence unchanged, so no negotiated recording contract can
+be satisfied without recoding.
+
+Fragmentation is driven only by keyframes. A HomeKit fragment must open on one and must not be longer than
+the selected fragment length, and a duration-driven cut is free to land between keyframes, so a
+keyframe-driven cut is the only one that can satisfy both. The forced keyframe interval is therefore one
+frame shorter than the governing bound, because a keyframe can only be coded on a frame the encoder
+actually has: requesting one at the bound puts the boundary on the first frame at or after it and
+measurably overruns the selected length. Keyframes slightly more often than selected remain inside a
+selected maximum, so the shift costs nothing the contract protects. A source that codes slower than the
+selected frame rate still quantizes the boundary to its own frame interval, so the residual bound is one
+source frame rather than one negotiated frame, and live qualification measures that interval instead of
+assuming it.
+
+Source and output fragmentation are separate decisions. The length asked of the SDK's fragment recording
+bounds only how long adapted output waits behind media the camera has already captured; the length HomeKit
+selected is produced by the plugin's own refragmentation regardless. Asking the source for the selected
+length therefore makes first output wait a whole output fragment behind media that already existed.
+Measured on two wired cameras, asking for one second instead of the selected four brought first output from
+13.2 s and 13.1 s down to 10.2 s and 10.7 s, with output fragments still spanning the selected four
+seconds.
+
+What remains above that is the source warm-up the SDK owns, so HomeKit's ten-second budget for first output
+is reachable from a cold source only at its edge, and reliably only when the pre-event window of an
+already-warm source can be drained instead
+([#1000](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1000)). The plugin's own
+bound is therefore the same backstop the live path uses, sitting strictly above the SDK's window, and live
+qualification reports the measured latency rather than asserting a budget the plugin cannot own alone.
+
+A negotiated recording frame rate is a maximum rather than a target, so the output rate is bounded rather
+than pinned. Pinning it makes the encoder duplicate frames a slower source never sent, and every duplicate
+spends the negotiated bit rate on a frame that carries nothing. Measured on wired cameras that code near
+15 fps against a selected 30, roughly half of a pinned output's frames were duplicates.
+
+Finality needs one packet of lookahead, and takes it only where it is free. HomeKit is told a recording
+ended by a flag on its last packet, and nothing can know a fragment is last until no more will arrive.
+While the source is still delivering, fragments are therefore emitted immediately and unflagged; once the
+source has ended and the adaptation's input is closed, the remaining fragments are held until the
+adaptation exits and the final one is flagged. The common case, where the controller closes the stream
+first, pays no latency at all.
+
+Recording audio is withheld rather than substituted. HomeKit's own recording-audio state starts off, a
+camera's audio can be turned off by preference, a controller can select a codec the camera never
+advertised, and a source can carry no audio track at all. In every one of those cases the output carries
+no audio track, because a recording without audio is playable and a recording with a substituted codec is
+a claim the contract did not make.
+
 ### Reconfigured selection lifetime
 
 A reconfigured selection is applied at the next source keyframe, and the adaptation carrying the previous

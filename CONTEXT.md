@@ -170,6 +170,23 @@ _Avoid_: Prebuffer, active stream
 Keyframe-aligned media retained before a recording trigger while a media source is already active.
 _Avoid_: Session pre-warm, recording delay
 
+**Recorded fragment**:
+One complete `moof` and `mdat` pair of adapted recording output, opening on a sample a decoder can start
+from and spanning no more than the fragment length a controller selected. The initialization segment that
+precedes the first one is not a recorded fragment.
+_Avoid_: Media prebuffer, source fragment, recording chunk
+
+**Source fragment**:
+One fragment the SDK's fragment recording emits, carrying the camera's own codec, profile, level,
+geometry, and keyframe cadence. It is recording input, never HomeKit output.
+_Avoid_: Recorded fragment, negotiated recording
+
+**Negotiated recording**:
+The complete recording contract one HomeKit controller selected: container and fragment length, H.264
+profile, level, geometry, frame-rate ceiling, bit-rate ceiling, keyframe interval, and audio codec.
+Absent audio means the output carries no audio track, never a substituted one.
+_Avoid_: Recording preset, supported recording configuration
+
 **Media adaptation**:
 Plugin-owned translation of SDK media source truth into a HomeKit-negotiated codec, framing, timing, and transport contract.
 _Avoid_: Device decoding, SDK media transport

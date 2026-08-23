@@ -10,6 +10,7 @@ import {
 } from './diagnostics.js';
 import { HomeKitReconciler, type HomeKitAccessoryStore } from './homekit/reconciler.js';
 import { FfmpegLiveMedia } from './media/live-stream.js';
+import { FfmpegRecordingMedia } from './media/recording.js';
 import { PersistedLastSuccessfulImages } from './media/last-successful-image.js';
 import { SnapshotAcquisition } from './media/snapshot.js';
 import { RuntimeOwner } from './runtime/owner.js';
@@ -55,6 +56,9 @@ export function createEufyPlatform(
       const diagnosticLog = createDiagnosticLogger(log, storageRoot);
       const diagnostics = new DiagnosticConditions(diagnosticLog);
       const liveMedia = configuredConfig.ffmpegPath ? new FfmpegLiveMedia(configuredConfig.ffmpegPath) : undefined;
+      const recordingMedia = configuredConfig.ffmpegPath
+        ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath)
+        : undefined;
       const snapshotMedia = new SnapshotAcquisition(
         storageRoot ? new PersistedLastSuccessfulImages(storageRoot) : undefined,
       );
@@ -93,6 +97,7 @@ export function createEufyPlatform(
             configuredConfig.entityPreferences,
             liveMedia,
             snapshotMedia,
+            recordingMedia,
           );
           this.reconciler.start();
         }

@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import type { CameraActions } from '@mega-yfue/eufy-sdk';
 import {
   Accessory,
+  AudioBitrate,
+  AudioRecordingCodecType,
+  AudioRecordingSamplerate,
   AudioStreamingCodecType,
   AudioStreamingSamplerate,
   CameraController,
@@ -11,27 +14,43 @@ import {
   decode as decodeTlv,
   decodeWithLists as decodeTlvWithLists,
   encode as encodeTlv,
+  EventTriggerOption,
   H264Level,
   H264Profile,
   HAPStatus,
   HapStatusError,
+  HDSProtocolError,
+  HDSProtocolSpecificErrorReason,
+  MediaContainerType,
   readUInt16,
   Service,
   SRTPCryptoSuites,
   StreamRequestTypes,
   uuid,
+  VideoCodecType,
   writeUInt16,
 } from '@homebridge/hap-nodejs';
 import type {
+  CameraRecordingDelegate,
   CameraStreamingDelegate,
   PlatformAccessory,
   PrepareStreamRequest,
   PrepareStreamResponse,
+  RecordingPacket,
   StreamingRequest,
 } from 'homebridge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdapterAttachmentContext, LiveSessionOutcome, PreparedLiveMedia } from '../../src/homekit/adapter.js';
+import type {
+  AdaptedRecording,
+  AdapterAttachmentContext,
+  LiveSessionOutcome,
+  NegotiatedRecording,
+  PreparedLiveMedia,
+  RecordedFragment,
+  RecordingMediaAdapter,
+  RecordingOutcome,
+} from '../../src/homekit/adapter.js';
 import type { DeviceMemberEvidence } from '../../src/device/member-evidence.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
 import { SnapshotAcquisition, type LastSuccessfulImages } from '../../src/media/snapshot.js';
@@ -47,6 +66,14 @@ const HAP = {
   AudioStreamingCodecType,
   AudioStreamingSamplerate,
   SRTPCryptoSuites,
+  VideoCodecType,
+  MediaContainerType,
+  AudioRecordingCodecType,
+  AudioRecordingSamplerate,
+  AudioBitrate,
+  EventTriggerOption,
+  HDSProtocolError,
+  HDSProtocolSpecificErrorReason,
 };
 
 function callPrepare(delegate: CameraStreamingDelegate, request: PrepareStreamRequest): Promise<PrepareStreamResponse> {
@@ -1683,5 +1710,587 @@ describe('camera streaming bundle adapter', () => {
     await vi.advanceTimersByTimeAsync(600_000);
     expect(state.reads).toBe(terminatedReads);
     expect(stop).toHaveBeenCalledOnce();
+  });
+});
+
+/** Little-endian scalars, the width HomeKit's recording configuration TLVs use for each field. */
+function int32(value: number): Buffer {
+  const buffer = Buffer.alloc(4);
+  buffer.writeInt32LE(value, 0);
+  return buffer;
+}
+
+function int16(value: number): Buffer {
+  const buffer = Buffer.alloc(2);
+  buffer.writeInt16LE(value, 0);
+  return buffer;
+}
+
+function uint32(value: number): Buffer {
+  const buffer = Buffer.alloc(4);
+  buffer.writeUInt32LE(value, 0);
+  return buffer;
+}
+
+interface SelectedRecording {
+  prebufferLength?: number;
+  fragmentLength?: number;
+  profile?: number;
+  level?: number;
+  bitRate?: number;
+  iFrameInterval?: number;
+  resolution?: [number, number, number];
+  audioCodec?: number;
+  audioChannels?: number;
+  samplerate?: number;
+  audioBitrate?: number;
+}
+
+/**
+ * Writes `SelectedCameraRecordingConfiguration` exactly the way a HomeKit controller does, so the
+ * configuration the recording delegate receives is the one HAP itself parsed off the wire.
+ */
+function selectRecordingConfiguration(
+  controller: CameraController,
+  connection: ReturnType<typeof hapConnection>,
+  {
+    prebufferLength = 4_000,
+    fragmentLength = 4_000,
+    profile = H264Profile.HIGH,
+    level = H264Level.LEVEL4_0,
+    bitRate = 2_000,
+    iFrameInterval = 4_000,
+    resolution = [1920, 1080, 30],
+    audioCodec = AudioRecordingCodecType.AAC_ELD,
+    audioChannels = 1,
+    samplerate = AudioRecordingSamplerate.KHZ_24,
+    audioBitrate = 32,
+  }: SelectedRecording = {},
+): Promise<unknown> {
+  const value = encodeTlv(
+    1,
+    encodeTlv(
+      1,
+      int32(prebufferLength),
+      2,
+      Buffer.concat([int32(EventTriggerOption.MOTION), int32(0)]),
+      3,
+      encodeTlv(1, MediaContainerType.FRAGMENTED_MP4, 2, encodeTlv(1, int32(fragmentLength))),
+    ),
+    2,
+    encodeTlv(
+      1,
+      VideoCodecType.H264,
+      2,
+      encodeTlv(1, profile, 2, level, 3, int32(bitRate), 4, int32(iFrameInterval)),
+      3,
+      encodeTlv(1, int16(resolution[0]), 2, int16(resolution[1]), 3, resolution[2]),
+    ),
+    3,
+    encodeTlv(
+      1,
+      audioCodec,
+      2,
+      encodeTlv(1, audioChannels, 2, AudioBitrate.VARIABLE, 3, samplerate, 4, uint32(audioBitrate)),
+    ),
+  ).toString('base64');
+  return controller
+    .recordingManagement!.recordingManagementService.getCharacteristic(
+      Characteristic.SelectedCameraRecordingConfiguration,
+    )
+    .handleSetRequest(value, connection as never);
+}
+
+/** One adapted recording whose units, completion, and failure this specification delivers. */
+function syntheticRecording() {
+  const pending: RecordedFragment[] = [];
+  let waiting:
+    { resolve: (result: IteratorResult<RecordedFragment>) => void; reject: (e: unknown) => void } | undefined;
+  let ended = false;
+  const stop = vi.fn(() => {
+    ended = true;
+    waiting?.resolve({ done: true, value: undefined });
+    waiting = undefined;
+  });
+  return {
+    stop,
+    push(fragment: RecordedFragment): void {
+      if (waiting) {
+        const resolve = waiting.resolve;
+        waiting = undefined;
+        resolve({ done: false, value: fragment });
+        return;
+      }
+      pending.push(fragment);
+    },
+    fail(error: unknown): void {
+      waiting?.reject(error);
+      waiting = undefined;
+    },
+    recording: {
+      stop,
+      [Symbol.asyncIterator](): AsyncIterator<RecordedFragment> {
+        return {
+          next: () =>
+            new Promise<IteratorResult<RecordedFragment>>((resolve, reject) => {
+              const ready = pending.shift();
+              if (ready) {
+                resolve({ done: false, value: ready });
+                return;
+              }
+              if (ended) {
+                resolve({ done: true, value: undefined });
+                return;
+              }
+              waiting = { resolve, reject };
+            }),
+          return: async () => {
+            stop();
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    } satisfies AdaptedRecording,
+  };
+}
+
+/** A recording media seam that records every negotiated contract it was asked to adapt. */
+function recordingMedia() {
+  const negotiations: NegotiatedRecording[] = [];
+  const outcomes: ((outcome: RecordingOutcome) => void)[] = [];
+  const sessions: ReturnType<typeof syntheticRecording>[] = [];
+  return {
+    negotiations,
+    sessions,
+    report(outcome: RecordingOutcome): void {
+      outcomes.at(-1)?.(outcome);
+    },
+    adapter: {
+      record(_source, negotiated, lifecycle): AdaptedRecording {
+        negotiations.push(negotiated);
+        outcomes.push((outcome) => lifecycle?.onOutcome?.(outcome));
+        const session = syntheticRecording();
+        sessions.push(session);
+        return session.recording;
+      },
+    } satisfies RecordingMediaAdapter,
+  };
+}
+
+/** The evidence a camera needs before HomeKit Secure Video may be configured for it. */
+function recordingEvidence(
+  evidence: AdapterAttachmentContext['evidence'] = new Map(),
+): AdapterAttachmentContext['evidence'] {
+  return new Map([
+    ...evidence,
+    [
+      'camera.recordFragments.momentary-action',
+      { id: 'camera.recordFragments.momentary-action', kind: 'momentary-action' as const },
+    ],
+  ]);
+}
+
+function attachRecordingCamera(
+  name: string,
+  overrides: Partial<AdapterAttachmentContext> = {},
+): {
+  controller: CameraController;
+  delegate: CameraRecordingDelegate;
+  accessory: PlatformAccessory;
+  diagnose: ReturnType<typeof vi.fn>;
+  observed: ReturnType<typeof vi.fn>;
+} {
+  const accessory = new Accessory(name, uuid.generate(name)) as unknown as PlatformAccessory;
+  const configureController = vi.spyOn(accessory, 'configureController');
+  const diagnose = vi.fn();
+  const observed = vi.fn();
+  CAMERA_STREAMING_ADAPTER.attach({
+    device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), recordFragments: vi.fn() }) } as never,
+    evidence: recordingEvidence(),
+    accessory,
+    hap: HAP,
+    liveMedia: { prepare: vi.fn() },
+    recordingMedia: recordingMedia().adapter,
+    snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+    snapshotMode: 'Refresh',
+    diagnose,
+    observed,
+    persist: vi.fn(),
+    ...overrides,
+  } satisfies AdapterAttachmentContext);
+  const controller = configureController.mock.calls[0][0] as CameraController;
+  return { controller, delegate: controller.recordingManagement!.delegate, accessory, diagnose, observed };
+}
+
+/** Consumes a recording stream the way HAP's own recording transport does. */
+function consumeRecordingStream(delegate: CameraRecordingDelegate, streamId: number, signal?: AbortSignal) {
+  const packets: RecordingPacket[] = [];
+  let failure: unknown;
+  const generator = delegate.handleRecordingStreamRequest(streamId, signal);
+  const iteration = (async () => {
+    for await (const packet of generator) {
+      packets.push(packet);
+      if (packet.isLast) {
+        break;
+      }
+    }
+  })().catch((error: unknown) => {
+    failure = error;
+  });
+  return { packets, iteration, generator, failed: () => failure !== undefined, failure: () => failure };
+}
+
+describe('camera recording bundle adapter', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('advertises the fragmented MP4 container, prebuffer, and motion trigger a recording may select', () => {
+    const { controller, accessory } = attachRecordingCamera('Synthetic recording camera advertisement');
+    expect(accessory.services.map((service) => service.UUID)).toEqual(
+      expect.arrayContaining([
+        Service.CameraRecordingManagement.UUID,
+        Service.CameraOperatingMode.UUID,
+        Service.DataStreamTransportManagement.UUID,
+      ]),
+    );
+    const advertised = decodeTlv(
+      Buffer.from(
+        controller.recordingManagement!.recordingManagementService.getCharacteristic(
+          Characteristic.SupportedCameraRecordingConfiguration,
+        ).value as string,
+        'base64',
+      ),
+    );
+    expect(advertised[1].readInt32LE(0)).toBe(4_000);
+    expect(advertised[2].readInt32LE(0)).toBe(EventTriggerOption.MOTION);
+    const container = decodeTlv(advertised[3]);
+    expect(container[1][0]).toBe(MediaContainerType.FRAGMENTED_MP4);
+    expect(decodeTlv(container[2])[1].readInt32LE(0)).toBe(4_000);
+  });
+
+  it('omits HomeKit Secure Video for a camera with no evidenced fragment recording', () => {
+    const accessory = new Accessory(
+      'Synthetic camera without recording',
+      uuid.generate('synthetic-camera-without-recording'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    const diagnose = vi.fn();
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn() }) } as never,
+      evidence: new Map(),
+      accessory,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      recordingMedia: recordingMedia().adapter,
+      snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController;
+    expect(controller.recordingManagement).toBeUndefined();
+    expect(accessory.services.map((service) => service.UUID)).not.toContain(Service.CameraRecordingManagement.UUID);
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-recording-unavailable'),
+    ).toEqual([
+      {
+        code: 'camera-recording-unavailable',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: true,
+        reason: 'missing-evidence',
+      },
+    ]);
+  });
+
+  it('adapts a recording to exactly the configuration a controller selected', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate } = attachRecordingCamera('Synthetic negotiated recording camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, connection, {
+      profile: H264Profile.MAIN,
+      level: H264Level.LEVEL3_1,
+      bitRate: 800,
+      iFrameInterval: 4_000,
+      fragmentLength: 4_000,
+      resolution: [1280, 720, 15],
+    });
+    controller.recordingManagement!.recordingManagementService.updateCharacteristic(
+      Characteristic.RecordingAudioActive,
+      true,
+    );
+
+    const stream = consumeRecordingStream(delegate, 7);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations).toEqual([
+      {
+        width: 1280,
+        height: 720,
+        fps: 15,
+        maxBitRate: 800,
+        profile: 'main',
+        level: '3.1',
+        iFrameIntervalMs: 4_000,
+        fragmentLengthMs: 4_000,
+        audio: { codec: 'AAC-eld', channels: 1, sampleRate: 24, maxBitRate: 32 },
+      },
+    ]);
+
+    media.sessions[0].push({ data: Buffer.from('init'), last: false });
+    media.sessions[0].push({ data: Buffer.from('fragment'), last: false });
+    media.sessions[0].push({ data: Buffer.from('final'), last: true });
+    await stream.iteration;
+    expect(stream.packets).toEqual([
+      { data: Buffer.from('init'), isLast: false },
+      { data: Buffer.from('fragment'), isLast: false },
+      { data: Buffer.from('final'), isLast: true },
+    ]);
+    expect(media.sessions[0].stop).toHaveBeenCalled();
+  });
+
+  it('records no audio while HomeKit withdraws recording audio', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate } = attachRecordingCamera('Synthetic muted recording camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, connection);
+    expect(
+      Boolean(
+        controller.recordingManagement!.recordingManagementService.getCharacteristic(
+          Characteristic.RecordingAudioActive,
+        ).value,
+      ),
+    ).toBe(false);
+
+    const stream = consumeRecordingStream(delegate, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[0].audio).toBeUndefined();
+    media.sessions[0].push({ data: Buffer.from('final'), last: true });
+    await stream.iteration;
+  });
+
+  it('records no audio for a camera whose audio the user turned off', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate } = attachRecordingCamera('Synthetic audio-disabled recording camera', {
+      recordingMedia: media.adapter,
+      audioEnabled: false,
+    });
+    await selectRecordingConfiguration(controller, connection);
+    controller.recordingManagement!.recordingManagementService.updateCharacteristic(
+      Characteristic.RecordingAudioActive,
+      true,
+    );
+    const stream = consumeRecordingStream(delegate, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[0].audio).toBeUndefined();
+    media.sessions[0].push({ data: Buffer.from('final'), last: true });
+    await stream.iteration;
+  });
+
+  it('keeps a running recording on the configuration it started with', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate } = attachRecordingCamera('Synthetic reselected recording camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, connection, { resolution: [1280, 720, 30] });
+    const stream = consumeRecordingStream(delegate, 3);
+    await new Promise((resolve) => setImmediate(resolve));
+    await selectRecordingConfiguration(controller, connection, { resolution: [1920, 1080, 30] });
+    media.sessions[0].push({ data: Buffer.from('final'), last: true });
+    await stream.iteration;
+    expect(media.negotiations).toHaveLength(1);
+    expect(media.negotiations[0].width).toBe(1280);
+
+    const next = consumeRecordingStream(delegate, 4);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[1].width).toBe(1920);
+    media.sessions[1].push({ data: Buffer.from('final'), last: true });
+    await next.iteration;
+  });
+
+  it('stops a recording the controller closed without yielding another packet', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate } = attachRecordingCamera('Synthetic closed recording camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, connection);
+    const stream = consumeRecordingStream(delegate, 9);
+    await new Promise((resolve) => setImmediate(resolve));
+    media.sessions[0].push({ data: Buffer.from('init'), last: false });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    delegate.closeRecordingStream(9, HDSProtocolSpecificErrorReason.NORMAL);
+    await stream.iteration;
+    expect(media.sessions[0].stop).toHaveBeenCalled();
+    expect(stream.packets).toEqual([{ data: Buffer.from('init'), isLast: false }]);
+    expect(stream.failed()).toBe(false);
+  });
+
+  it('stops a recording whose abort signal fires', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate } = attachRecordingCamera('Synthetic aborted recording camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, connection);
+    const abort = new AbortController();
+    const stream = consumeRecordingStream(delegate, 11, abort.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    abort.abort();
+    await stream.iteration;
+    expect(media.sessions[0].stop).toHaveBeenCalled();
+  });
+
+  it('refuses a recording while the admitted enabled observation says the camera is disabled', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { state, camera } = observedCamera(false);
+    const accessory = new Accessory(
+      'Synthetic disabled recording camera',
+      uuid.generate('synthetic-disabled-recording-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    const diagnose = vi.fn();
+    const observed = vi.fn();
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => Object.assign(camera, { recordFragments: vi.fn() }) } as never,
+      evidence: recordingEvidence(enabledEvidence(new Map())),
+      accessory,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      recordingMedia: media.adapter,
+      snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+      diagnose,
+      observed,
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController;
+    await selectRecordingConfiguration(controller, connection);
+
+    const refused = consumeRecordingStream(controller.recordingManagement!.delegate, 21);
+    await refused.iteration;
+    expect(refused.failed()).toBe(true);
+    expect(media.negotiations).toEqual([]);
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-recording-refused'),
+    ).toEqual([
+      {
+        code: 'camera-recording-refused',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: true,
+        reason: 'disabled',
+      },
+    ]);
+
+    state.value = true;
+    const admitted = consumeRecordingStream(controller.recordingManagement!.delegate, 22);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations).toHaveLength(1);
+    expect(observed).toHaveBeenCalledWith('camera-recording-refused');
+    media.sessions[0].push({ data: Buffer.from('final'), last: true });
+    await admitted.iteration;
+  });
+
+  it('latches one recording failure reason and clears it when a later recording produces output', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const { controller, delegate, diagnose, observed } = attachRecordingCamera('Synthetic failing recording camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, connection);
+
+    const failing = consumeRecordingStream(delegate, 31);
+    await new Promise((resolve) => setImmediate(resolve));
+    media.report({ outcome: 'failed', reason: 'no-output-within-backstop' });
+    media.sessions[0].fail(new Error('synthetic adaptation failure'));
+    await failing.iteration;
+    expect(failing.failed()).toBe(true);
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-recording-failed'),
+    ).toEqual([
+      {
+        code: 'camera-recording-failed',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: true,
+        reason: 'no-output-within-backstop',
+      },
+    ]);
+
+    const recovered = consumeRecordingStream(delegate, 32);
+    await new Promise((resolve) => setImmediate(resolve));
+    media.report({ outcome: 'recording' });
+    expect(observed).toHaveBeenCalledWith('camera-recording-failed');
+    media.sessions[1].push({ data: Buffer.from('final'), last: true });
+    await recovered.iteration;
+  });
+
+  it('reports the recording state HomeKit persists without holding a source warm for it', () => {
+    const media = recordingMedia();
+    const { delegate } = attachRecordingCamera('Synthetic recording state camera', { recordingMedia: media.adapter });
+    delegate.updateRecordingActive(true);
+    delegate.updateRecordingConfiguration(undefined);
+    expect(media.negotiations).toEqual([]);
+    expect(media.sessions).toEqual([]);
+  });
+
+  it('refuses a recording after a reconciliation withdraws the camera fragment recording', async () => {
+    const media = recordingMedia();
+    const connection = hapConnection();
+    const accessory = new Accessory(
+      'Synthetic withdrawn recording camera',
+      uuid.generate('synthetic-withdrawn-recording-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    const attach = (evidence: AdapterAttachmentContext['evidence']): void => {
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), recordFragments: vi.fn() }) } as never,
+        evidence,
+        accessory,
+        hap: HAP,
+        liveMedia: { prepare: vi.fn() },
+        recordingMedia: media.adapter,
+        snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+        diagnose: vi.fn(),
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+    };
+    attach(recordingEvidence());
+    const controller = configureController.mock.calls[0][0] as CameraController;
+    const delegate = controller.recordingManagement!.delegate;
+    await selectRecordingConfiguration(controller, connection);
+
+    const running = consumeRecordingStream(delegate, 51);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations).toHaveLength(1);
+
+    attach(new Map());
+    await running.iteration;
+    expect(media.sessions[0].stop).toHaveBeenCalled();
+
+    const refused = consumeRecordingStream(delegate, 52);
+    await refused.iteration;
+    expect(refused.failed()).toBe(true);
+    expect(media.negotiations).toHaveLength(1);
+  });
+
+  it('refuses a recording stream before any configuration has been selected', async () => {
+    const media = recordingMedia();
+    const { delegate } = attachRecordingCamera('Synthetic unconfigured recording camera', {
+      recordingMedia: media.adapter,
+    });
+    const stream = consumeRecordingStream(delegate, 41);
+    await stream.iteration;
+    expect(stream.failed()).toBe(true);
+    expect(media.negotiations).toEqual([]);
   });
 });

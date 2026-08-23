@@ -3,19 +3,22 @@ import { createSocket } from 'node:dgram';
 import { spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
-const PROCESS_STOP_GRACE_MS = 2_000;
+/** How long a deliberately stopped adaptation process is given to exit before it is killed. */
+export const PROCESS_STOP_GRACE_MS = 2_000;
 const INITIAL_RTCP_GRACE_MS = 15_000;
 const SOURCE_ACQUISITION_DEADLINE_MS = 10_000;
 /**
- * Backstop for a started session that never produces video. The SDK live source owns the warm-up
- * window, retries the start inside it, and fails its consumers with a typed `error` event, which is
- * the primary failure signal here; that window is an SDK-internal default the plugin cannot read, so
- * this bound sits strictly above it and only catches an SDK that reports nothing at all.
+ * Backstop for a started media session that never produces adapted output. The SDK source owns the
+ * warm-up window, retries the start inside it, and fails its consumers with a typed `error` event, which
+ * is the primary failure signal for both live and recording sessions; that window is an SDK-internal
+ * default the plugin cannot read, so this bound sits strictly above it and only catches an SDK that
+ * reports nothing at all.
  */
-const VIDEO_START_BACKSTOP_MS = 30_000;
+export const SOURCE_START_BACKSTOP_MS = 30_000;
 const SOURCE_ACQUISITION_TIMEOUT = Symbol('source-acquisition-timeout');
 
-export interface LiveMediaProcess {
+/** One adaptation process, in the terms every adapted media session controls it by. */
+export interface MediaProcess {
   readonly stdin: Writable;
   readonly stderr: Readable;
   on(event: 'error', listener: (error: Error) => void): unknown;
@@ -29,7 +32,7 @@ export interface ReservedMediaPort {
   close(): void;
 }
 
-export type LiveMediaProcessFactory = (executable: string, args: readonly string[]) => LiveMediaProcess;
+export type LiveMediaProcessFactory = (executable: string, args: readonly string[]) => MediaProcess;
 export type MediaPortFactory = (addressVersion: 'ipv4' | 'ipv6') => Promise<ReservedMediaPort>;
 
 export interface LiveMediaTransport {
@@ -126,8 +129,8 @@ export class FfmpegLiveMedia {
     }
 
     let source: LiveStreamHandle | undefined;
-    let videoProcess: LiveMediaProcess | undefined;
-    let audioProcess: LiveMediaProcess | undefined;
+    let videoProcess: MediaProcess | undefined;
+    let audioProcess: MediaProcess | undefined;
     let negotiated: NegotiatedLiveMedia | undefined;
     let stopped = false;
     let receivedVideoKeyframe = false;
@@ -142,7 +145,7 @@ export class FfmpegLiveMedia {
     let streaming = false;
     const stoppingProcesses = new WeakSet<object>();
 
-    const stopProcess = (process: LiveMediaProcess | undefined): void => {
+    const stopProcess = (process: MediaProcess | undefined): void => {
       if (!process) {
         return;
       }
@@ -203,7 +206,7 @@ export class FfmpegLiveMedia {
      * much it keeps reporting: FFmpeg reports progress on a timer whether or not new media reaches it, so
      * only the adaptation that carries the current selection can say that selection is being served.
      */
-    const observeAdaptationProgress = (reporter: LiveMediaProcess): void => {
+    const observeAdaptationProgress = (reporter: MediaProcess): void => {
       if (stopped || (reconfigurationPending && reporter === videoProcess)) {
         return;
       }
@@ -359,7 +362,7 @@ export class FfmpegLiveMedia {
           source.stop();
           return;
         }
-        videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), VIDEO_START_BACKSTOP_MS);
+        videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), SOURCE_START_BACKSTOP_MS);
         videoStartBackstop.unref?.();
         source.on('video', writeVideo);
         source.on('audio', writeAudio);
@@ -386,7 +389,7 @@ export class FfmpegLiveMedia {
         negotiated = { ...negotiated, video };
         reconfigurationPending = videoProcess !== undefined;
         clearTimeout(videoStartBackstop);
-        videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), VIDEO_START_BACKSTOP_MS);
+        videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), SOURCE_START_BACKSTOP_MS);
         videoStartBackstop.unref?.();
       },
       stop,
@@ -539,7 +542,7 @@ function audioArguments(
   ];
 }
 
-function spawnLiveMediaProcess(executable: string, args: readonly string[]): LiveMediaProcess {
+function spawnLiveMediaProcess(executable: string, args: readonly string[]): MediaProcess {
   return spawn(executable, args, { stdio: ['pipe', 'ignore', 'pipe'] });
 }
 

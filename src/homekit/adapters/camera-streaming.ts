@@ -1,9 +1,12 @@
 import type { CameraActions } from '@mega-yfue/eufy-sdk';
 import type {
   CameraController,
+  CameraRecordingConfiguration,
+  CameraRecordingDelegate,
   CameraStreamingDelegate,
   PrepareStreamCallback,
   PrepareStreamRequest,
+  RecordingPacket,
   StartStreamRequest,
   StreamingRequest,
   StreamRequestCallback,
@@ -11,13 +14,19 @@ import type {
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
 import type {
+  AdaptedRecording,
   AdapterAttachmentContext,
   AttachedAdapter,
   HomeKitAdapter,
+  HomeKitDefinitions,
   LiveMediaAdapter,
   LiveSessionOutcome,
   NegotiatedLiveVideo,
+  NegotiatedRecordedAudio,
+  NegotiatedRecording,
   PreparedLiveMedia,
+  RecordingMediaAdapter,
+  RecordingOutcome,
   SnapshotMediaAdapter,
   SnapshotMode,
 } from '../adapter.js';
@@ -27,6 +36,20 @@ export const CAMERA_STREAMING_ADAPTER_KEY = 'camera.streaming';
 const CAMERA_LIVE_SESSION_CONDITION = 'camera-live-session-failed';
 const CAMERA_LIVE_REFUSED_CONDITION = 'camera-live-session-refused';
 const CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION = 'camera-snapshot-unavailable';
+const CAMERA_RECORDING_UNAVAILABLE_CONDITION = 'camera-recording-unavailable';
+const CAMERA_RECORDING_FAILED_CONDITION = 'camera-recording-failed';
+const CAMERA_RECORDING_REFUSED_CONDITION = 'camera-recording-refused';
+
+/**
+ * The pre-event media window this camera advertises, in milliseconds. HomeKit requires an accessory to
+ * advertise at least four seconds, so this is the floor rather than a choice; retaining it is a separate
+ * eligibility policy that only an already-warm wired source can satisfy, so a recording adapted here
+ * begins at its trigger until that policy exists.
+ */
+const RECORDING_PREBUFFER_MS = 4_000;
+
+/** The fragment length this camera advertises, which is the value HomeKit Secure Video cameras use. */
+const RECORDING_FRAGMENT_LENGTH_MS = 4_000;
 
 /**
  * The exact enablement observation a live session is admitted against. The row itself belongs to the
@@ -55,10 +78,14 @@ const CAMERA_SNAPSHOT_LIVE = {
   id: 'camera.snapshotLive.momentary-action',
   kind: 'momentary-action',
 } as const;
+const CAMERA_RECORD_FRAGMENTS = {
+  id: 'camera.recordFragments.momentary-action',
+  kind: 'momentary-action',
+} as const;
 const CAMERA_STREAMING_OWNERS = new WeakMap<object, symbol>();
 const CAMERA_STREAMING_STATES = new WeakMap<
   object,
-  { owner: symbol; controller: CameraController; delegate: LiveCameraDelegate }
+  { owner: symbol; controller: CameraController; delegate: LiveCameraDelegate; recording?: RecordingCameraDelegate }
 >();
 
 /** The typed SDK camera media accessor consumed by the live bundle. */
@@ -242,6 +269,149 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
       ],
     },
+    {
+      id: CAMERA_RECORD_FRAGMENTS.id,
+      hapFit:
+        'Official Camera Recording Management transports negotiated fragmented MP4 recordings over a HomeKit Data Stream, honouring the selected profile, level, geometry, frame rate, bit rate, keyframe cadence, fragment length, AAC-ELD audio, and recording-audio state',
+      identityEffect:
+        'Recording adds the official recording management, operating mode, and data stream services to the stable camera controller without creating another accessory or service key',
+      diagnostics:
+        "A camera with no evidenced fragment recording or no recording adaptation is omitted from HomeKit Secure Video with one bounded reason rather than advertising a recording it cannot produce, a reconciliation that withdraws the member refuses later recordings instead of serving them from a withdrawn source, a recording that produces no usable output latches one bounded reason until a later recording produces some, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport. The advertised pre-event window is HomeKit's own four-second minimum rather than a claim: retaining it requires an eligibility policy this row does not own, so a recording begins at its trigger",
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'advertises the fragmented MP4 container, prebuffer, and motion trigger a recording may select',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'omits HomeKit Secure Video for a camera with no evidenced fragment recording',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'adapts a recording to exactly the configuration a controller selected',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'records no audio while HomeKit withdraws recording audio',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'records no audio for a camera whose audio the user turned off',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'keeps a running recording on the configuration it started with',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'stops a recording the controller closed without yielding another packet',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'stops a recording whose abort signal fires',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'refuses a recording while the admitted enabled observation says the camera is disabled',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'latches one recording failure reason and clears it when a later recording produces output',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'reports the recording state HomeKit persists without holding a source warm for it',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'refuses a recording after a reconciliation withdraws the camera fragment recording',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'refuses a recording stream before any configuration has been selected',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'transcodes source fragments into the negotiated profile, level, geometry, and bit rate',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'fragments the output on forced keyframes no further apart than the selected fragment length',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'codes a keyframe at the selected i-frame interval when it is shorter than a fragment',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'asks for a keyframe one frame before the fragment a boundary can only land on a frame of',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'bounds the recorded frame rate without duplicating frames the source never sent',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'requests source fragments short enough not to delay output behind captured media',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'emits the initialization segment as its own first output unit',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'emits each moof and mdat pair as one fragment and never a box between recordings',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'marks the final fragment last only once the source has ended',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'ends a recording whose adaptation never flushes what the ended source already gave it',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'degrades to a video-only recording when the source carries no audio track',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'records no audio at all when the negotiated recording carries none',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'requests AAC-ELD at the negotiated recording sample rate and channel count',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'stops the source and its adaptation promptly when a recording is cancelled',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'stops the source and its adaptation when its consumer stops iterating',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'extends a source media budget only while the recording is being consumed',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'fails a recording that produces no output within the backstop',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'fails a recording whose adaptation exits before its source ends',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'fails a recording whose source reports an error',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'fails a recording the source exposes no fragment recording for',
+        },
+      ],
+    },
   ],
   attach: attachCameraStreaming,
 } as const satisfies HomeKitAdapter;
@@ -284,10 +454,27 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const requiresLive = snapshotMode === 'Live' || (snapshotMode === 'Refresh' && !storedAvailable);
   context.diagnose(snapshotUnavailable(requiresStored && storedReason !== 'recovered', 'snapshotStored', storedReason));
   context.diagnose(snapshotUnavailable(requiresLive && liveReason !== 'recovered', 'snapshotLive', liveReason));
+  const recordingEvidence = context.evidence.has(CAMERA_RECORD_FRAGMENTS.id);
+  const recordingAvailable = recordingEvidence && typeof camera.recordFragments === 'function';
+  const recordingConfigured = recordingAvailable && context.recordingMedia !== undefined;
+  context.diagnose({
+    code: CAMERA_RECORDING_UNAVAILABLE_CONDITION,
+    capability: 'camera',
+    member: 'recordFragments',
+    active: !recordingConfigured,
+    reason: recordingConfigured
+      ? 'recovered'
+      : !recordingEvidence
+        ? 'missing-evidence'
+        : !recordingAvailable
+          ? 'missing'
+          : 'adapter-missing',
+  });
   const source: CameraMediaSource = {
     live: camera.live.bind(camera),
     ...(storedAvailable ? { snapshotStored: camera.snapshotStored!.bind(camera) } : {}),
     ...(liveAvailable ? { snapshotLive: camera.snapshotLive!.bind(camera) } : {}),
+    ...(recordingAvailable ? { recordFragments: camera.recordFragments!.bind(camera) } : {}),
   };
   const existing = CAMERA_STREAMING_STATES.get(context.accessory);
   const owner = Symbol('camera-streaming-owner');
@@ -302,14 +489,26 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
   };
+  const recordingBinding: RecordingCameraBinding | undefined = recordingConfigured
+    ? {
+        source,
+        media: context.recordingMedia!,
+        audioEnabled: context.audioEnabled !== false,
+        enablement: binding.enablement,
+        reportRecording: recordingReporter(context),
+        reportAdmission: cameraRecordingCondition(context, CAMERA_RECORDING_REFUSED_CONDITION),
+      }
+    : undefined;
   if (existing) {
     existing.owner = owner;
     existing.delegate.update(binding);
+    existing.recording?.update(recordingBinding);
     CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
-    return attachment(context, existing.controller, existing.delegate, owner);
+    return attachment(context, existing.controller, existing.delegate, existing.recording, owner);
   }
 
   const delegate = new LiveCameraDelegate(device.sn, binding, context.hap);
+  const recording = recordingConfigured ? new RecordingCameraDelegate(recordingBinding, context.hap) : undefined;
   const controller = new context.hap.CameraController(
     {
       cameraStreamCount: 2,
@@ -346,20 +545,77 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
               },
             }),
       },
+      ...(recording ? { recording: { options: recordingOptions(context), delegate: recording } } : {}),
     },
     true,
   );
   delegate.controller = controller;
   context.accessory.configureController(controller);
-  CAMERA_STREAMING_STATES.set(context.accessory, { owner, controller, delegate });
+  if (recording) {
+    recording.recordingManagement = controller.recordingManagement;
+  }
+  CAMERA_STREAMING_STATES.set(context.accessory, {
+    owner,
+    controller,
+    delegate,
+    ...(recording ? { recording } : {}),
+  });
   CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
-  return attachment(context, controller, delegate, owner);
+  return attachment(context, controller, delegate, recording, owner);
+}
+
+/**
+ * What this camera advertises as recordable.
+ *
+ * The motion trigger is declared rather than derived from a sensor service, because the camera's motion
+ * representation is owned by the detection adapter on the same accessory container and letting the
+ * controller create its own sensor would put a second motion service on it. Doorbell triggers are not
+ * declared: HomeKit home hubs do not enable them, so advertising one would claim behaviour no controller
+ * will ever exercise.
+ *
+ * Only the resolutions and rates a recording can actually be coded at are advertised, and only AAC-ELD,
+ * so a controller cannot select a contract the adaptation would then have to approximate.
+ */
+function recordingOptions(context: AdapterAttachmentContext) {
+  const { hap } = context;
+  return {
+    prebufferLength: RECORDING_PREBUFFER_MS,
+    overrideEventTriggerOptions: [hap.EventTriggerOption.MOTION],
+    mediaContainerConfiguration: {
+      type: hap.MediaContainerType.FRAGMENTED_MP4,
+      fragmentLength: RECORDING_FRAGMENT_LENGTH_MS,
+    },
+    video: {
+      type: hap.VideoCodecType.H264,
+      parameters: {
+        profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
+        levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0],
+      },
+      resolutions: [
+        [1280, 720, 15],
+        [1280, 720, 30],
+        [1920, 1080, 15],
+        [1920, 1080, 30],
+      ] as [number, number, number][],
+    },
+    audio: {
+      codecs: [
+        {
+          type: hap.AudioRecordingCodecType.AAC_ELD,
+          audioChannels: 1,
+          bitrateMode: hap.AudioBitrate.VARIABLE,
+          samplerate: [hap.AudioRecordingSamplerate.KHZ_16, hap.AudioRecordingSamplerate.KHZ_24],
+        },
+      ],
+    },
+  };
 }
 
 function attachment(
   context: AdapterAttachmentContext,
   controller: CameraController,
   delegate: LiveCameraDelegate,
+  recording: RecordingCameraDelegate | undefined,
   owner: symbol,
 ): AttachedAdapter {
   return {
@@ -370,6 +626,7 @@ function attachment(
       CAMERA_STREAMING_OWNERS.delete(context.accessory);
       CAMERA_STREAMING_STATES.delete(context.accessory);
       delegate.stop();
+      recording?.stop();
       context.accessory.removeController(controller);
     },
   };
@@ -423,6 +680,19 @@ function cameraLiveCondition(context: AdapterAttachmentContext, code: string): (
   return cameraCondition(context, code, 'live');
 }
 
+function cameraRecordingCondition(context: AdapterAttachmentContext, code: string): (reason?: string) => void {
+  return cameraCondition(context, code, 'recordFragments');
+}
+
+/**
+ * Latches why the most recent recording produced no usable output and clears that condition once a later
+ * recording produces some.
+ */
+function recordingReporter(context: AdapterAttachmentContext): (outcome: RecordingOutcome) => void {
+  const condition = cameraRecordingCondition(context, CAMERA_RECORDING_FAILED_CONDITION);
+  return (outcome) => condition(outcome.outcome === 'recording' ? undefined : outcome.reason);
+}
+
 /**
  * Reads whether this camera is enabled, or nothing at all when it has no such observation.
  *
@@ -457,6 +727,7 @@ interface CameraMediaSource {
   live(): ReturnType<NonNullable<CameraActions['live']>>;
   snapshotStored?(): ReturnType<NonNullable<CameraActions['snapshotStored']>>;
   snapshotLive?(): ReturnType<NonNullable<CameraActions['snapshotLive']>>;
+  recordFragments?(options?: { fragmentSeconds?: number }): ReturnType<NonNullable<CameraActions['recordFragments']>>;
 }
 
 /** Why live view is unavailable for a camera an admitted observation reports as disabled. */
@@ -753,19 +1024,201 @@ function mediaTarget(source: PrepareStreamRequest['video'], hap: AdapterAttachme
 function negotiatedVideo(
   video: StartStreamRequest['video'],
   ssrc: number,
-  hap: AdapterAttachmentContext['hap'],
+  hap: HomeKitDefinitions,
 ): NegotiatedLiveVideo {
   return {
     width: video.width,
     height: video.height,
     fps: video.fps,
     maxBitRate: video.max_bit_rate,
-    profile:
-      video.profile === hap.H264Profile.HIGH ? 'high' : video.profile === hap.H264Profile.MAIN ? 'main' : 'baseline',
-    level: video.level === hap.H264Level.LEVEL4_0 ? '4.0' : video.level === hap.H264Level.LEVEL3_2 ? '3.2' : '3.1',
+    profile: h264Profile(video.profile, hap),
+    level: h264Level(video.level, hap),
     payloadType: video.pt,
     ssrc,
     mtu: video.mtu,
     rtcpInterval: video.rtcp_interval,
   };
+}
+
+function h264Profile(profile: number, hap: HomeKitDefinitions): 'baseline' | 'main' | 'high' {
+  return profile === hap.H264Profile.HIGH ? 'high' : profile === hap.H264Profile.MAIN ? 'main' : 'baseline';
+}
+
+function h264Level(level: number, hap: HomeKitDefinitions): '3.1' | '3.2' | '4.0' {
+  return level === hap.H264Level.LEVEL4_0 ? '4.0' : level === hap.H264Level.LEVEL3_2 ? '3.2' : '3.1';
+}
+
+/** Why a recording was refused before any transport was opened. */
+type RecordingAdmissionRefusal = 'disabled';
+
+/** Everything one attachment supplies to the stable recording delegate, rebound on each reconciliation. */
+interface RecordingCameraBinding {
+  readonly source: CameraMediaSource;
+  readonly media: RecordingMediaAdapter;
+  readonly audioEnabled: boolean;
+  readonly enablement: () => boolean | undefined;
+  readonly reportRecording: (outcome: RecordingOutcome) => void;
+  readonly reportAdmission: (refusal?: RecordingAdmissionRefusal) => void;
+}
+
+/**
+ * Owns HomeKit Secure Video negotiation while delegating fragment adaptation to the media domain.
+ *
+ * Nothing is held between recordings. HomeKit persists whether recording is active and which
+ * configuration was selected, and this delegate keeps both only so that a recording request can be
+ * answered; it never keeps a source warm to build pre-event media, because doing so would spend a battery
+ * camera's power on media no eligibility policy has admitted yet.
+ */
+class RecordingCameraDelegate implements CameraRecordingDelegate {
+  recordingManagement?: CameraController['recordingManagement'];
+  private configuration?: CameraRecordingConfiguration;
+  private readonly streams = new Map<number, AdaptedRecording>();
+  private refused = false;
+
+  constructor(
+    private binding: RecordingCameraBinding | undefined,
+    private readonly hap: HomeKitDefinitions,
+  ) {}
+
+  /**
+   * Rebinds this delegate to the current attachment, or withdraws it.
+   *
+   * A reconciliation that no longer admits recording leaves the HomeKit services in place, because a
+   * controller's services are fixed when it is configured, so withdrawal is expressed by refusing
+   * recordings rather than by continuing to serve them from a source this accessory no longer has. Any
+   * recording still running is stopped, since its source went with the binding that opened it.
+   */
+  update(binding: RecordingCameraBinding | undefined): void {
+    this.binding = binding;
+    if (!binding) {
+      this.stop();
+    }
+  }
+
+  /**
+   * HomeKit's recording-active state needs nothing of this delegate. It exists so a camera can start or
+   * stop maintaining pre-event media, and this camera maintains none, so a recording request is answered
+   * from a cold source whenever HomeKit makes one.
+   */
+  updateRecordingActive(): void {}
+
+  updateRecordingConfiguration(configuration: CameraRecordingConfiguration | undefined): void {
+    this.configuration = configuration;
+  }
+
+  /**
+   * Streams one recording as the units its adaptation produces.
+   *
+   * The configuration is read once, so a selection HomeKit changes mid-recording applies to the next
+   * recording rather than to this one. Cancellation arrives three ways — an aborted signal, a closed
+   * stream, or a consumer that stops iterating — and every one of them reaches the same single stop, so
+   * the SDK handle and the adaptation are released once however the recording ended.
+   */
+  async *handleRecordingStreamRequest(streamId: number, signal?: AbortSignal): AsyncGenerator<RecordingPacket> {
+    const binding = this.binding;
+    const configuration = this.configuration;
+    if (!binding || !configuration || !binding.source.recordFragments) {
+      throw new this.hap.HDSProtocolError(this.hap.HDSProtocolSpecificErrorReason.INVALID_CONFIGURATION);
+    }
+    if (binding.enablement() === false) {
+      this.refused = true;
+      binding.reportAdmission('disabled');
+      throw new this.hap.HDSProtocolError(this.hap.HDSProtocolSpecificErrorReason.NOT_ALLOWED);
+    }
+    if (this.refused) {
+      this.refused = false;
+      binding.reportAdmission();
+    }
+    const recording = binding.media.record(binding.source, this.negotiated(binding, configuration), {
+      onOutcome: (outcome) => binding.reportRecording(outcome),
+    });
+    this.streams.set(streamId, recording);
+    const abort = (): void => recording.stop();
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      for await (const fragment of recording) {
+        yield { data: fragment.data, isLast: fragment.last };
+        if (fragment.last) {
+          return;
+        }
+      }
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      recording.stop();
+      this.streams.delete(streamId);
+    }
+  }
+
+  acknowledgeStream(streamId: number): void {
+    this.closeRecordingStream(streamId);
+  }
+
+  closeRecordingStream(streamId: number): void {
+    this.streams.get(streamId)?.stop();
+    this.streams.delete(streamId);
+  }
+
+  stop(): void {
+    for (const streamId of [...this.streams.keys()]) {
+      this.closeRecordingStream(streamId);
+    }
+  }
+
+  /**
+   * Translates one selected HomeKit recording configuration into the media domain's vocabulary.
+   *
+   * Audio is withheld whenever HomeKit's own recording-audio state is off, whenever the user turned this
+   * camera's audio off, and whenever a controller selected a codec this camera never advertised, because
+   * a recording with no audio track is the truthful answer in all three cases and a substituted codec
+   * would not be.
+   */
+  private negotiated(
+    binding: RecordingCameraBinding,
+    configuration: CameraRecordingConfiguration,
+  ): NegotiatedRecording {
+    const [width, height, fps] = configuration.videoCodec.resolution;
+    const audio = this.recordedAudio(binding, configuration);
+    return {
+      width,
+      height,
+      fps,
+      maxBitRate: configuration.videoCodec.parameters.bitRate,
+      profile: h264Profile(configuration.videoCodec.parameters.profile, this.hap),
+      level: h264Level(configuration.videoCodec.parameters.level, this.hap),
+      iFrameIntervalMs: configuration.videoCodec.parameters.iFrameInterval,
+      fragmentLengthMs: configuration.mediaContainerConfiguration.fragmentLength,
+      ...(audio ? { audio } : {}),
+    };
+  }
+
+  private recordedAudio(
+    binding: RecordingCameraBinding,
+    configuration: CameraRecordingConfiguration,
+  ): NegotiatedRecordedAudio | undefined {
+    if (!binding.audioEnabled || !this.recordingAudioActive()) {
+      return undefined;
+    }
+    if (configuration.audioCodec.type !== this.hap.AudioRecordingCodecType.AAC_ELD) {
+      return undefined;
+    }
+    return {
+      codec: 'AAC-eld',
+      channels: configuration.audioCodec.audioChannels ?? 1,
+      sampleRate: configuration.audioCodec.samplerate === this.hap.AudioRecordingSamplerate.KHZ_24 ? 24 : 16,
+      maxBitRate: configuration.audioCodec.bitrate,
+    };
+  }
+
+  /**
+   * Whether HomeKit currently wants recorded audio. The characteristic lives on the recording management
+   * service rather than the operating mode service, and an accessory starts with it off, so a recording
+   * carries no audio until a controller asks for it.
+   */
+  private recordingAudioActive(): boolean {
+    const service = this.recordingManagement?.recordingManagementService;
+    if (!service) {
+      return false;
+    }
+    return Boolean(service.getCharacteristic(this.hap.Characteristic.RecordingAudioActive).value);
+  }
 }

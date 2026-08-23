@@ -9,6 +9,7 @@ import type {
   AttachedAdapter,
   HomeKitDefinitions,
   LiveMediaAdapter,
+  RecordingMediaAdapter,
   SnapshotMediaAdapter,
   SnapshotMode,
 } from './adapter.js';
@@ -101,6 +102,7 @@ export class HomeKitReconciler {
     private readonly entityPreferences: HomeKitEntityPreferences = {},
     private readonly liveMedia?: LiveMediaAdapter,
     private readonly snapshotMedia?: SnapshotMediaAdapter,
+    private readonly recordingMedia?: RecordingMediaAdapter,
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -184,6 +186,7 @@ export class HomeKitReconciler {
           accessory,
           hap: this.store.hap,
           liveMedia: this.liveMedia,
+          recordingMedia: this.recordingMedia,
           snapshotMedia: this.snapshotMedia,
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
           snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
