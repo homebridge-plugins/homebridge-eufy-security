@@ -1281,6 +1281,29 @@ describe('camera streaming bundle adapter', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('stops camera media without removing its controller during process shutdown', () => {
+    const target = new Accessory(
+      'Synthetic shutdown camera',
+      uuid.generate('synthetic-shutdown-camera'),
+    ) as unknown as PlatformAccessory;
+    const removeController = vi.spyOn(target, 'removeController');
+    const attachment = CAMERA_STREAMING_ADAPTER.attach({
+      device: { camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    });
+
+    attachment?.detach?.('shutdown');
+
+    expect(removeController).not.toHaveBeenCalled();
+  });
+
   it('holds a prepared session that never starts until its HAP connection closes', async () => {
     const target = new Accessory(
       'Synthetic idle camera',

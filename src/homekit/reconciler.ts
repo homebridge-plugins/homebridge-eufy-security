@@ -9,7 +9,13 @@ import type {
   SnapshotMediaAdapter,
   SnapshotMode,
 } from '../media/contracts.js';
-import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
+import type {
+  AdapterDetachmentReason,
+  AdapterDiagnostic,
+  AdapterEventTrace,
+  AttachedAdapter,
+  HomeKitDefinitions,
+} from './adapter.js';
 import { admittedHomeKitAdapters } from './representation.js';
 
 /** One complete canonical registry and snapshot published from the same discovery pass. */
@@ -129,7 +135,7 @@ export class HomeKitReconciler {
     this.unsubscribeRegistry = undefined;
     this.unsubscribeEvents = undefined;
     for (const serial of this.attachedAdapters.keys()) {
-      this.detachAdapters(serial);
+      this.detachAdapters(serial, 'shutdown');
     }
     this.lastPublication = undefined;
   }
@@ -281,18 +287,21 @@ export class HomeKitReconciler {
     }
   }
 
-  private detachAdapters(serial: string): void {
+  private detachAdapters(serial: string, reason: AdapterDetachmentReason = 'withdrawal'): void {
     const handles = this.attachedAdapters.get(serial);
-    this.detachHandles(handles);
+    this.detachHandles(handles, reason);
     this.attachedAdapters.delete(serial);
   }
 
-  private detachHandles(handles: ReadonlyMap<string, AttachedAdapter> | undefined): void {
+  private detachHandles(
+    handles: ReadonlyMap<string, AttachedAdapter> | undefined,
+    reason: AdapterDetachmentReason = 'withdrawal',
+  ): void {
     if (!handles) {
       return;
     }
     for (const handle of handles.values()) {
-      handle.detach?.();
+      handle.detach?.(reason);
     }
   }
 
@@ -305,7 +314,7 @@ export class HomeKitReconciler {
     }
     for (const [key, handle] of previous) {
       if (next.get(key) !== handle) {
-        handle.detach?.();
+        handle.detach?.('replacement');
       }
     }
   }

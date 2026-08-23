@@ -907,6 +907,29 @@ describe('HomeKit registry reconciliation', () => {
     expect(nearMissRecording.registerPlatformAccessories).not.toHaveBeenCalled();
   });
 
+  it('preserves configured camera controllers when Homebridge shuts down', () => {
+    const serial = 'synthetic-shutdown-camera';
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const reconciler = new HomeKitReconciler(source, recording.api, vi.fn(), [], undefined, {}, {
+      prepare: vi.fn(),
+    } as never);
+    reconciler.start();
+    source.publish(
+      registryView(
+        1,
+        new Map([[serial, { camera: () => ({ live: async () => ({}) }) } as unknown as Device]]),
+        snapshot(cameraLiveManifest(serial)),
+      ),
+    );
+    const accessory = recording.registerPlatformAccessories.mock.calls[0]![0][0] as PlatformAccessory;
+    const removeController = vi.spyOn(accessory, 'removeController');
+
+    reconciler.stop();
+
+    expect(removeController).not.toHaveBeenCalled();
+  });
+
   it('withdraws a historically owned cached accessory only from a later complete snapshot', () => {
     const source = new RegistrySource();
     const recording = recordingApi();

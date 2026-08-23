@@ -70,10 +70,13 @@ export interface AdapterAttachmentContext {
   persist(): void;
 }
 
+/** Why an attachment is releasing runtime work; shutdown preserves HomeKit's persisted service state. */
+export type AdapterDetachmentReason = 'replacement' | 'withdrawal' | 'shutdown';
+
 /** Successful attachment state, optionally retaining typed SDK event behavior. */
 export interface AttachedAdapter {
   event?(event: AnyDeviceEvent): AdapterEventTrace | undefined;
-  detach?(): void;
+  detach?(reason?: AdapterDetachmentReason): void;
 }
 
 /** HomeKit policy and executable evidence owned by one represented SDK member. */

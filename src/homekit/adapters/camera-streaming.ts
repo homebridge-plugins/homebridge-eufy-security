@@ -32,7 +32,13 @@ import type {
 } from '../../media/contracts.js';
 import { hasAdmittedDoorbellPress } from './doorbell.js';
 import { hasAdmittedMotionEvents, motionSensorService } from './motion.js';
-import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter, HomeKitDefinitions } from '../adapter.js';
+import type {
+  AdapterAttachmentContext,
+  AdapterDetachmentReason,
+  AttachedAdapter,
+  HomeKitAdapter,
+  HomeKitDefinitions,
+} from '../adapter.js';
 
 export const CAMERA_STREAMING_ADAPTER_KEY = 'camera.streaming';
 
@@ -687,14 +693,17 @@ function attachment(
   owner: symbol,
 ): AttachedAdapter {
   return {
-    detach(): void {
+    detach(reason?: AdapterDetachmentReason): void {
       if (CAMERA_STREAMING_OWNERS.get(context.accessory) !== owner) {
+        return;
+      }
+      delegate.stop();
+      recording?.stop();
+      if (reason === 'shutdown') {
         return;
       }
       CAMERA_STREAMING_OWNERS.delete(context.accessory);
       CAMERA_STREAMING_STATES.delete(context.accessory);
-      delegate.stop();
-      recording?.stop();
       context.accessory.removeController(controller);
     },
   };

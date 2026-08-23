@@ -162,6 +162,10 @@ adapters. HomeKit may import only that file from `media/`; the platform composit
 implementations. This gives negotiation, source, lifecycle, and output vocabulary one owner without allowing
 camera adapters to depend on FFmpeg implementations or embed independent process and cleanup policies.
 
+A process shutdown stops active media but does not remove a configured camera controller. Removing the
+controller is reserved for genuine capability or accessory withdrawal because HAP treats removal as a factory
+reset and deletes the controller-selected recording configuration.
+
 A live session is bounded by whichever domain owns the phase. The SDK owns source warm-up: it retries a
 start inside its own window and fails its consumers with a typed error, which the plugin already
 subscribes to, so that error is the primary failure signal for a source that never produces video. The
