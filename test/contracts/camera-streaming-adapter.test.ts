@@ -2450,6 +2450,25 @@ describe('camera recording bundle adapter', () => {
     await stream.iteration;
   });
 
+  it('opens a mains-powered live snapshot with the same pre-event window as live view', async () => {
+    const snapshotLive = vi.fn(async () => ({
+      jpeg: jpeg('synthetic prebuffered snapshot'),
+      width: 1280,
+      height: 720,
+    }));
+    const { controller } = attachRecordingCamera('Synthetic prebuffered snapshot camera', {
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ live: vi.fn(), snapshotLive, recordFragments: vi.fn() }),
+      } as never,
+      evidence: recordingEvidence(snapshotEvidence('snapshotLive')),
+    });
+
+    await callSnapshot((controller as { delegate: CameraStreamingDelegate }).delegate);
+
+    expect(snapshotLive).toHaveBeenCalledWith({ preBufferSeconds: 4 });
+  });
+
   it('never retains pre-event media for a battery or solar camera', async () => {
     const media = recordingMedia();
     const streaming = liveMedia();
@@ -2482,6 +2501,29 @@ describe('camera recording bundle adapter', () => {
     await stream.iteration;
   });
 
+  it('opens a battery or solar live snapshot without a pre-event window', async () => {
+    const snapshotLive = vi.fn(async () => ({ jpeg: jpeg('synthetic battery snapshot'), width: 1280, height: 720 }));
+    const { controller } = attachRecordingCamera('Synthetic battery snapshot camera', {
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ live: vi.fn(), snapshotLive, recordFragments: vi.fn() }),
+      } as never,
+      evidence: recordingEvidence(
+        new Map([
+          ...snapshotEvidence('snapshotLive'),
+          [
+            'battery.level.read',
+            { id: 'battery.level.read', kind: 'read' as const, type: 'number' as const, writable: false },
+          ],
+        ]),
+      ),
+    });
+
+    await callSnapshot((controller as { delegate: CameraStreamingDelegate }).delegate);
+
+    expect(snapshotLive).toHaveBeenCalledWith(undefined);
+  });
+
   it('retains no pre-event media for a camera with no recording to drain it', async () => {
     const accessory = new Accessory(
       'Synthetic unrecorded prebuffer camera',
@@ -2490,12 +2532,15 @@ describe('camera recording bundle adapter', () => {
     const configureController = vi.spyOn(accessory, 'configureController');
     const streaming = liveMedia();
     const live = vi.fn();
+    const snapshotLive = vi.fn(async () => ({ jpeg: jpeg('synthetic unrecorded snapshot'), width: 1280, height: 720 }));
     CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live, recordFragments: vi.fn() }) } as never,
-      evidence: recordingEvidence(),
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live, snapshotLive, recordFragments: vi.fn() }) } as never,
+      evidence: recordingEvidence(snapshotEvidence('snapshotLive')),
       accessory,
       hap: HAP,
       liveMedia: streaming.adapter,
+      snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+      snapshotMode: 'Refresh',
       audioEnabled: false,
       diagnose: vi.fn(),
       observed: vi.fn(),
@@ -2509,6 +2554,8 @@ describe('camera recording bundle adapter', () => {
     await startLiveSession(controller.delegate, 'synthetic-unrecorded-prebuffer-session');
     await streaming.started[0].live();
     expect(live).toHaveBeenCalledWith(undefined);
+    await callSnapshot(controller.delegate);
+    expect(snapshotLive).toHaveBeenCalledWith(undefined);
   });
 
   it('asks for no more pre-event media than the window the camera retains', async () => {

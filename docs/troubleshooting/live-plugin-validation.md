@@ -121,15 +121,15 @@ camera acceptance does not depend on adding a bridge in the Home app. Each scrip
 prerequisites and options in its file header; all of them need a Homebridge instance that is **not** paired
 to any controller and a `hap-controller` module installed outside this repository.
 
-| Script | What it qualifies |
-| --- | --- |
-| `live-hap-snapshot-check.mjs` | HomeKit snapshot requests, retained image policy, and on-disk modes |
-| `live-hap-stream-check.mjs` | Negotiated live streaming, measured on the decrypted wire |
-| `live-hap-codec-matrix-check.mjs` | One session per advertised profile and level, judged for exact coded fidelity |
-| `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it |
-| `live-hap-disabled-camera-check.mjs` | Live view, snapshots, and recovery for a camera that is turned off |
-| `live-hap-capture.mjs` | One MP4 and still per camera when a maintainer must look at a frame |
-| `live-hksv-check.mjs` | Negotiated HomeKit Secure Video output, measured on the adapted fragments |
+| Script                                | What it qualifies                                                             |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| `live-hap-snapshot-check.mjs`         | HomeKit snapshot requests, retained image policy, and on-disk modes           |
+| `live-hap-stream-check.mjs`           | Negotiated live streaming, measured on the decrypted wire                     |
+| `live-hap-codec-matrix-check.mjs`     | One session per advertised profile and level, judged for exact coded fidelity |
+| `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it         |
+| `live-hap-disabled-camera-check.mjs`  | Live view, snapshots, and recovery for a camera that is turned off            |
+| `live-hap-capture.mjs`                | One MP4 and still per camera when a maintainer must look at a frame           |
+| `live-hksv-check.mjs`                 | Negotiated HomeKit Secure Video output, measured on the adapted fragments     |
 
 `live-hap-stream-check.mjs` decrypts and authenticates the inbound SRTP with the keys it supplied, so it
 judges what the accessory actually encoded rather than what a command line asked for: negotiated payload
@@ -253,20 +253,18 @@ carrying anything, so without `--warm-seconds` the run records from a source not
 the pre-event measurement as unverified. With it, the check opens the source exactly as the plugin does,
 lets the window fill, then measures the media the recording received faster than real time — media that
 could only have been captured before the recording attached. Measured on one wired camera, that was at
-least 1.68 s of a four-second window, with every drained fragment opening on a keyframe; the same camera
-warmed with `--prebuffer-ms 0`, which is what a battery or solar camera gets, delivered 0.00 s. The estimate
-is deliberately conservative, because media drained into the very first fragment is charged to that fragment
-rather than counted. How much the window holds is the source's own answer: it is trimmed back to its newest
-keyframe whenever no keyframe falls inside the window, so a camera whose stream stalls for seconds at a time
-retains less than four seconds and sometimes nothing, which the run reports rather than failing on.
+least 4.53 s for a four-second window, with every drained fragment opening on a keyframe. The estimate is
+deliberately conservative, because media drained into the very first fragment is charged to that fragment
+rather than counted. A drain opens on the newest retained keyframe at or before its cutoff, so it covers the
+requested window when enough media exists and may exceed it by the distance to that keyframe. A source
+configured with `--prebuffer-ms 0`, which is what a battery or solar camera gets, retains and drains none.
 
-One further result is expected and is not a defect. First output on a cold source sits at the edge of
-HomeKit's ten-second budget — 10.2 s and 10.7 s on the two wired cameras measured — and a warm source with a
-retained window does not move it, because roughly eight of those seconds are spent inside the SDK resolving
-the station session before the recording attaches at all, whether the source is warm or cold. A fragment's
-span may also exceed the selected fragment length by up to one source frame, because a boundary can only
-land on a coded frame and a camera may code slower than the frame rate that was selected; the check measures
-that frame interval from the fragment rather than assuming the negotiated one.
+A first media call may spend the SDK session's best-effort level-2 grace, but that grace is not restarted by
+each recording. On an already-warm wired source, the first source fragment arrived 18 ms after the request
+and the adapted initialization segment followed in 266 ms. A fragment's span may exceed the selected
+fragment length by up to one source frame, because a boundary can only land on a coded frame and a camera
+may code slower than the frame rate that was selected; the check measures that frame interval from the
+fragment rather than assuming the negotiated one.
 
 The measurement itself is covered hermetically by `test/contracts/live-hksv-harness.test.ts`, so a green
 live result is not the only evidence that the check reads a fragmented MP4 correctly.

@@ -392,7 +392,15 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'opens a mains-powered live snapshot with the same pre-event window as live view',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'never retains pre-event media for a battery or solar camera',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'opens a battery or solar live snapshot without a pre-event window',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -570,10 +578,11 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const prebufferLengthMs = recordingConfigured ? retainedPrebufferMs(context.evidence) : 0;
   const liveSourceOptions = prebufferLengthMs > 0 ? { preBufferSeconds: prebufferLengthMs / 1_000 } : undefined;
   const openLiveSource = camera.live.bind(camera);
+  const acquireLiveSnapshot = liveAvailable ? camera.snapshotLive!.bind(camera) : undefined;
   const source: CameraMediaSource = {
     live: () => openLiveSource(liveSourceOptions),
     ...(storedAvailable ? { snapshotStored: camera.snapshotStored!.bind(camera) } : {}),
-    ...(liveAvailable ? { snapshotLive: camera.snapshotLive!.bind(camera) } : {}),
+    ...(acquireLiveSnapshot ? { snapshotLive: () => acquireLiveSnapshot(liveSourceOptions) } : {}),
     ...(recordingAvailable ? { recordFragments: camera.recordFragments!.bind(camera) } : {}),
   };
   const existing = CAMERA_STREAMING_STATES.get(context.accessory);
@@ -739,8 +748,9 @@ function recordingOptions(context: AdapterAttachmentContext, press: boolean) {
  * The window belongs to whichever consumer opens the shared source, so live view asks for the same one a
  * recording drains: measured on a wired camera, a source opened with the window handed a recording media it
  * had captured before the recording attached, and the same window asked for only at recording time on a
- * source opened without it delivered none. A live snapshot can also be the call that opens the source, and
- * the SDK exposes no window on it, so a source a snapshot opened retains nothing until it stops.
+ * source opened without it delivered none. Live snapshots ask for the same window because they can also be
+ * the call that opens the source; no source-creating path may silently decide that later recordings retain
+ * nothing.
  */
 function retainedPrebufferMs(evidence: AdapterAttachmentContext['evidence']): number {
   return isBatteryPowered(evidence) ? 0 : RECORDING_PREBUFFER_MS;

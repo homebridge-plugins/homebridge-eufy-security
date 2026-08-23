@@ -71,7 +71,7 @@ Dependencies follow these directions:
 | `account/`    | configuration, device                                                                      |
 | `runtime/`    | account, configuration, device                                                             |
 | `media/`      | configuration, device                                                                      |
-| `homekit/`    | device, plus type-only imports from `media/contracts.ts`                                    |
+| `homekit/`    | device, plus type-only imports from `media/contracts.ts`                                   |
 | `ui/`         | account, configuration, device, HomeKit admission policy, persisted runtime views, storage |
 | `platform.ts` | configuration, runtime, HomeKit, media, storage                                            |
 | `index.ts`    | platform and settings                                                                      |
@@ -353,12 +353,12 @@ Measured on two wired cameras, asking for one second instead of the selected fou
 13.2 s and 13.1 s down to 10.2 s and 10.7 s, with output fragments still spanning the selected four
 seconds.
 
-What remains above that is not source warm-up but the station session the SDK resolves before a fragment
-recording attaches, which measured at roughly eight seconds on an already-warm source as well as a cold one.
-Pre-event media therefore does not move first output; what it does is put media from before the trigger into
-the recording. The plugin's own bound is the same backstop the live path uses, sitting strictly above the
-SDK's window, and live qualification reports the measured latency rather than asserting a budget the plugin
-cannot own alone.
+The station's level-2 grace belongs to the SDK session rather than to each fragment-recording request. A
+first media call may spend that grace while the session negotiates, but a later recording joining an
+already-warm source does not spend it again. Measured on a wired camera, the source handed over its first
+fragment 18 ms after the recording request and the adapted initialization segment followed in 266 ms,
+instead of the fixed roughly eight-second wait a per-call grace imposed. The plugin's own bound remains the
+same backstop the live path uses, sitting strictly above the SDK's session and source windows.
 
 Pre-event media is retained rather than warmed for, and its window belongs to whichever consumer opens the
 shared source. A camera's source is opened with a four-second window only when the camera is mains powered
@@ -367,12 +367,12 @@ answers a recording from its trigger, and a battery or solar camera never retain
 the only way its buffer would hold anything is a stream held open on its own power. The window is fixed when
 the source is constructed, so live view asks for the same one a recording drains; asking for it only at
 recording time on a source live view had already opened delivers nothing, which is why the policy lives with
-the source rather than with the recording. A live snapshot may also be the call that opens the source and the
-SDK exposes no window on it, so a source a snapshot opened retains nothing until it stops. What the window
-holds is the source's own answer: it is trimmed back to its newest keyframe whenever no keyframe falls inside
-it, so a camera whose stream stalls retains less than the full window. Measured on one wired camera, a
-recording received at least 1.68 s of media captured before it attached, every drained fragment opening on a
-keyframe, against 0.00 s on the same camera warmed without a window.
+the source rather than with the recording. Live view and live snapshots both ask for the same window because
+either may be the call that opens the source. A drain opens on the newest retained keyframe at or before its
+requested cutoff, so it covers the selected window when enough media exists and may exceed it by the distance
+to that keyframe; a delivery stall keeps the complete decodable run rather than discarding its anchor.
+Measured on one wired camera, a recording joining an already-warm source received at least 4.53 s of media
+captured before it attached, every drained fragment opening on a keyframe.
 
 A negotiated recording frame rate is a maximum rather than a target, so the output rate is bounded rather
 than pinned. Pinning it makes the encoder duplicate frames a slower source never sent, and every duplicate
