@@ -30,6 +30,7 @@ import type {
   SnapshotMediaSource,
   SnapshotMode,
 } from '../../media/contracts.js';
+import { isBatteryPowered } from './battery.js';
 import { hasAdmittedDoorbellPress } from './doorbell.js';
 import { hasAdmittedMotionEvents, motionSensorService } from './motion.js';
 import type {
@@ -50,10 +51,9 @@ const CAMERA_RECORDING_FAILED_CONDITION = 'camera-recording-failed';
 const CAMERA_RECORDING_REFUSED_CONDITION = 'camera-recording-refused';
 
 /**
- * The pre-event media window this camera advertises, in milliseconds. HomeKit requires an accessory to
- * advertise at least four seconds, so this is the floor rather than a choice; retaining it is a separate
- * eligibility policy that only an already-warm wired source can satisfy, so a recording adapted here
- * begins at its trigger until that policy exists.
+ * The pre-event media window this camera advertises and, when it is eligible, retains in milliseconds.
+ * HomeKit requires an accessory to advertise at least four seconds, so this is the floor rather than a
+ * choice, and a camera that retains it never retains more than a controller can select.
  */
 const RECORDING_PREBUFFER_MS = 4_000;
 
@@ -133,11 +133,19 @@ export const CAMERA_STREAMING_ADAPTER = {
       hapFit: 'Official Camera RTP Stream Management exposes negotiated live video and optional audio',
       identityEffect: 'Primary-purpose live media configures one stable camera controller on the accessory container',
       diagnostics:
-        'Missing typed live media or adaptation fails closed without a raw-stream fallback, a session that ends without usable video latches one bounded reason until a later session streams, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport',
+        'Missing typed live media or adaptation fails closed without a raw-stream fallback, a session that ends without usable video latches one bounded reason until a later session streams, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport. A live session may be the call that opens the shared source, so it opens it with the pre-event window this camera retains for recordings and with none at all when it retains none, rather than leaving a recording to ask for a window the source it joined was never given',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'advertises exactly the profile, level, and resolution matrix a live run may select',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'opens a mains-powered camera source with the pre-event window a recording drains',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'retains no pre-event media for a camera with no recording to drain it',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -304,7 +312,7 @@ export const CAMERA_STREAMING_ADAPTER = {
       identityEffect:
         'Recording adds the official recording management, operating mode, and data stream services to the stable camera controller without creating another accessory or service key',
       diagnostics:
-        "A camera with no evidenced fragment recording or no recording adaptation is omitted from HomeKit Secure Video with one bounded reason rather than advertising a recording it cannot produce, a reconciliation that withdraws the member refuses later recordings instead of serving them from a withdrawn source, a recording that produces no usable output latches one bounded reason until a later recording produces some, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport. The advertised pre-event window is HomeKit's own four-second minimum rather than a claim: retaining it requires an eligibility policy this row does not own, so a recording begins at its trigger",
+        "A camera with no evidenced fragment recording or no recording adaptation is omitted from HomeKit Secure Video with one bounded reason rather than advertising a recording it cannot produce, a reconciliation that withdraws the member refuses later recordings instead of serving them from a withdrawn source, a recording that produces no usable output latches one bounded reason until a later recording produces some, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport. The advertised pre-event window is HomeKit's own four-second minimum, retained only by a mains-powered camera and only on a source something else already opened, so a battery or solar camera and an unwatched camera alike begin at the trigger",
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -377,6 +385,34 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'reports the recording state HomeKit persists without holding a source warm for it',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'opens a mains-powered camera source with the pre-event window a recording drains',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'never retains pre-event media for a battery or solar camera',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'retains no pre-event media for a camera with no recording to drain it',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'asks for no more pre-event media than the window the camera retains',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'asks for only the shorter pre-event window a controller selected',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'drains the pre-event media window the negotiated recording carries',
+        },
+        {
+          file: 'test/contracts/recording-media.test.ts',
+          behavior: 'asks for no pre-event media at all for a recording that carries no window',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -531,8 +567,11 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
             ? 'adapter-missing'
             : 'missing-trigger',
   });
+  const prebufferLengthMs = recordingConfigured ? retainedPrebufferMs(context.evidence) : 0;
+  const liveSourceOptions = prebufferLengthMs > 0 ? { preBufferSeconds: prebufferLengthMs / 1_000 } : undefined;
+  const openLiveSource = camera.live.bind(camera);
   const source: CameraMediaSource = {
-    live: camera.live.bind(camera),
+    live: () => openLiveSource(liveSourceOptions),
     ...(storedAvailable ? { snapshotStored: camera.snapshotStored!.bind(camera) } : {}),
     ...(liveAvailable ? { snapshotLive: camera.snapshotLive!.bind(camera) } : {}),
     ...(recordingAvailable ? { recordFragments: camera.recordFragments!.bind(camera) } : {}),
@@ -555,6 +594,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
         source,
         media: context.recordingMedia!,
         audioEnabled: context.audioEnabled !== false,
+        prebufferLengthMs,
         enablement: binding.enablement,
         reportRecording: recordingReporter(context),
         reportAdmission: cameraRecordingCondition(context, CAMERA_RECORDING_REFUSED_CONDITION),
@@ -683,6 +723,27 @@ function recordingOptions(context: AdapterAttachmentContext, press: boolean) {
       })),
     },
   };
+}
+
+/**
+ * How much pre-event media a camera admitted to HomeKit Secure Video retains on its shared source, in
+ * milliseconds. A camera with no recording to serve retains none, because a window nothing can drain is
+ * only memory.
+ *
+ * Only a mains-powered camera retains any. The window is a rolling buffer of media the source was already
+ * carrying, and it is configured on the source rather than kept warm for it, so a camera nobody is watching
+ * still answers a recording from its trigger: nothing here opens a stream to fill a buffer. A battery or
+ * solar camera is withheld from it entirely, because the only way its buffer would ever hold anything is a
+ * stream held open on its own power.
+ *
+ * The window belongs to whichever consumer opens the shared source, so live view asks for the same one a
+ * recording drains: measured on a wired camera, a source opened with the window handed a recording media it
+ * had captured before the recording attached, and the same window asked for only at recording time on a
+ * source opened without it delivered none. A live snapshot can also be the call that opens the source, and
+ * the SDK exposes no window on it, so a source a snapshot opened retains nothing until it stops.
+ */
+function retainedPrebufferMs(evidence: AdapterAttachmentContext['evidence']): number {
+  return isBatteryPowered(evidence) ? 0 : RECORDING_PREBUFFER_MS;
 }
 
 function attachment(
@@ -1128,6 +1189,7 @@ interface RecordingCameraBinding {
   readonly source: CameraMediaSource;
   readonly media: RecordingMediaAdapter;
   readonly audioEnabled: boolean;
+  readonly prebufferLengthMs: number;
   readonly enablement: () => boolean | undefined;
   readonly reportRecording: (outcome: RecordingOutcome) => void;
   readonly reportAdmission: (refusal?: RecordingAdmissionRefusal) => void;
@@ -1136,10 +1198,11 @@ interface RecordingCameraBinding {
 /**
  * Owns HomeKit Secure Video negotiation while delegating fragment adaptation to the media domain.
  *
- * Nothing is held between recordings. HomeKit persists whether recording is active and which
- * configuration was selected, and this delegate keeps both only so that a recording request can be
- * answered; it never keeps a source warm to build pre-event media, because doing so would spend a battery
- * camera's power on media no eligibility policy has admitted yet.
+ * Nothing is held between recordings and no source is ever opened to build pre-event media. A camera
+ * eligible to retain a window has it configured on the shared source its live view and its recordings both
+ * use, so a recording drains whatever that source happened to be carrying and begins at its trigger
+ * otherwise. HomeKit persists whether recording is active and which configuration was selected, and this
+ * delegate keeps both only so that a recording request can be answered.
  */
 class RecordingCameraDelegate implements CameraRecordingDelegate {
   recordingManagement?: CameraController['recordingManagement'];
@@ -1169,8 +1232,9 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
 
   /**
    * HomeKit's recording-active state needs nothing of this delegate. It exists so a camera can start or
-   * stop maintaining pre-event media, and this camera maintains none, so a recording request is answered
-   * from a cold source whenever HomeKit makes one.
+   * stop maintaining pre-event media, and no camera here maintains any on HomeKit's word: an eligible
+   * camera's window is configured on its shared source and fills only while something else is already
+   * streaming, so there is nothing to start or stop.
    */
   updateRecordingActive(): void {}
 
@@ -1243,6 +1307,11 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
    * camera's audio off, and whenever a controller selected a codec or sample rate this camera never
    * advertised, because a recording with no audio track is the truthful answer in every one of those cases
    * and a substituted codec would not be.
+   *
+   * The pre-event window a controller selected is asked for up to what this camera retains, so a controller
+   * asking for less asks for less and one asking for more than was advertised gets the advertised window.
+   * The selection is a request rather than a bound, because how much media a source has retained is the
+   * source's own answer.
    */
   private negotiated(
     binding: RecordingCameraBinding,
@@ -1259,6 +1328,7 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
       level: h264Level(configuration.videoCodec.parameters.level, this.hap),
       iFrameIntervalMs: configuration.videoCodec.parameters.iFrameInterval,
       fragmentLengthMs: configuration.mediaContainerConfiguration.fragmentLength,
+      prebufferLengthMs: Math.max(0, Math.min(configuration.prebufferLength, binding.prebufferLengthMs)),
       ...(audio ? { audio } : {}),
     };
   }

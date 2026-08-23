@@ -239,21 +239,34 @@ node scripts/live-hksv-check.mjs \
 node scripts/live-hksv-check.mjs \
   --storage … --serial … --no-audio --width 1280 --height 720 --fps 15 --bitrate 800 \
   --profile main --level 3.1 --fragment-ms 2000 --iframe-ms 2000
+node scripts/live-hksv-check.mjs \
+  --storage … --serial … --warm-seconds 20 --prebuffer-ms 4000 --seconds 25
 ```
 
 It opens a second realtime owner against a copy of the storage root, so **stop the instance under test
 first**; it needs a built `dist/`, because it reuses the plugin's own adaptation and persistence; and it
 never writes media to disk.
 
-Two results are expected and are not defects. First output on a cold source sits at the edge of HomeKit's
-ten-second budget — 10.2 s and 10.7 s on the two wired cameras measured — because the SDK owns source
-warm-up and the plugin's own adaptation latency is already minimised. Bringing it reliably inside that
-budget needs pre-event media from an already-warm source, which is
-[#1000](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1000), so the run reports the
-measured latency as an unverified observation rather than as a pass or a failure. A fragment's span may also
-exceed the selected fragment length by up to one source frame, because a boundary can only land on a coded
-frame and a camera may code slower than the frame rate that was selected; the check measures that frame
-interval from the fragment rather than assuming the negotiated one.
+`--warm-seconds` is what exercises pre-event media. A mains-powered camera admitted to HomeKit Secure Video
+has its shared source opened with a four-second window, and only a source something already opened can be
+carrying anything, so without `--warm-seconds` the run records from a source nothing had opened and reports
+the pre-event measurement as unverified. With it, the check opens the source exactly as the plugin does,
+lets the window fill, then measures the media the recording received faster than real time — media that
+could only have been captured before the recording attached. Measured on one wired camera, that was at
+least 1.68 s of a four-second window, with every drained fragment opening on a keyframe; the same camera
+warmed with `--prebuffer-ms 0`, which is what a battery or solar camera gets, delivered 0.00 s. The estimate
+is deliberately conservative, because media drained into the very first fragment is charged to that fragment
+rather than counted. How much the window holds is the source's own answer: it is trimmed back to its newest
+keyframe whenever no keyframe falls inside the window, so a camera whose stream stalls for seconds at a time
+retains less than four seconds and sometimes nothing, which the run reports rather than failing on.
+
+One further result is expected and is not a defect. First output on a cold source sits at the edge of
+HomeKit's ten-second budget — 10.2 s and 10.7 s on the two wired cameras measured — and a warm source with a
+retained window does not move it, because roughly eight of those seconds are spent inside the SDK resolving
+the station session before the recording attaches at all, whether the source is warm or cold. A fragment's
+span may also exceed the selected fragment length by up to one source frame, because a boundary can only
+land on a coded frame and a camera may code slower than the frame rate that was selected; the check measures
+that frame interval from the fragment rather than assuming the negotiated one.
 
 The measurement itself is covered hermetically by `test/contracts/live-hksv-harness.test.ts`, so a green
 live result is not the only evidence that the check reads a fragmented MP4 correctly.

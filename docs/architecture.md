@@ -353,12 +353,26 @@ Measured on two wired cameras, asking for one second instead of the selected fou
 13.2 s and 13.1 s down to 10.2 s and 10.7 s, with output fragments still spanning the selected four
 seconds.
 
-What remains above that is the source warm-up the SDK owns, so HomeKit's ten-second budget for first output
-is reachable from a cold source only at its edge, and reliably only when the pre-event window of an
-already-warm source can be drained instead
-([#1000](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1000)). The plugin's own
-bound is therefore the same backstop the live path uses, sitting strictly above the SDK's window, and live
-qualification reports the measured latency rather than asserting a budget the plugin cannot own alone.
+What remains above that is not source warm-up but the station session the SDK resolves before a fragment
+recording attaches, which measured at roughly eight seconds on an already-warm source as well as a cold one.
+Pre-event media therefore does not move first output; what it does is put media from before the trigger into
+the recording. The plugin's own bound is the same backstop the live path uses, sitting strictly above the
+SDK's window, and live qualification reports the measured latency rather than asserting a budget the plugin
+cannot own alone.
+
+Pre-event media is retained rather than warmed for, and its window belongs to whichever consumer opens the
+shared source. A camera's source is opened with a four-second window only when the camera is mains powered
+and admitted to HomeKit Secure Video, so nothing is ever streamed to fill a buffer: an unwatched camera
+answers a recording from its trigger, and a battery or solar camera never retains a window at all, because
+the only way its buffer would hold anything is a stream held open on its own power. The window is fixed when
+the source is constructed, so live view asks for the same one a recording drains; asking for it only at
+recording time on a source live view had already opened delivers nothing, which is why the policy lives with
+the source rather than with the recording. A live snapshot may also be the call that opens the source and the
+SDK exposes no window on it, so a source a snapshot opened retains nothing until it stops. What the window
+holds is the source's own answer: it is trimmed back to its newest keyframe whenever no keyframe falls inside
+it, so a camera whose stream stalls retains less than the full window. Measured on one wired camera, a
+recording received at least 1.68 s of media captured before it attached, every drained fragment opening on a
+keyframe, against 0.00 s on the same camera warmed without a window.
 
 A negotiated recording frame rate is a maximum rather than a target, so the output rate is bounded rather
 than pinned. Pinning it makes the encoder duplicate frames a slower source never sent, and every duplicate

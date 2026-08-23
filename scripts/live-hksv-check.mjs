@@ -18,7 +18,8 @@
  *   1. `npm run build`, because this reuses the plugin's built adaptation and persistence.
  *   2. A storage root with an accepted session, and NO plugin instance running against that account:
  *      this opens a second realtime owner against a copy of the root. Stop the instance under test first.
- *   3. A wired camera. A battery camera answers too, but its power budget bounds the run.
+ *   3. A wired camera. A battery camera answers too, but its power budget bounds the run, and the plugin
+ *      retains no pre-event window for one, so `--warm-seconds` says nothing about it.
  *
  * It never writes media to disk, and prints no more than the last four characters of a serial.
  *
@@ -28,6 +29,11 @@
  *   node scripts/live-hksv-check.mjs --storage … --serial … --width 1280 --height 720 --fps 30 \
  *     --bitrate 800 --profile main --level 3.1 --fragment-ms 4000 --iframe-ms 4000 --seconds 30
  *   node scripts/live-hksv-check.mjs --storage … --serial … --no-audio
+ *   node scripts/live-hksv-check.mjs --storage … --serial … --warm-seconds 15 --prebuffer-ms 4000
+ *
+ * `--warm-seconds` opens the camera's shared source with the pre-event window a mains-powered camera
+ * retains and lets it fill before the recording is requested, which is the only arrangement in which
+ * pre-event media exists at all. Without it the run records from a source nothing had opened.
  */
 import { createRequire } from 'node:module';
 
@@ -51,6 +57,13 @@ const CHILD_OFFSETS = new Map([
   ['mp4a', 28],
 ]);
 const SYNC_SAMPLE_FLAGS_DEPENDS_ON_OTHERS = 1;
+
+/**
+ * How much pre-event media a run must measure before it counts as a retained window rather than jitter, in
+ * seconds. A fragment boundary lands on a coded frame and a source's cadence wanders around it, so a
+ * fraction of a fragment either way says nothing.
+ */
+const PRE_EVENT_FLOOR_SECONDS = 0.5;
 
 /** Walks every box in a buffer, reporting each with the path that reached it. */
 export function walkBoxes(buffer, visit, start = 0, end = buffer.length, path = '') {
@@ -242,6 +255,75 @@ export function withinSelectedFragment({ seconds, frameSeconds }, selectedSecond
 }
 
 /**
+ * How much media a recording received that its camera had captured before the recording attached.
+ *
+ * A source running at real time can only hand over as much media as time has passed since its first
+ * fragment, plus whatever that first fragment already held. Anything beyond that existed before the
+ * recording asked for it, so the excess is the pre-event media, and it needs no reference clock the
+ * adaptation does not already carry. The estimate is deliberately conservative: media drained into the
+ * very first fragment is charged to that fragment rather than counted here, so a real window measures at
+ * least this large and never smaller.
+ */
+export function preEventMedia(fragments) {
+  const first = fragments[0];
+  const last = fragments.at(-1);
+  if (!first || fragments.length < 2) {
+    return { fragments: fragments.length, mediaSeconds: first ? first.seconds : 0, wallSeconds: 0, seconds: 0 };
+  }
+  const mediaSeconds = last.startSeconds + last.seconds - first.startSeconds;
+  const wallSeconds = (last.arrivalMs - first.arrivalMs) / 1_000;
+  return {
+    fragments: fragments.length,
+    mediaSeconds,
+    wallSeconds,
+    seconds: Math.max(0, mediaSeconds - wallSeconds - first.seconds),
+  };
+}
+
+/**
+ * The same fragment recording the adaptation consumes, with every source fragment's arrival and media
+ * recorded on the way past.
+ *
+ * The pre-event window is a source fact, and this box encodes 1080p30 slower than real time, so measuring
+ * it on the adapted output would measure the encoder instead. Observing the source the adaptation is
+ * actually given keeps the measurement on the media the plugin asked for while still driving exactly the
+ * shipped path.
+ */
+function observedSource(handle, fragments) {
+  const startedAt = Date.now();
+  let timescales = [];
+  let defaults = [];
+  return {
+    on(event, listener) {
+      handle.on(event, listener);
+      return this;
+    },
+    stop() {
+      handle.stop();
+    },
+    async *[Symbol.asyncIterator]() {
+      for await (const fragment of handle) {
+        if (fragment.init) {
+          timescales = describeInitialization(fragment.init).timescales;
+          defaults = trackDefaults(fragment.init);
+        }
+        const video = fragment.data.length > 0 ? describeFragment(fragment.data, timescales, defaults)[0] : undefined;
+        if (video) {
+          fragments.push({
+            arrivalMs: Date.now() - startedAt,
+            keyframe: fragment.keyframe,
+            startSeconds: video.startSeconds,
+            seconds: video.seconds,
+            syncSample: video.syncSample,
+          });
+        }
+        yield fragment;
+      }
+    },
+  };
+}
+
+/**
  * The MPEG-4 audio object type an initialization segment's decoder configuration declares, which is 39 for
  * AAC-ELD. It is the only place the negotiated recording audio codec can be confirmed: an `mp4a` sample
  * entry alone says nothing about which AAC profile is inside it.
@@ -274,6 +356,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const serial = required(parsed, 'serial');
   const storage = required(parsed, 'storage');
   const seconds = Number(parsed.get('seconds') ?? 30);
+  const warmSeconds = Number(parsed.get('warm-seconds') ?? 0);
+  const prebufferMs = Number(parsed.get('prebuffer-ms') ?? 4000);
   const audioRequested = parsed.get('no-audio') === undefined;
   const negotiated = {
     width: Number(parsed.get('width') ?? 1920),
@@ -284,6 +368,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     level: parsed.get('level') ?? '4.0',
     iFrameIntervalMs: Number(parsed.get('iframe-ms') ?? 4000),
     fragmentLengthMs: Number(parsed.get('fragment-ms') ?? 4000),
+    prebufferLengthMs: prebufferMs,
     ...(audioRequested ? { audio: { codec: 'AAC-eld', channels: 1, sampleRate: 24, maxBitRate: 32 } } : {}),
   };
 
@@ -294,6 +379,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const ffmpeg = parsed.get('ffmpeg') ?? require('ffmpeg-for-homebridge');
   const results = observations('HKSV recording qualification');
   const session = await openCameraSession(storage);
+  let warmed;
 
   try {
     const { actions } = await session.camera(serial);
@@ -306,12 +392,23 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(
       `negotiated ${negotiated.width}x${negotiated.height}@${negotiated.fps} ${negotiated.profile}@${negotiated.level} ` +
         `${negotiated.maxBitRate}kbps fragment=${negotiated.fragmentLengthMs}ms iframe=${negotiated.iFrameIntervalMs}ms ` +
-        `audio=${audioRequested ? 'AAC-ELD 24kHz mono' : 'none'}`,
+        `prebuffer=${negotiated.prebufferLengthMs}ms audio=${audioRequested ? 'AAC-ELD 24kHz mono' : 'none'}`,
     );
 
+    if (warmSeconds > 0) {
+      warmed = await actions.live(prebufferMs > 0 ? { preBufferSeconds: prebufferMs / 1_000 } : undefined);
+      let warmedFrames = 0;
+      warmed.on('video', () => (warmedFrames += 1));
+      warmed.start();
+      await new Promise((resolve) => setTimeout(resolve, warmSeconds * 1_000));
+      console.log(`warmed the shared source for ${warmSeconds}s, ${warmedFrames} video frames before the trigger`);
+      results.check(warmedFrames > 0, 'the shared source was already streaming when the recording was requested');
+    }
+
     const outcomes = [];
+    const sourceFragments = [];
     const recording = new FfmpegRecordingMedia(ffmpeg).record(
-      { recordFragments: (opts) => actions.recordFragments(opts) },
+      { recordFragments: (opts) => observedSource(actions.recordFragments(opts), sourceFragments) },
       negotiated,
       { onOutcome: (outcome) => outcomes.push(outcome) },
     );
@@ -436,14 +533,43 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       'the adaptation reported one recording outcome for its first output',
     );
     results.check(firstUnitMs < 30_000, 'first output arrived within the adaptation backstop');
-    results.unverified(
-      `first output took ${firstUnitMs}ms, which a cold source cannot bring under HomeKit's ten-second budget: ` +
-        'that needs pre-event media from an already-warm source, which is not adapted yet (#1000)',
+
+    const preEvent = preEventMedia(sourceFragments);
+    console.log(
+      `source fragments=${preEvent.fragments} ` +
+        `arrivals=[${sourceFragments.map(({ arrivalMs }) => arrivalMs).join(',')}]ms ` +
+        `media=${preEvent.mediaSeconds.toFixed(2)}s over ${preEvent.wallSeconds.toFixed(2)}s of wall clock, ` +
+        `first fragment ${sourceFragments[0]?.seconds.toFixed(2)}s, pre-event at least ${preEvent.seconds.toFixed(2)}s`,
     );
+    if (warmSeconds === 0) {
+      results.unverified(
+        'this run recorded from a source nothing had already opened, so no pre-event media existed to drain: ' +
+          'pass --warm-seconds to exercise the retained window',
+      );
+    } else if (prebufferMs === 0) {
+      results.check(
+        preEvent.seconds < PRE_EVENT_FLOOR_SECONDS,
+        'a source opened with no pre-event window retains none of it, which is what a battery or solar camera gets',
+      );
+    } else if (preEvent.seconds >= PRE_EVENT_FLOOR_SECONDS) {
+      results.check(
+        sourceFragments.every(({ keyframe, syncSample }) => keyframe && syncSample),
+        `the recording drained ${preEvent.seconds.toFixed(2)}s of media its already-warm source had captured ` +
+          'before it attached, with every drained fragment opening on a keyframe',
+      );
+    } else {
+      results.unverified(
+        `the already-warm source retained only ${preEvent.seconds.toFixed(2)}s of the ${prebufferMs}ms window it ` +
+          "was opened with: what the window holds is the source's to keep, and it is trimmed back to its newest " +
+          'keyframe whenever no keyframe falls inside the window, which a stream that stalls for seconds at a time ' +
+          'makes common',
+      );
+    }
     console.log(`cancellation=${cancellationMs}ms last-flagged-units=${lastFlag}`);
     results.check(cancellationMs < 1_000, 'cancellation returned the iteration without waiting for the source');
     results.check(lastFlag <= 1, 'at most one output unit was flagged as the last of the recording');
   } finally {
+    warmed?.stop();
     await session.close();
   }
 

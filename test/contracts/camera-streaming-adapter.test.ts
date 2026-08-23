@@ -44,11 +44,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdapterAttachmentContext } from '../../src/homekit/adapter.js';
 import type {
   AdaptedRecording,
+  LiveMediaAdapter,
+  LiveMediaSource,
   LiveSessionOutcome,
   NegotiatedRecording,
   PreparedLiveMedia,
   RecordedFragment,
   RecordingMediaAdapter,
+  RecordingMediaSource,
   RecordingOutcome,
 } from '../../src/media/contracts.js';
 import type { DeviceMemberEvidence } from '../../src/device/member-evidence.js';
@@ -1882,16 +1885,19 @@ function syntheticRecording() {
 /** A recording media seam that records every negotiated contract it was asked to adapt. */
 function recordingMedia() {
   const negotiations: NegotiatedRecording[] = [];
+  const sources: RecordingMediaSource[] = [];
   const outcomes: ((outcome: RecordingOutcome) => void)[] = [];
   const sessions: ReturnType<typeof syntheticRecording>[] = [];
   return {
     negotiations,
+    sources,
     sessions,
     report(outcome: RecordingOutcome): void {
       outcomes.at(-1)?.(outcome);
     },
     adapter: {
-      record(_source, negotiated, lifecycle): AdaptedRecording {
+      record(source, negotiated, lifecycle): AdaptedRecording {
+        sources.push(source);
         negotiations.push(negotiated);
         outcomes.push((outcome) => lifecycle?.onOutcome?.(outcome));
         const session = syntheticRecording();
@@ -1950,6 +1956,29 @@ function attachRecordingCamera(
   } satisfies AdapterAttachmentContext);
   const controller = configureController.mock.calls[0][0] as CameraController;
   return { controller, delegate: controller.recordingManagement!.delegate, accessory, diagnose, observed };
+}
+
+/** A live media seam that records the media source each negotiated session was started against. */
+function liveMedia() {
+  const started: LiveMediaSource[] = [];
+  const prepare = vi.fn(
+    async () =>
+      ({
+        videoPort: 41100,
+        start: async (source: LiveMediaSource) => {
+          started.push(source);
+        },
+        reconfigure: vi.fn(),
+        stop: vi.fn(),
+      }) satisfies PreparedLiveMedia,
+  );
+  return { started, adapter: { prepare } satisfies LiveMediaAdapter };
+}
+
+/** Negotiates and starts one live session, the way a controller opening live view does. */
+async function startLiveSession(delegate: CameraStreamingDelegate, sessionID = 'synthetic-prebuffer-session') {
+  const response = await callPrepare(delegate, prepareRequest(sessionID));
+  await callStream(delegate, startRequest(sessionID, response.video.ssrc));
 }
 
 /** Consumes a recording stream the way HAP's own recording transport does. */
@@ -2132,6 +2161,7 @@ describe('camera recording bundle adapter', () => {
         level: '3.1',
         iFrameIntervalMs: 4_000,
         fragmentLengthMs: 4_000,
+        prebufferLengthMs: 4_000,
         audio: { codec: 'AAC-lc', channels: 1, sampleRate: 32, maxBitRate: 32 },
       },
     ]);
@@ -2394,6 +2424,121 @@ describe('camera recording bundle adapter', () => {
     delegate.updateRecordingConfiguration(undefined);
     expect(media.negotiations).toEqual([]);
     expect(media.sessions).toEqual([]);
+  });
+
+  it('opens a mains-powered camera source with the pre-event window a recording drains', async () => {
+    const media = recordingMedia();
+    const streaming = liveMedia();
+    const live = vi.fn();
+    const { controller, delegate } = attachRecordingCamera('Synthetic prebuffered recording camera', {
+      recordingMedia: media.adapter,
+      liveMedia: streaming.adapter,
+      audioEnabled: false,
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live, recordFragments: vi.fn() }) } as never,
+    });
+    await selectRecordingConfiguration(controller, hapConnection(), { prebufferLength: 4_000 });
+
+    const stream = consumeRecordingStream(delegate, 61);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[0]).toMatchObject({ prebufferLengthMs: 4_000 });
+
+    await startLiveSession((controller as { delegate: CameraStreamingDelegate }).delegate);
+    await streaming.started[0].live();
+    expect(live).toHaveBeenCalledWith({ preBufferSeconds: 4 });
+
+    media.sessions[0].push({ data: Buffer.from('prebuffered'), last: true });
+    await stream.iteration;
+  });
+
+  it('never retains pre-event media for a battery or solar camera', async () => {
+    const media = recordingMedia();
+    const streaming = liveMedia();
+    const live = vi.fn();
+    const { controller, delegate } = attachRecordingCamera('Synthetic battery recording camera', {
+      recordingMedia: media.adapter,
+      liveMedia: streaming.adapter,
+      audioEnabled: false,
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live, recordFragments: vi.fn() }) } as never,
+      evidence: recordingEvidence(
+        new Map([
+          [
+            'battery.level.read',
+            { id: 'battery.level.read', kind: 'read' as const, type: 'number' as const, writable: false },
+          ],
+        ]),
+      ),
+    });
+    await selectRecordingConfiguration(controller, hapConnection(), { prebufferLength: 4_000 });
+
+    const stream = consumeRecordingStream(delegate, 62);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[0]).toMatchObject({ prebufferLengthMs: 0 });
+
+    await startLiveSession((controller as { delegate: CameraStreamingDelegate }).delegate);
+    await streaming.started[0].live();
+    expect(live).toHaveBeenCalledWith(undefined);
+
+    media.sessions[0].push({ data: Buffer.from('battery'), last: true });
+    await stream.iteration;
+  });
+
+  it('retains no pre-event media for a camera with no recording to drain it', async () => {
+    const accessory = new Accessory(
+      'Synthetic unrecorded prebuffer camera',
+      uuid.generate('synthetic-unrecorded-prebuffer'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    const streaming = liveMedia();
+    const live = vi.fn();
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live, recordFragments: vi.fn() }) } as never,
+      evidence: recordingEvidence(),
+      accessory,
+      hap: HAP,
+      liveMedia: streaming.adapter,
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    expect(controller.recordingManagement).toBeUndefined();
+    await startLiveSession(controller.delegate, 'synthetic-unrecorded-prebuffer-session');
+    await streaming.started[0].live();
+    expect(live).toHaveBeenCalledWith(undefined);
+  });
+
+  it('asks for no more pre-event media than the window the camera retains', async () => {
+    const media = recordingMedia();
+    const { controller, delegate } = attachRecordingCamera('Synthetic overselected prebuffer camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, hapConnection(), { prebufferLength: 8_000 });
+
+    const stream = consumeRecordingStream(delegate, 63);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[0]).toMatchObject({ prebufferLengthMs: 4_000 });
+
+    media.sessions[0].push({ data: Buffer.from('clamped'), last: true });
+    await stream.iteration;
+  });
+
+  it('asks for only the shorter pre-event window a controller selected', async () => {
+    const media = recordingMedia();
+    const { controller, delegate } = attachRecordingCamera('Synthetic short prebuffer camera', {
+      recordingMedia: media.adapter,
+    });
+    await selectRecordingConfiguration(controller, hapConnection(), { prebufferLength: 2_000 });
+
+    const stream = consumeRecordingStream(delegate, 64);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(media.negotiations[0]).toMatchObject({ prebufferLengthMs: 2_000 });
+
+    media.sessions[0].push({ data: Buffer.from('short'), last: true });
+    await stream.iteration;
   });
 
   it('refuses a recording after a reconciliation withdraws the camera fragment recording', async () => {

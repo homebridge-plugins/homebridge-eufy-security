@@ -1,5 +1,6 @@
 import type { AnyDeviceEvent, BatteryActions } from '@mega-yfue/eufy-sdk';
 
+import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
 import type {
   AdapterAttachmentContext,
   AdapterDiagnostic,
@@ -20,6 +21,18 @@ const BATTERY_CHARGING_EVIDENCE = 'battery.charging.read';
 const BATTERY_LEVEL_EVENT_EVIDENCE = 'battery.batteryLevel.event';
 const BATTERY_ALERT_EVENT_EVIDENCE = 'battery.batteryAlert.event';
 const LOW_BATTERY_THRESHOLD = 20;
+
+/**
+ * Whether a device is powered by a battery, which the SDK proves by the device reporting a level at all.
+ *
+ * The camera bundle reads this to decide whether a camera may retain pre-event media, so the fact has one
+ * owner rather than a copy beside every consumer. It is the same evidence the SDK derives every media
+ * egress's power budget from, and a solar panel charges a battery rather than replacing it, so one answer
+ * covers both.
+ */
+export function isBatteryPowered(evidence: AdapterAttachmentContext['evidence']): boolean {
+  return satisfiesMemberRequirements(evidence, [BATTERY_LEVEL_REQUIREMENT]);
+}
 
 interface BatteryState {
   owner?: symbol;

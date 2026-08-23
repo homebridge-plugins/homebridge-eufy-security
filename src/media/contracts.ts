@@ -88,6 +88,10 @@ export interface NegotiatedRecordedAudio {
 /**
  * The complete recording contract one HomeKit controller selected. Audio is absent both when the controller
  * negotiated none and when it withdrew recording audio, because either way the output carries no audio track.
+ *
+ * `prebufferLengthMs` is the pre-event media this recording asks its source for, already reduced to what
+ * its camera retains, so zero asks for none. How much of it exists is the source's own answer: a source
+ * carrying less hands over less, and one carrying a whole retained window may hand over all of it.
  */
 export interface NegotiatedRecording {
   readonly width: number;
@@ -98,6 +102,7 @@ export interface NegotiatedRecording {
   readonly level: '3.1' | '3.2' | '4.0';
   readonly iFrameIntervalMs: number;
   readonly fragmentLengthMs: number;
+  readonly prebufferLengthMs: number;
   readonly audio?: NegotiatedRecordedAudio;
 }
 
@@ -120,7 +125,7 @@ export interface RecordedFragment {
 }
 
 export interface RecordingMediaSource {
-  recordFragments?(options?: { fragmentSeconds?: number }): FragmentRecordingHandle;
+  recordFragments?(options?: { fragmentSeconds?: number; preBufferSeconds?: number }): FragmentRecordingHandle;
 }
 
 /** One recording in progress: the units it produces, and the one call that ends it. */

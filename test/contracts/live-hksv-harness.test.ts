@@ -5,6 +5,7 @@ import {
   describeFragment,
   describeInitialization,
   fragmentSpans,
+  preEventMedia,
   topLevelBoxes,
   trackDefaults,
   walkBoxes,
@@ -267,6 +268,36 @@ describe('HKSV recording measurement', () => {
       ),
     }));
     expect(fragmentSpans(fragments).map((tracks) => tracks[0])).toEqual([4, 4, undefined]);
+  });
+
+  it('reads pre-event media as the media a source handed over faster than real time', () => {
+    const drained = [
+      { arrivalMs: 8_038, startSeconds: 0, seconds: 2.02 },
+      { arrivalMs: 8_658, startSeconds: 2.02, seconds: 2 },
+      { arrivalMs: 10_660, startSeconds: 4.02, seconds: 2 },
+      { arrivalMs: 12_660, startSeconds: 6.02, seconds: 2 },
+    ];
+    const measured = preEventMedia(drained);
+    expect(measured.fragments).toBe(4);
+    expect(measured.mediaSeconds).toBeCloseTo(8.02, 6);
+    expect(measured.wallSeconds).toBeCloseTo(4.622, 6);
+    expect(measured.seconds).toBeCloseTo(1.378, 3);
+  });
+
+  it('reads no pre-event media from a source that produced every fragment in real time', () => {
+    const realtime = [
+      { arrivalMs: 0, startSeconds: 0, seconds: 2 },
+      { arrivalMs: 2_000, startSeconds: 2, seconds: 2 },
+      { arrivalMs: 4_000, startSeconds: 4, seconds: 2 },
+    ];
+    expect(preEventMedia(realtime).seconds).toBe(0);
+    expect(preEventMedia([{ arrivalMs: 0, startSeconds: 0, seconds: 2 }])).toEqual({
+      fragments: 1,
+      mediaSeconds: 2,
+      wallSeconds: 0,
+      seconds: 0,
+    });
+    expect(preEventMedia([])).toEqual({ fragments: 0, mediaSeconds: 0, wallSeconds: 0, seconds: 0 });
   });
 
   it('admits a span that overruns the selected length by no more than its straddling frame', () => {

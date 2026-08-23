@@ -65,6 +65,12 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
    * Starts one recording and returns it before any output exists, because a HomeKit controller consumes
    * the units as they are produced rather than waiting for a complete recording.
    *
+   * A pre-event window is asked for only when the negotiated recording carries one, and the source
+   * decides how much of it there is to give: a window is drained from media the camera's shared source
+   * already retained, so a source with nothing retained simply begins at the trigger. The drained run
+   * arrives as a burst of source fragments each opening on a keyframe, and the adaptation refragments it
+   * on its own keyframes like any other media, so nothing here treats pre-event media as a special case.
+   *
    * A recording ends in exactly one of three ways: its consumer stops it, its source runs out of media
    * and the final unit is marked as last, or it fails and the iteration rejects. Every one of them
    * releases the SDK handle, the adaptation process, and the source's budget extension exactly once.
@@ -150,7 +156,12 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
     };
 
     try {
-      handle = source.recordFragments?.({ fragmentSeconds: SOURCE_FRAGMENT_SECONDS });
+      handle = source.recordFragments?.({
+        fragmentSeconds: SOURCE_FRAGMENT_SECONDS,
+        ...(negotiated.prebufferLengthMs > 0
+          ? { preBufferSeconds: negotiated.prebufferLengthMs / 1_000 }
+          : {}),
+      });
     } catch {
       handle = undefined;
     }

@@ -21,6 +21,7 @@ const NEGOTIATED: NegotiatedRecording = {
   level: '4.0',
   iFrameIntervalMs: 4_000,
   fragmentLengthMs: 4_000,
+  prebufferLengthMs: 0,
   audio: { codec: 'AAC-lc', channels: 1, sampleRate: 32, maxBitRate: 32 },
 };
 
@@ -161,7 +162,7 @@ function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED) {
     spawned.push([...args]);
     return child;
   });
-  const requested: { fragmentSeconds?: number }[] = [];
+  const requested: { fragmentSeconds?: number; preBufferSeconds?: number }[] = [];
   const recording = media.record(
     {
       recordFragments: (options) => {
@@ -247,6 +248,23 @@ describe('recording media adaptation', () => {
     await settle();
     expect(session.requested).toEqual([{ fragmentSeconds: 1 }]);
     expect(session.source.iterations).toBe(1);
+    session.recording.stop();
+    await session.consumed.iteration;
+  });
+
+  it('drains the pre-event media window the negotiated recording carries', async () => {
+    const session = recordingSession({ ...NEGOTIATED, prebufferLengthMs: 4_000 });
+    await settle();
+    expect(session.requested).toEqual([{ fragmentSeconds: 1, preBufferSeconds: 4 }]);
+    session.recording.stop();
+    await session.consumed.iteration;
+  });
+
+  it('asks for no pre-event media at all for a recording that carries no window', async () => {
+    const session = recordingSession({ ...NEGOTIATED, prebufferLengthMs: 0 });
+    await settle();
+    expect(session.requested).toEqual([{ fragmentSeconds: 1 }]);
+    expect(session.requested[0]).not.toHaveProperty('preBufferSeconds');
     session.recording.stop();
     await session.consumed.iteration;
   });
