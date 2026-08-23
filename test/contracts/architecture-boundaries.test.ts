@@ -75,6 +75,15 @@ function importedValue(reference: ImportReference, name: string): boolean {
   return new RegExp(`\\b${name}\\b`).test(valueClause);
 }
 
+function isHomeKitMediaContractReference(source: string, target: string, reference: ImportReference): boolean {
+  return (
+    moduleName(source) === 'homekit' &&
+    sourceName(target) === 'media/contracts.ts' &&
+    !reference.dynamic &&
+    /^(?:import|export)\s+type\b/.test(reference.statement)
+  );
+}
+
 describe('source architecture', () => {
   const files = sourceFiles(sourceRoot);
 
@@ -110,12 +119,49 @@ describe('source architecture', () => {
         }
         const target = relativeTarget(file, reference.specifier);
         const targetModule = moduleName(target);
-        if (!allowedDependencies[sourceModule]?.has(targetModule)) {
+        if (
+          !allowedDependencies[sourceModule]?.has(targetModule) &&
+          !isHomeKitMediaContractReference(file, target, reference)
+        ) {
           violations.push(`${sourceName(file)} (${sourceModule}) imports ${sourceName(target)} (${targetModule})`);
         }
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it('limits HomeKit media references to the type-only contract seam', () => {
+    const violations: string[] = [];
+    for (const file of files.filter((candidate) => moduleName(candidate) === 'homekit')) {
+      for (const reference of imports(file)) {
+        if (!reference.specifier.startsWith('.')) {
+          continue;
+        }
+        const target = relativeTarget(file, reference.specifier);
+        if (moduleName(target) === 'media' && !isHomeKitMediaContractReference(file, target, reference)) {
+          violations.push(`${sourceName(file)} references ${sourceName(target)} through ${reference.statement}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('defines every canonical media contract only at its owning seam', () => {
+    const contracts = resolve(sourceRoot, 'media/contracts.ts');
+    const declarations = [...readFileSync(contracts, 'utf8').matchAll(/^export (?:interface|type) (\w+)/gm)].map(
+      (match) => match[1],
+    );
+    const duplicates = files
+      .filter((file) => file !== contracts)
+      .flatMap((file) =>
+        declarations
+          .filter((name) =>
+            new RegExp(`^(?:export\\s+)?(?:interface|type)\\s+${name}\\b`, 'm').test(readFileSync(file, 'utf8')),
+          )
+          .map((name) => `${name} in ${sourceName(file)}`),
+      );
+
+    expect(duplicates).toEqual([]);
   });
 
   it('has no internal import cycles', () => {

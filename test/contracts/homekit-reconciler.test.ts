@@ -21,7 +21,7 @@ import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import {
   HomeKitReconciler,
   type HomeKitDiagnostic,
-  type HomeKitEventTrace,
+  type HomeKitEventReport,
   type HomeKitRegistryListener,
   type HomeKitRegistrySource,
   type HomeKitRegistryView,
@@ -452,7 +452,7 @@ describe('HomeKit registry reconciliation', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
     const diagnostics: HomeKitDiagnostic[] = [];
-    const traces: HomeKitEventTrace[] = [];
+    const traces: HomeKitEventReport[] = [];
     const reconciler = new HomeKitReconciler(
       source,
       recording.api,
@@ -512,7 +512,7 @@ describe('HomeKit registry reconciliation', () => {
   it('enriches a represented device with battery evidence and routes later low-state evidence', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
-    const traces: HomeKitEventTrace[] = [];
+    const traces: HomeKitEventReport[] = [];
     new HomeKitReconciler(source, recording.api, vi.fn(), [], (trace) => traces.push(trace)).start();
     const serial = 'synthetic-battery-contact';
 
@@ -680,7 +680,7 @@ describe('HomeKit registry reconciliation', () => {
     const serial = 'synthetic-security-system';
     const source = new RegistrySource();
     const recording = recordingApi();
-    const traces: HomeKitEventTrace[] = [];
+    const traces: HomeKitEventReport[] = [];
     new HomeKitReconciler(source, recording.api, vi.fn(), [], (trace) => traces.push(trace)).start();
 
     source.publish(registryView(1, new Map([[serial, armingDevice()]]), snapshot(armingManifest(serial))));

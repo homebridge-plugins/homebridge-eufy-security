@@ -4,15 +4,12 @@ import type { PlatformAccessory } from 'homebridge';
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
 import { indexDeviceEvidence } from '../device/member-evidence.js';
 import type {
-  AdapterDiagnostic,
-  AdapterEventTrace,
-  AttachedAdapter,
-  HomeKitDefinitions,
   LiveMediaAdapter,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
   SnapshotMode,
-} from './adapter.js';
+} from '../media/contracts.js';
+import type { AdapterDiagnostic, AdapterEventTrace, AttachedAdapter, HomeKitDefinitions } from './adapter.js';
 import { admittedHomeKitAdapters } from './representation.js';
 
 /** One complete canonical registry and snapshot published from the same discovery pass. */
@@ -53,13 +50,13 @@ export type HomeKitDiagnostic = RepresentationDiagnostic | AdapterDiagnostic;
 export type HomeKitDiagnosticSink = (diagnostic: HomeKitDiagnostic, affectedDeviceIds: readonly string[]) => void;
 
 /** Redacted debug evidence that an SDK event reached one self-hosted adapter. */
-export interface HomeKitEventTrace {
+export interface HomeKitEventReport {
   adapter: string;
   event: string;
   observation: AdapterEventTrace['observation'];
 }
 
-export type HomeKitEventTraceSink = (trace: HomeKitEventTrace) => void;
+export type HomeKitEventReportSink = (trace: HomeKitEventReport) => void;
 
 export type HomeKitEntityPreferences = Readonly<
   Record<string, { represented?: boolean; audio?: boolean; snapshotMode?: SnapshotMode }>
@@ -98,7 +95,7 @@ export class HomeKitReconciler {
     private readonly store: HomeKitAccessoryStore,
     private readonly diagnose: HomeKitDiagnosticSink,
     cachedAccessories: readonly PlatformAccessory[] = [],
-    private readonly trace?: HomeKitEventTraceSink,
+    private readonly trace?: HomeKitEventReportSink,
     private readonly entityPreferences: HomeKitEntityPreferences = {},
     private readonly liveMedia?: LiveMediaAdapter,
     private readonly snapshotMedia?: SnapshotMediaAdapter,

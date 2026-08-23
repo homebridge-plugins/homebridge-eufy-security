@@ -13,25 +13,26 @@ import type {
 } from 'homebridge';
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
-import { hasAdmittedDoorbellPress } from './doorbell.js';
-import { hasAdmittedMotionEvents, motionSensorService } from './motion.js';
 import type {
   AdaptedRecording,
-  AdapterAttachmentContext,
-  AttachedAdapter,
-  HomeKitAdapter,
-  HomeKitDefinitions,
   LiveMediaAdapter,
+  LiveMediaSource,
   LiveSessionOutcome,
   NegotiatedLiveVideo,
   NegotiatedRecordedAudio,
   NegotiatedRecording,
   PreparedLiveMedia,
   RecordingMediaAdapter,
+  RecordingMediaSource,
   RecordingOutcome,
+  SnapshotAcquisitionScope,
   SnapshotMediaAdapter,
+  SnapshotMediaSource,
   SnapshotMode,
-} from '../adapter.js';
+} from '../../media/contracts.js';
+import { hasAdmittedDoorbellPress } from './doorbell.js';
+import { hasAdmittedMotionEvents, motionSensorService } from './motion.js';
+import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter, HomeKitDefinitions } from '../adapter.js';
 
 export const CAMERA_STREAMING_ADAPTER_KEY = 'camera.streaming';
 
@@ -790,12 +791,7 @@ interface PendingSession {
   selection?: StartStreamRequest;
 }
 
-interface CameraMediaSource {
-  live(): ReturnType<NonNullable<CameraActions['live']>>;
-  snapshotStored?(): ReturnType<NonNullable<CameraActions['snapshotStored']>>;
-  snapshotLive?(): ReturnType<NonNullable<CameraActions['snapshotLive']>>;
-  recordFragments?(options?: { fragmentSeconds?: number }): ReturnType<NonNullable<CameraActions['recordFragments']>>;
-}
+interface CameraMediaSource extends LiveMediaSource, SnapshotMediaSource, RecordingMediaSource {}
 
 /** Why live view is unavailable for a camera an admitted observation reports as disabled. */
 type LiveAdmissionRefusal = 'disabled' | 'disabled-mid-session';
@@ -821,7 +817,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   controller?: CameraController;
   private readonly sessions = new Map<string, PendingSession>();
   private readonly prepareGenerations = new Map<string, symbol>();
-  private readonly snapshotScope: { identity: object; serial: string };
+  private readonly snapshotScope: SnapshotAcquisitionScope;
   private acceptingSessions = true;
   private refused = false;
   private supervision?: ReturnType<typeof setInterval>;

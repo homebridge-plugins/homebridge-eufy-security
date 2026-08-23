@@ -2,6 +2,15 @@ import type { FragmentRecordingHandle, MediaFragment } from '@mega-yfue/eufy-sdk
 import { spawn } from 'node:child_process';
 import type { Readable } from 'node:stream';
 
+import type {
+  AdaptedRecording,
+  NegotiatedRecording,
+  RecordedFragment,
+  RecordingFailure,
+  RecordingLifecycle,
+  RecordingMediaAdapter,
+  RecordingMediaSource,
+} from './contracts.js';
 import { type MediaProcess, PROCESS_STOP_GRACE_MS, SOURCE_START_BACKSTOP_MS } from './live-stream.js';
 
 /**
@@ -37,64 +46,6 @@ export interface RecordingMediaProcess extends MediaProcess {
 
 export type RecordingMediaProcessFactory = (executable: string, args: readonly string[]) => RecordingMediaProcess;
 
-export interface NegotiatedRecordedAudio {
-  readonly codec: 'AAC-lc' | 'AAC-eld';
-  readonly channels: number;
-  readonly sampleRate: 16 | 24 | 32 | 48;
-  readonly maxBitRate: number;
-}
-
-/**
- * The complete recording contract one HomeKit controller selected. Audio is absent both when the
- * controller negotiated none and when it withdrew recording audio, because either way the output carries
- * no audio track at all.
- */
-export interface NegotiatedRecording {
-  readonly width: number;
-  readonly height: number;
-  readonly fps: number;
-  readonly maxBitRate: number;
-  readonly profile: 'baseline' | 'main' | 'high';
-  readonly level: '3.1' | '3.2' | '4.0';
-  readonly iFrameIntervalMs: number;
-  readonly fragmentLengthMs: number;
-  readonly audio?: NegotiatedRecordedAudio;
-}
-
-/** Why one recording produced no further usable output, in the bounded vocabulary the media domain owns. */
-export type RecordingFailure =
-  | 'source-unavailable'
-  | 'source-error'
-  | 'no-output-within-backstop'
-  | 'adaptation-failed';
-
-/**
- * One recording lifecycle outcome, reported once per transition and carrying no device identity, address,
- * key, media byte, or SDK message.
- */
-export type RecordingOutcome =
-  | { readonly outcome: 'recording' }
-  | { readonly outcome: 'failed'; readonly reason: RecordingFailure };
-
-/** One adapted output unit: the initialization segment, or one complete media fragment. */
-export interface RecordedFragment {
-  readonly data: Buffer;
-  readonly last: boolean;
-}
-
-export interface RecordingMediaSource {
-  recordFragments?(options?: { fragmentSeconds?: number }): FragmentRecordingHandle;
-}
-
-/** One recording in progress: the units it produces, and the one call that ends it. */
-export interface AdaptedRecording extends AsyncIterable<RecordedFragment> {
-  stop(): void;
-}
-
-export interface RecordingLifecycle {
-  onOutcome?(outcome: RecordingOutcome): void;
-}
-
 /**
  * Adapts an SDK fragment recording into fragmented MP4 output that honours a negotiated HomeKit recording
  * contract.
@@ -104,7 +55,7 @@ export interface RecordingLifecycle {
  * through. They are therefore demuxed and recoded here, and the output is refragmented on this plugin's
  * own keyframes so every fragment starts with one and none is longer than the selected fragment length.
  */
-export class FfmpegRecordingMedia {
+export class FfmpegRecordingMedia implements RecordingMediaAdapter {
   constructor(
     private readonly executable: string,
     private readonly createProcess: RecordingMediaProcessFactory = spawnRecordingMediaProcess,

@@ -4,13 +4,8 @@ import { PassThrough } from 'node:stream';
 import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame } from '@mega-yfue/eufy-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  FfmpegLiveMedia,
-  type LiveMediaProcess,
-  type LiveSessionOutcome,
-  type NegotiatedLiveAudio,
-  type NegotiatedLiveVideo,
-} from '../../src/media/live-stream.js';
+import type { LiveSessionOutcome, NegotiatedLiveAudio, NegotiatedLiveVideo } from '../../src/media/contracts.js';
+import { FfmpegLiveMedia, type LiveMediaProcess } from '../../src/media/live-stream.js';
 
 const NEGOTIATED_VIDEO: NegotiatedLiveVideo = {
   width: 1280,

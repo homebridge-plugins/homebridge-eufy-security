@@ -41,16 +41,16 @@ import type {
 } from 'homebridge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { AdapterAttachmentContext } from '../../src/homekit/adapter.js';
 import type {
   AdaptedRecording,
-  AdapterAttachmentContext,
   LiveSessionOutcome,
   NegotiatedRecording,
   PreparedLiveMedia,
   RecordedFragment,
   RecordingMediaAdapter,
   RecordingOutcome,
-} from '../../src/homekit/adapter.js';
+} from '../../src/media/contracts.js';
 import type { DeviceMemberEvidence } from '../../src/device/member-evidence.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
 import { DOORBELL_ADAPTER } from '../../src/homekit/adapters/doorbell.js';

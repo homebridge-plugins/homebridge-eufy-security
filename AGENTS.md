@@ -49,10 +49,11 @@ or dependency edge requires updating this section and the architecture contract 
   media.
 - `runtime/` may import account, configuration, diagnostics, and device. It never imports UI, HomeKit,
   or media.
-- `media/` may import configuration and device. It owns FFmpeg processes, media sessions, snapshots,
-  and HKSV adaptation without importing runtime or HomeKit implementations.
-- `homekit/` may import device. It defines the media interfaces it consumes and never imports account,
-  runtime, UI, or concrete media implementations.
+- `media/` may import configuration and device. It owns the canonical type-only media seam in
+  `media/contracts.ts`, plus FFmpeg processes, media sessions, snapshots, and HKSV adaptation, without
+  importing runtime or HomeKit implementations.
+- `homekit/` may import device and types from `media/contracts.ts`. It never imports account, runtime,
+  UI, or concrete media implementations.
 - `platform.ts` and `ui/server.ts` are composition roots. The UI server may consume diagnostics to
   manage explicitly initiated support sessions, and the `ui/` dashboard projection may consume
   HomeKit admission policy so the browser does not recreate a second capability model. They construct and connect modules but do not
@@ -61,8 +62,9 @@ or dependency edge requires updating this section and the architecture contract 
 Only `runtime/sdk-client.ts` and `ui/server.ts` may create a concrete SDK client. HomeKit adapters may
 import typed public SDK capabilities, but never an SDK transport, deep package path, or client facade.
 
-- Define an interface beside its consumer and inject a structurally compatible implementation. Do not
-  create generic `common/`, `contracts/`, `shared/`, or `utils/` buckets.
+- Define an interface beside its consumer and inject a structurally compatible implementation. A seam shared
+  by HomeKit and media is defined once in the domain-owned `media/contracts.ts`; do not duplicate it on either
+  side or create generic `common/`, `contracts/`, `shared/`, or `utils/` buckets.
 - Keep composition roots thin and behavior in the module that owns the policy.
 - Do not add internal barrels. The package entry point and closed registries such as the capability
   adapter registry are the exceptions.

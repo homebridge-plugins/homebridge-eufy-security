@@ -71,7 +71,7 @@ Dependencies follow these directions:
 | `account/`    | configuration, device                                                                      |
 | `runtime/`    | account, configuration, device                                                             |
 | `media/`      | configuration, device                                                                      |
-| `homekit/`    | device                                                                                     |
+| `homekit/`    | device, plus type-only imports from `media/contracts.ts`                                    |
 | `ui/`         | account, configuration, device, HomeKit admission policy, persisted runtime views, storage |
 | `platform.ts` | configuration, runtime, HomeKit, media, storage                                            |
 | `index.ts`    | platform and settings                                                                      |
@@ -116,9 +116,10 @@ private package paths, or the client facade.
 
 ## Module design
 
-Interfaces live beside the consumer that needs them. Implementations are injected structurally at a
-composition root. This keeps each interface small and prevents a generic contracts layer from becoming
-a second dependency hub.
+Interfaces live beside the consumer that needs them. The exception is the domain-owned type-only media seam
+in `media/contracts.ts`, which is defined once because both HomeKit and concrete media adapters must use the
+exact negotiated contract. Implementations are injected at a composition root. This keeps each interface
+small and prevents a generic contracts layer from becoming a second dependency hub.
 
 Generic `common/`, `contracts/`, `shared/`, and `utils/` directories are forbidden. Shared behavior
 belongs to the domain that owns its invariant. Internal barrels are also forbidden; the package entry
@@ -156,9 +157,10 @@ Media adaptation is a separate plugin module because source acquisition and Home
 different contracts and lifetimes. The SDK supplies Eufy source truth. `media/` owns FFmpeg, negotiated
 output, snapshots, live sessions, talkback, HKSV fragments, prebuffer, and resource budgets.
 
-HomeKit camera bundles define the media interfaces they consume. The platform composition root injects
-the media implementations. This prevents camera tickets from embedding independent process, source,
-and cleanup policies in each HomeKit adapter.
+`media/contracts.ts` defines the type-only interface shared by HomeKit camera bundles and concrete media
+adapters. HomeKit may import only that file from `media/`; the platform composition root injects the concrete
+implementations. This gives negotiation, source, lifecycle, and output vocabulary one owner without allowing
+camera adapters to depend on FFmpeg implementations or embed independent process and cleanup policies.
 
 A live session is bounded by whichever domain owns the phase. The SDK owns source warm-up: it retries a
 start inside its own window and fails its consumers with a typed error, which the plugin already

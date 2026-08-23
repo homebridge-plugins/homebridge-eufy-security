@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { FragmentRecordingHandle, MediaFragment, StreamBudgetNotice } from '@mega-yfue/eufy-sdk';
 
-import {
-  FfmpegRecordingMedia,
-  type AdaptedRecording,
-  type NegotiatedRecording,
-  type RecordedFragment,
-  type RecordingOutcome,
-} from '../../src/media/recording.js';
+import type {
+  AdaptedRecording,
+  NegotiatedRecording,
+  RecordedFragment,
+  RecordingOutcome,
+} from '../../src/media/contracts.js';
+import { FfmpegRecordingMedia } from '../../src/media/recording.js';
 
 const NEGOTIATED: NegotiatedRecording = {
   width: 1920,

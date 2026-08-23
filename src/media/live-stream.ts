@@ -3,6 +3,18 @@ import { createSocket } from 'node:dgram';
 import { spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
+import type {
+  LiveMediaAdapter,
+  LiveMediaTarget,
+  LiveMediaTransport,
+  LiveSessionFailure,
+  LiveSessionOutcome,
+  NegotiatedLiveAudio,
+  NegotiatedLiveMedia,
+  NegotiatedLiveVideo,
+  PreparedLiveMedia,
+} from './contracts.js';
+
 /** How long a deliberately stopped adaptation process is given to exit before it is killed. */
 export const PROCESS_STOP_GRACE_MS = 2_000;
 const INITIAL_RTCP_GRACE_MS = 15_000;
@@ -35,76 +47,8 @@ export interface ReservedMediaPort {
 export type LiveMediaProcessFactory = (executable: string, args: readonly string[]) => MediaProcess;
 export type MediaPortFactory = (addressVersion: 'ipv4' | 'ipv6') => Promise<ReservedMediaPort>;
 
-export interface LiveMediaTransport {
-  readonly addressVersion: 'ipv4' | 'ipv6';
-  readonly targetAddress: string;
-  readonly video: LiveMediaTarget;
-  readonly audio?: LiveMediaTarget;
-  readonly onVideoFailure?: () => void;
-  readonly onSessionOutcome?: (outcome: LiveSessionOutcome) => void;
-}
-
-/** Why one live session ended without usable video, in a bounded plugin-owned vocabulary. */
-export type LiveSessionFailure =
-  | 'source-acquisition-timeout'
-  | 'no-video-within-backstop'
-  | 'source-error'
-  | 'source-stopped'
-  | 'rtcp-timeout'
-  | 'adaptation-failed';
-
-/**
- * One live session lifecycle outcome, reported once per transition and carrying no device identity,
- * address, key, media byte, or SDK message.
- */
-export type LiveSessionOutcome =
-  | { readonly outcome: 'streaming' }
-  | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure };
-
-export interface LiveMediaTarget {
-  readonly port: number;
-  readonly srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' | 'AES_CM_256_HMAC_SHA1_80';
-  readonly srtpKey: Buffer;
-  readonly srtpSalt: Buffer;
-}
-
-export interface NegotiatedLiveMedia {
-  readonly video: NegotiatedLiveVideo;
-  readonly audio?: NegotiatedLiveAudio;
-}
-
-export interface NegotiatedLiveVideo {
-  readonly width: number;
-  readonly height: number;
-  readonly fps: number;
-  readonly maxBitRate: number;
-  readonly profile: 'baseline' | 'main' | 'high';
-  readonly level: '3.1' | '3.2' | '4.0';
-  readonly payloadType: number;
-  readonly ssrc: number;
-  readonly mtu: number;
-  readonly rtcpInterval: number;
-}
-
-export interface NegotiatedLiveAudio {
-  readonly codec: 'AAC-eld';
-  readonly channels: number;
-  readonly sampleRate: 16 | 24;
-  readonly maxBitRate: number;
-  readonly payloadType: number;
-  readonly ssrc: number;
-}
-
-export interface PreparedLiveMedia {
-  readonly videoPort: number;
-  readonly audioPort?: number;
-  start(source: { live(): Promise<LiveStreamHandle> }, negotiated: NegotiatedLiveMedia): Promise<void>;
-  reconfigure(video: NegotiatedLiveVideo): void;
-  stop(): void;
-}
-
 /** Adapts separate SDK elementary streams into independently failing HomeKit SRTP outputs. */
-export class FfmpegLiveMedia {
+export class FfmpegLiveMedia implements LiveMediaAdapter {
   constructor(
     private readonly executable: string,
     private readonly createProcess: LiveMediaProcessFactory = spawnLiveMediaProcess,

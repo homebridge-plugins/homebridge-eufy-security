@@ -1,0 +1,171 @@
+import type { FragmentRecordingHandle, LiveStreamHandle } from '@mega-yfue/eufy-sdk';
+
+import type { SnapshotMode } from '../configuration.js';
+
+export type { SnapshotMode } from '../configuration.js';
+
+export interface LiveMediaSource {
+  live(): Promise<LiveStreamHandle>;
+}
+
+export interface LiveMediaTarget {
+  readonly port: number;
+  readonly srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' | 'AES_CM_256_HMAC_SHA1_80';
+  readonly srtpKey: Buffer;
+  readonly srtpSalt: Buffer;
+}
+
+export interface NegotiatedLiveVideo {
+  readonly width: number;
+  readonly height: number;
+  readonly fps: number;
+  readonly maxBitRate: number;
+  readonly profile: 'baseline' | 'main' | 'high';
+  readonly level: '3.1' | '3.2' | '4.0';
+  readonly payloadType: number;
+  readonly ssrc: number;
+  readonly mtu: number;
+  readonly rtcpInterval: number;
+}
+
+export interface NegotiatedLiveAudio {
+  readonly codec: 'AAC-eld';
+  readonly channels: number;
+  readonly sampleRate: 16 | 24;
+  readonly maxBitRate: number;
+  readonly payloadType: number;
+  readonly ssrc: number;
+}
+
+export interface NegotiatedLiveMedia {
+  readonly video: NegotiatedLiveVideo;
+  readonly audio?: NegotiatedLiveAudio;
+}
+
+/** Why one live session ended without usable video, in a bounded plugin-owned vocabulary. */
+export type LiveSessionFailure =
+  | 'source-acquisition-timeout'
+  | 'no-video-within-backstop'
+  | 'source-error'
+  | 'source-stopped'
+  | 'rtcp-timeout'
+  | 'adaptation-failed';
+
+/** One live session lifecycle outcome, carrying no device identity, address, key, or media material. */
+export type LiveSessionOutcome =
+  | { readonly outcome: 'streaming' }
+  | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure };
+
+export interface LiveMediaTransport {
+  readonly addressVersion: 'ipv4' | 'ipv6';
+  readonly targetAddress: string;
+  readonly video: LiveMediaTarget;
+  readonly audio?: LiveMediaTarget;
+  readonly onVideoFailure?: () => void;
+  readonly onSessionOutcome?: (outcome: LiveSessionOutcome) => void;
+}
+
+export interface PreparedLiveMedia {
+  readonly videoPort: number;
+  readonly audioPort?: number;
+  start(source: LiveMediaSource, negotiated: NegotiatedLiveMedia): Promise<void>;
+  reconfigure(video: NegotiatedLiveVideo): void;
+  stop(): void;
+}
+
+/** Camera-owned media adaptation requested without exposing its concrete FFmpeg implementation. */
+export interface LiveMediaAdapter {
+  prepare(transport: LiveMediaTransport): Promise<PreparedLiveMedia>;
+}
+
+export interface NegotiatedRecordedAudio {
+  readonly codec: 'AAC-lc' | 'AAC-eld';
+  readonly channels: number;
+  readonly sampleRate: 16 | 24 | 32 | 48;
+  readonly maxBitRate: number;
+}
+
+/**
+ * The complete recording contract one HomeKit controller selected. Audio is absent both when the controller
+ * negotiated none and when it withdrew recording audio, because either way the output carries no audio track.
+ */
+export interface NegotiatedRecording {
+  readonly width: number;
+  readonly height: number;
+  readonly fps: number;
+  readonly maxBitRate: number;
+  readonly profile: 'baseline' | 'main' | 'high';
+  readonly level: '3.1' | '3.2' | '4.0';
+  readonly iFrameIntervalMs: number;
+  readonly fragmentLengthMs: number;
+  readonly audio?: NegotiatedRecordedAudio;
+}
+
+/** Why one recording produced no further usable output, in the bounded vocabulary the media domain owns. */
+export type RecordingFailure =
+  | 'source-unavailable'
+  | 'source-error'
+  | 'no-output-within-backstop'
+  | 'adaptation-failed';
+
+/** One recording lifecycle outcome, carrying no device identity, address, key, or media material. */
+export type RecordingOutcome =
+  | { readonly outcome: 'recording' }
+  | { readonly outcome: 'failed'; readonly reason: RecordingFailure };
+
+/** One adapted recording output unit: the initialization segment, or one complete media fragment. */
+export interface RecordedFragment {
+  readonly data: Buffer;
+  readonly last: boolean;
+}
+
+export interface RecordingMediaSource {
+  recordFragments?(options?: { fragmentSeconds?: number }): FragmentRecordingHandle;
+}
+
+/** One recording in progress: the units it produces, and the one call that ends it. */
+export interface AdaptedRecording extends AsyncIterable<RecordedFragment> {
+  stop(): void;
+}
+
+export interface RecordingLifecycle {
+  onOutcome?(outcome: RecordingOutcome): void;
+}
+
+/** Camera-owned recording adaptation requested without exposing its concrete FFmpeg implementation. */
+export interface RecordingMediaAdapter {
+  record(
+    source: RecordingMediaSource,
+    negotiated: NegotiatedRecording,
+    lifecycle?: RecordingLifecycle,
+  ): AdaptedRecording;
+}
+
+export interface SnapshotMediaSource {
+  snapshotStored?(): Promise<Buffer>;
+  snapshotLive?(): Promise<{ jpeg: Buffer; width: number; height: number }>;
+}
+
+/** Stable camera-local identity that preserves concurrent acquisition lifetime across source replacement. */
+export interface SnapshotAcquisitionScope {
+  readonly identity: object;
+  readonly serial: string;
+}
+
+/** What HomeKit knows about a camera that changes how its snapshot must be presented. */
+export interface SnapshotPresentation {
+  /** Whether the camera is enabled, when an admitted observation reports it, and nothing otherwise. */
+  readonly enabled?: boolean;
+  /** Called when the packaged unavailable image was served in place of a camera image. */
+  onPlaceholder?(): void;
+}
+
+/** Snapshot acquisition requested without exposing its concrete media policy implementation. */
+export interface SnapshotMediaAdapter {
+  acquire(
+    scope: SnapshotAcquisitionScope,
+    source: SnapshotMediaSource,
+    mode: SnapshotMode,
+    presentation?: SnapshotPresentation,
+  ): Promise<Buffer>;
+}
