@@ -53,6 +53,7 @@ import type {
 } from '../../src/homekit/adapter.js';
 import type { DeviceMemberEvidence } from '../../src/device/member-evidence.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
+import { DOORBELL_ADAPTER } from '../../src/homekit/adapters/doorbell.js';
 import { MOTION_ADAPTER } from '../../src/homekit/adapters/motion.js';
 import { SnapshotAcquisition, type LastSuccessfulImages } from '../../src/media/snapshot.js';
 
@@ -1880,7 +1881,7 @@ function recordingMedia() {
 
 /**
  * The evidence a camera needs before HomeKit Secure Video may be configured for it: the fragment recording
- * itself, and an admitted detection event to trigger one.
+ * itself, and an admitted event to trigger one.
  */
 function recordingEvidence(
   evidence: AdapterAttachmentContext['evidence'] = new Map(),
@@ -2354,6 +2355,90 @@ describe('camera recording bundle adapter', () => {
     await refused.iteration;
     expect(refused.failed()).toBe(true);
     expect(media.negotiations).toHaveLength(1);
+  });
+
+  it('advertises a press as a recording trigger for a camera whose doorbell press is admitted', () => {
+    const media = recordingMedia();
+    const accessory = new Accessory(
+      'Synthetic recording doorbell',
+      uuid.generate('synthetic-recording-doorbell'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), recordFragments: vi.fn() }) } as never,
+      evidence: new Map([
+        ...recordingEvidence(new Map(), { trigger: false }),
+        ['doorbell.doorbellPress.event', { id: 'doorbell.doorbellPress.event', kind: 'event' as const }],
+      ]),
+      accessory,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      recordingMedia: media.adapter,
+      snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController;
+    expect(controller.controllerId()).toBe('camera');
+    expect(accessory.services.map((service) => service.UUID)).not.toContain(Service.MotionSensor.UUID);
+    expect(accessory.services.map((service) => service.UUID)).not.toContain(Service.Microphone.UUID);
+    const advertised = decodeTlv(
+      Buffer.from(
+        controller.recordingManagement!.recordingManagementService.getCharacteristic(
+          Characteristic.SupportedCameraRecordingConfiguration,
+        ).value as string,
+        'base64',
+      ),
+    );
+    expect(advertised[2].readInt32LE(0)).toBe(EventTriggerOption.DOORBELL);
+  });
+
+  it('advertises both triggers for a doorbell that also reports motion', () => {
+    const media = recordingMedia();
+    const accessory = new Accessory(
+      'Synthetic recording doorbell with motion',
+      uuid.generate('synthetic-recording-doorbell-motion'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), recordFragments: vi.fn() }) } as never,
+      evidence: new Map([
+        ...recordingEvidence(),
+        ['doorbell.doorbellPress.event', { id: 'doorbell.doorbellPress.event', kind: 'event' as const }],
+      ]),
+      accessory,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      recordingMedia: media.adapter,
+      snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController;
+    const advertised = decodeTlv(
+      Buffer.from(
+        controller.recordingManagement!.recordingManagementService.getCharacteristic(
+          Characteristic.SupportedCameraRecordingConfiguration,
+        ).value as string,
+        'base64',
+      ),
+    );
+    expect(advertised[2].readInt32LE(0)).toBe(EventTriggerOption.MOTION | EventTriggerOption.DOORBELL);
+    expect(accessory.services.filter((service) => service.UUID === Service.MotionSensor.UUID)).toHaveLength(1);
+    expect(accessory.services.map((service) => service.UUID)).not.toContain(Service.Doorbell.UUID);
+
+    DOORBELL_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL } as never,
+      evidence: new Map([['doorbell.doorbellPress.event', { id: 'doorbell.doorbellPress.event', kind: 'event' }]]),
+      accessory,
+      hap: HAP,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    expect(accessory.services.filter((service) => service.UUID === Service.Doorbell.UUID)).toHaveLength(1);
   });
 
   it('refuses a recording stream before any configuration has been selected', async () => {

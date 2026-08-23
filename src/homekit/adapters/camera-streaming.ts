@@ -13,6 +13,7 @@ import type {
 } from 'homebridge';
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
+import { hasAdmittedDoorbellPress } from './doorbell.js';
 import { hasAdmittedMotionEvents, motionSensorService } from './motion.js';
 import type {
   AdaptedRecording,
@@ -293,6 +294,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'advertises a press as a recording trigger for a camera whose doorbell press is admitted',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'advertises both triggers for a doorbell that also reports motion',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'omits HomeKit Secure Video for a camera with no detection event to trigger a recording',
         },
         {
@@ -469,8 +478,10 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   context.diagnose(snapshotUnavailable(requiresLive && liveReason !== 'recovered', 'snapshotLive', liveReason));
   const recordingEvidence = context.evidence.has(CAMERA_RECORD_FRAGMENTS.id);
   const recordingAvailable = recordingEvidence && typeof camera.recordFragments === 'function';
-  const recordingTrigger = hasAdmittedMotionEvents(context.evidence);
-  const recordingConfigured = recordingAvailable && context.recordingMedia !== undefined && recordingTrigger;
+  const recordingMotion = hasAdmittedMotionEvents(context.evidence);
+  const recordingPress = hasAdmittedDoorbellPress(context.evidence);
+  const recordingConfigured =
+    recordingAvailable && context.recordingMedia !== undefined && (recordingMotion || recordingPress);
   context.diagnose({
     code: CAMERA_RECORDING_UNAVAILABLE_CONDITION,
     capability: 'camera',
@@ -563,8 +574,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
       },
       ...(recording
         ? {
-            recording: { options: recordingOptions(context), delegate: recording },
-            sensors: { motion: motionSensorService(context) },
+            recording: { options: recordingOptions(context, recordingPress), delegate: recording },
+            ...(recordingMotion ? { sensors: { motion: motionSensorService(context) } } : {}),
           }
         : {}),
     },
@@ -595,16 +606,23 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
  * detection adapter that owns it, so one accessory still carries exactly one motion service whichever of
  * the two attaches first.
  *
- * Doorbell triggers are not declared: HomeKit home hubs do not enable them, so advertising one would claim
- * behaviour no controller will ever exercise.
+ * A press trigger is declared rather than derived, and that asymmetry with motion is deliberate. HomeKit
+ * links nothing for a press and mirrors no state onto the doorbell service, so the advertised trigger is the
+ * whole mechanism; the service carrying the press stays wholly owned by the doorbell adapter. Deriving it
+ * instead would mean building the doorbell controller, which cannot be told to leave the microphone and
+ * speaker services alone and would put a second one of each on an accessory that already has them.
+ *
+ * Whether a home hub enables a press trigger is the hub's decision to publish in the configuration it
+ * selects, so it is advertised wherever a press exists rather than asserted here.
  *
  * Only the resolutions and rates a recording can actually be coded at are advertised, and only AAC-ELD,
  * so a controller cannot select a contract the adaptation would then have to approximate.
  */
-function recordingOptions(context: AdapterAttachmentContext) {
+function recordingOptions(context: AdapterAttachmentContext, press: boolean) {
   const { hap } = context;
   return {
     prebufferLength: RECORDING_PREBUFFER_MS,
+    ...(press ? { overrideEventTriggerOptions: [hap.EventTriggerOption.DOORBELL] } : {}),
     mediaContainerConfiguration: {
       type: hap.MediaContainerType.FRAGMENTED_MP4,
       fragmentLength: RECORDING_FRAGMENT_LENGTH_MS,
