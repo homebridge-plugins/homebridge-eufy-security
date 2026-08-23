@@ -169,28 +169,46 @@ function judgePluginLog(mark) {
   check((levels.error ?? 0) === 0, 'the plugin JSONL recorded no error condition for the session');
 }
 
-/** Adaptation processes the plugin owns, with the negotiated selection matched but never printed. */
-function observeAdaptation(label, expectedCount, applied) {
+/**
+ * Adaptation processes the plugin owns, with the negotiated selection matched but never printed.
+ *
+ * Video and audio are separate inputs and therefore separate processes, so they are counted separately:
+ * one video adaptation per expected session, and one audio adaptation per session only when the camera
+ * actually delivered source audio. Counting them together fails every audio-capable camera. A video
+ * adaptation is the one asked to drop audio, and an audio adaptation the one asked to drop video, which is
+ * the only part of an argument list that may be matched here because the rest carries SRTP key material.
+ */
+function observeAdaptation(label, expectedSessions, applied) {
   const processes = adaptationProcesses(homebridgePid);
   if (processes === undefined) {
     results.unverified(`${label} adaptation processes=not-observed (pass --homebridge-pid to verify them)`);
     return;
   }
-  console.log(`${label} adaptation processes=${processes.length}`);
-  check(processes.length === expectedCount, `${label} ran exactly ${expectedCount} adaptation process(es)`);
-  if (!applied || processes.length === 0) {
+  const video = processes.filter(({ args }) => / -an\b/.test(args));
+  const audio = processes.filter(({ args }) => / -vn\b/.test(args));
+  console.log(`${label} adaptation processes=${processes.length} video=${video.length} audio=${audio.length}`);
+  check(video.length === expectedSessions, `${label} ran exactly ${expectedSessions} video adaptation(s)`);
+  check(
+    audio.length <= expectedSessions,
+    `${label} ran no more than ${expectedSessions} audio adaptation(s), one per session that carried source audio`,
+  );
+  check(
+    video.length + audio.length === processes.length,
+    `${label} ran no adaptation process that was neither the video nor the audio of a session`,
+  );
+  if (!applied || video.length === 0) {
     return;
   }
   check(
-    processes.some(({ args }) => args.includes(`${applied.width}:${applied.height}`)),
+    video.some(({ args }) => args.includes(`${applied.width}:${applied.height}`)),
     `${label} adaptation applied ${applied.width}x${applied.height}`,
   );
   check(
-    processes.some(({ args }) => new RegExp(`-r\\s+${applied.fps}\\b`).test(args)),
+    video.some(({ args }) => new RegExp(`-r\\s+${applied.fps}\\b`).test(args)),
     `${label} adaptation applied ${applied.fps}fps`,
   );
   check(
-    processes.some(({ args }) => args.includes(`${applied.bitrate}k`)),
+    video.some(({ args }) => args.includes(`${applied.bitrate}k`)),
     `${label} adaptation applied ${applied.bitrate}kbps`,
   );
 }
