@@ -13,6 +13,7 @@ import type {
 } from 'homebridge';
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
+import { hasAdmittedMotionEvents, motionSensorService } from './motion.js';
 import type {
   AdaptedRecording,
   AdapterAttachmentContext,
@@ -284,6 +285,18 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'links the motion sensor that triggers a recording to its recording management service',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'shares one motion service with the detection adapter whichever of them attaches first',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'omits HomeKit Secure Video for a camera with no detection event to trigger a recording',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'omits HomeKit Secure Video for a camera with no evidenced fragment recording',
         },
         {
@@ -456,7 +469,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   context.diagnose(snapshotUnavailable(requiresLive && liveReason !== 'recovered', 'snapshotLive', liveReason));
   const recordingEvidence = context.evidence.has(CAMERA_RECORD_FRAGMENTS.id);
   const recordingAvailable = recordingEvidence && typeof camera.recordFragments === 'function';
-  const recordingConfigured = recordingAvailable && context.recordingMedia !== undefined;
+  const recordingTrigger = hasAdmittedMotionEvents(context.evidence);
+  const recordingConfigured = recordingAvailable && context.recordingMedia !== undefined && recordingTrigger;
   context.diagnose({
     code: CAMERA_RECORDING_UNAVAILABLE_CONDITION,
     capability: 'camera',
@@ -468,7 +482,9 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
         ? 'missing-evidence'
         : !recordingAvailable
           ? 'missing'
-          : 'adapter-missing',
+          : context.recordingMedia === undefined
+            ? 'adapter-missing'
+            : 'missing-trigger',
   });
   const source: CameraMediaSource = {
     live: camera.live.bind(camera),
@@ -545,7 +561,12 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
               },
             }),
       },
-      ...(recording ? { recording: { options: recordingOptions(context), delegate: recording } } : {}),
+      ...(recording
+        ? {
+            recording: { options: recordingOptions(context), delegate: recording },
+            sensors: { motion: motionSensorService(context) },
+          }
+        : {}),
     },
     true,
   );
@@ -567,11 +588,15 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
 /**
  * What this camera advertises as recordable.
  *
- * The motion trigger is declared rather than derived from a sensor service, because the camera's motion
- * representation is owned by the detection adapter on the same accessory container and letting the
- * controller create its own sensor would put a second motion service on it. Doorbell triggers are not
- * declared: HomeKit home hubs do not enable them, so advertising one would claim behaviour no controller
- * will ever exercise.
+ * The motion trigger is derived from the sensor service the controller is given rather than declared
+ * separately, because HomeKit needs the sensor that triggers a recording to be linked to the recording
+ * management service, carry its own active state, and follow the camera's HomeKit-active state. Declaring
+ * the trigger alone advertises a recording nothing will ever start. That service is resolved through the
+ * detection adapter that owns it, so one accessory still carries exactly one motion service whichever of
+ * the two attaches first.
+ *
+ * Doorbell triggers are not declared: HomeKit home hubs do not enable them, so advertising one would claim
+ * behaviour no controller will ever exercise.
  *
  * Only the resolutions and rates a recording can actually be coded at are advertised, and only AAC-ELD,
  * so a controller cannot select a contract the adaptation would then have to approximate.
@@ -580,7 +605,6 @@ function recordingOptions(context: AdapterAttachmentContext) {
   const { hap } = context;
   return {
     prebufferLength: RECORDING_PREBUFFER_MS,
-    overrideEventTriggerOptions: [hap.EventTriggerOption.MOTION],
     mediaContainerConfiguration: {
       type: hap.MediaContainerType.FRAGMENTED_MP4,
       fragmentLength: RECORDING_FRAGMENT_LENGTH_MS,

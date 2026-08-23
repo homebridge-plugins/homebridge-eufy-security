@@ -1,5 +1,7 @@
 import type { AnyDeviceEvent } from '@mega-yfue/eufy-sdk';
 
+import type { Service } from 'homebridge';
+
 import type { AdapterAttachmentContext, AdapterEventTrace, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 
 export const MOTION_ADAPTER_KEY = 'motion.sensor';
@@ -11,7 +13,13 @@ interface MotionHold {
   timer?: ReturnType<typeof setTimeout>;
 }
 const MOTION_HOLDS = new WeakMap<object, MotionHold>();
-const MOTION_EVENT_REQUIREMENTS = [
+/**
+ * The admitted SDK detection events that drive this accessory's one motion service.
+ *
+ * The camera bundle reads this to decide whether a camera has a recording trigger at all, so the set has
+ * one owner rather than a copy beside every consumer.
+ */
+export const MOTION_EVENT_REQUIREMENTS = [
   { capability: 'motion', eventName: 'motion' },
   { capability: 'motion', eventName: 'cryingDetected' },
   { capability: 'motion', eventName: 'soundDetected' },
@@ -21,6 +29,28 @@ const MOTION_EVENT_REQUIREMENTS = [
   { capability: 'person_detection', eventName: 'strangerDetected' },
   { capability: 'doorbell', eventName: 'petDetection' },
 ] as const satisfies readonly { capability: string; eventName: AnyDeviceEvent['eventName'] }[];
+
+/** Whether a device reports at least one detection event this adapter admits as motion. */
+export function hasAdmittedMotionEvents(evidence: AdapterAttachmentContext['evidence']): boolean {
+  return MOTION_EVENT_REQUIREMENTS.some(({ capability, eventName }) =>
+    evidence.has(`${capability}.${eventName}.event`),
+  );
+}
+
+/**
+ * This accessory's one motion service, created on first use under the stable key this adapter owns.
+ *
+ * A camera bundle configuring HomeKit Secure Video has to hand the same service to its controller, because
+ * HomeKit links the sensor that triggers a recording to the recording management service. Both callers
+ * resolve it here so one accessory can only ever carry one motion service, whichever attaches first.
+ */
+export function motionSensorService(context: Pick<AdapterAttachmentContext, 'accessory' | 'hap'>): Service {
+  const { accessory, hap } = context;
+  return (
+    accessory.getServiceById(hap.Service.MotionSensor, MOTION_ADAPTER_KEY) ??
+    accessory.addService(hap.Service.MotionSensor, accessory.displayName, MOTION_ADAPTER_KEY)
+  );
+}
 
 /** Complete HomeKit policy for admitted detection pulses. */
 export const MOTION_ADAPTER = {
@@ -49,9 +79,7 @@ export const MOTION_ADAPTER = {
 /** Attaches admitted SDK detection pulses to one official HomeKit Motion Sensor service. */
 function attachMotion(context: AdapterAttachmentContext): AttachedAdapter {
   const { accessory, hap } = context;
-  const service =
-    accessory.getServiceById(hap.Service.MotionSensor, MOTION_ADAPTER_KEY) ??
-    accessory.addService(hap.Service.MotionSensor, accessory.displayName, MOTION_ADAPTER_KEY);
+  const service = motionSensorService(context);
   const hold = MOTION_HOLDS.get(service) ?? {};
   MOTION_HOLDS.set(service, hold);
   const owner = Symbol('motion-hold-owner');

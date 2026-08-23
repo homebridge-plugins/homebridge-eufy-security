@@ -28,7 +28,6 @@ export interface HomeKitDefinitions {
   readonly AudioRecordingCodecType: HAP['AudioRecordingCodecType'];
   readonly AudioRecordingSamplerate: HAP['AudioRecordingSamplerate'];
   readonly AudioBitrate: HAP['AudioBitrate'];
-  readonly EventTriggerOption: HAP['EventTriggerOption'];
   readonly HDSProtocolError: HAP['HDSProtocolError'];
   readonly HDSProtocolSpecificErrorReason: HAP['HDSProtocolSpecificErrorReason'];
 }

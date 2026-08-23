@@ -53,6 +53,7 @@ import type {
 } from '../../src/homekit/adapter.js';
 import type { DeviceMemberEvidence } from '../../src/device/member-evidence.js';
 import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-streaming.js';
+import { MOTION_ADAPTER } from '../../src/homekit/adapters/motion.js';
 import { SnapshotAcquisition, type LastSuccessfulImages } from '../../src/media/snapshot.js';
 
 const HAP = {
@@ -1877,9 +1878,13 @@ function recordingMedia() {
   };
 }
 
-/** The evidence a camera needs before HomeKit Secure Video may be configured for it. */
+/**
+ * The evidence a camera needs before HomeKit Secure Video may be configured for it: the fragment recording
+ * itself, and an admitted detection event to trigger one.
+ */
 function recordingEvidence(
   evidence: AdapterAttachmentContext['evidence'] = new Map(),
+  { trigger = true }: { trigger?: boolean } = {},
 ): AdapterAttachmentContext['evidence'] {
   return new Map([
     ...evidence,
@@ -1887,6 +1892,7 @@ function recordingEvidence(
       'camera.recordFragments.momentary-action',
       { id: 'camera.recordFragments.momentary-action', kind: 'momentary-action' as const },
     ],
+    ...(trigger ? ([['motion.motion.event', { id: 'motion.motion.event', kind: 'event' as const }]] as const) : []),
   ]);
 }
 
@@ -1967,6 +1973,73 @@ describe('camera recording bundle adapter', () => {
     const container = decodeTlv(advertised[3]);
     expect(container[1][0]).toBe(MediaContainerType.FRAGMENTED_MP4);
     expect(decodeTlv(container[2])[1].readInt32LE(0)).toBe(4_000);
+  });
+
+  it('links the motion sensor that triggers a recording to its recording management service', () => {
+    const { controller, accessory } = attachRecordingCamera('Synthetic recording trigger camera');
+    const motionSensors = accessory.services.filter((service) => service.UUID === Service.MotionSensor.UUID);
+    expect(motionSensors).toHaveLength(1);
+    expect(controller.recordingManagement!.recordingManagementService.linkedServices).toContain(motionSensors[0]);
+    expect(controller.recordingManagement!.sensorServices).toContain(motionSensors[0]);
+    expect(Boolean(motionSensors[0].getCharacteristic(Characteristic.StatusActive).value)).toBe(true);
+    const advertised = decodeTlv(
+      Buffer.from(
+        controller.recordingManagement!.recordingManagementService.getCharacteristic(
+          Characteristic.SupportedCameraRecordingConfiguration,
+        ).value as string,
+        'base64',
+      ),
+    );
+    expect(advertised[2].readInt32LE(0)).toBe(EventTriggerOption.MOTION);
+  });
+
+  it('shares one motion service with the detection adapter whichever of them attaches first', () => {
+    const { accessory } = attachRecordingCamera('Synthetic shared motion camera');
+    MOTION_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL } as never,
+      evidence: recordingEvidence(),
+      accessory,
+      hap: HAP,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    expect(accessory.services.filter((service) => service.UUID === Service.MotionSensor.UUID)).toHaveLength(1);
+  });
+
+  it('omits HomeKit Secure Video for a camera with no detection event to trigger a recording', () => {
+    const accessory = new Accessory(
+      'Synthetic untriggerable recording camera',
+      uuid.generate('synthetic-untriggerable-recording-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    const diagnose = vi.fn();
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), recordFragments: vi.fn() }) } as never,
+      evidence: recordingEvidence(new Map(), { trigger: false }),
+      accessory,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      recordingMedia: recordingMedia().adapter,
+      snapshotMedia: new SnapshotAcquisition(retainedImages([])),
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController;
+    expect(controller.recordingManagement).toBeUndefined();
+    expect(accessory.services.map((service) => service.UUID)).not.toContain(Service.MotionSensor.UUID);
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-recording-unavailable'),
+    ).toEqual([
+      {
+        code: 'camera-recording-unavailable',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: true,
+        reason: 'missing-trigger',
+      },
+    ]);
   });
 
   it('omits HomeKit Secure Video for a camera with no evidenced fragment recording', () => {
