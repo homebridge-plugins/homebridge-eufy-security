@@ -552,11 +552,11 @@ describe('packed plugin', () => {
       '@mega-yfue/eufy-sdk',
       'ffmpeg-for-homebridge',
     ]);
-    expect(packageJson.dependencies?.['@mega-yfue/eufy-sdk']).toBe('0.1.0-beta.17');
+    expect(packageJson.dependencies?.['@mega-yfue/eufy-sdk']).toBe('0.1.0-beta.31');
     expect(sdk).toEqual(
       expect.objectContaining({
-        version: '0.1.0-beta.17',
-        integrity: 'sha512-k5ai6k44JqR+fcxZxmL1NG2kP68T55V08C+W0w0x81N2H+gcmtPGha5flbqyYJV/sl4l8wWbHO3tR9OFG8xzyw==',
+        version: '0.1.0-beta.31',
+        integrity: 'sha512-MFBPakoMbDIU9l7UysDjg+u0uwZg+KnAfQeDtk/ukWQnqHzBTBuuafkZ8woU1GcygIykVTN1qZkZFlOtXZgt3w==',
       }),
     );
     expect(generatedVersion).toBe(`export const LIB_VERSION = ${JSON.stringify(packageJson.version)};\n`);
