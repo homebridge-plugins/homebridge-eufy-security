@@ -29,6 +29,7 @@ import type {
   SnapshotMediaAdapter,
   SnapshotMediaSource,
   SnapshotMode,
+  TalkbackOutcome,
 } from '../../media/contracts.js';
 import { isBatteryPowered } from './battery.js';
 import { hasAdmittedDoorbellPress } from './doorbell.js';
@@ -49,6 +50,8 @@ const CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION = 'camera-snapshot-unavailable';
 const CAMERA_RECORDING_UNAVAILABLE_CONDITION = 'camera-recording-unavailable';
 const CAMERA_RECORDING_FAILED_CONDITION = 'camera-recording-failed';
 const CAMERA_RECORDING_REFUSED_CONDITION = 'camera-recording-refused';
+const CAMERA_TALKBACK_UNAVAILABLE_CONDITION = 'camera-talkback-capability-unavailable';
+const CAMERA_TALKBACK_FAILED_CONDITION = 'camera-talkback-failed';
 
 /**
  * The pre-event media window this camera advertises and, when it is eligible, retains in milliseconds.
@@ -110,10 +113,21 @@ const CAMERA_RECORD_FRAGMENTS = {
   id: 'camera.recordFragments.momentary-action',
   kind: 'momentary-action',
 } as const;
+const CAMERA_TALKBACK = {
+  id: 'camera.talkback.momentary-action',
+  kind: 'momentary-action',
+} as const;
 const CAMERA_STREAMING_OWNERS = new WeakMap<object, symbol>();
 const CAMERA_STREAMING_STATES = new WeakMap<
   object,
-  { owner: symbol; controller: CameraController; delegate: LiveCameraDelegate; recording?: RecordingCameraDelegate }
+  {
+    owner: symbol;
+    controller: CameraController;
+    delegate: LiveCameraDelegate;
+    recording?: RecordingCameraDelegate;
+    audio: boolean;
+    talkback: boolean;
+  }
 >();
 
 /** The typed SDK camera media accessor consumed by the live bundle. */
@@ -234,6 +248,61 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/live-media.test.ts',
           behavior: 'fails a session on the SDK warm-up error before the video backstop',
+        },
+      ],
+    },
+    {
+      id: CAMERA_TALKBACK.id,
+      hapFit:
+        'Official camera return audio is decoded from the negotiated HomeKit AAC-ELD SRTP endpoint and adapted to the SDK speaker input only while that controller session consumes it',
+      identityEffect:
+        'Talkback enriches the existing stable camera controller and its speaker service without creating another accessory',
+      diagnostics:
+        'Exact SDK action evidence and enabled camera audio are required; return-audio adaptation and device-audio failures release only the talkback resources, latch one bounded reason, and leave outbound video and audio running',
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'admits one 16 kHz return-audio source only from exact talkback evidence and a bound SDK action',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'does not infer talkback from an SDK action without its exact evidence',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'does not admit talkback when camera audio is disabled',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'opens battery or solar talkback without a pre-event window',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'rebuilds the camera controller when reconciliation changes its audio or talkback advertisement',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'transcodes HomeKit return audio to 16 kHz mono AAC-LC ADTS before opening one SDK handle',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'extends a source budget only while HomeKit return audio is being consumed',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'cleans a device-audio failure without stopping outbound video or audio',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'reports return-audio adaptation failure without coupling it to outbound media',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'stops a talkback handle that resolves after HomeKit cancelled the session',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'does not report recovery when the SDK rejects the first return-audio write synchronously',
         },
       ],
     },
@@ -560,6 +629,16 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const recordingPress = hasAdmittedDoorbellPress(context.evidence);
   const recordingConfigured =
     recordingAvailable && context.recordingMedia !== undefined && (recordingMotion || recordingPress);
+  const talkbackEvidence = context.evidence.has(CAMERA_TALKBACK.id);
+  const talkbackConfigured =
+    talkbackEvidence && typeof camera.talkback === 'function' && context.audioEnabled !== false;
+  context.diagnose({
+    code: CAMERA_TALKBACK_UNAVAILABLE_CONDITION,
+    capability: 'camera',
+    member: 'talkback',
+    active: context.audioEnabled !== false && talkbackEvidence && !talkbackConfigured,
+    reason: context.audioEnabled !== false && talkbackEvidence && !talkbackConfigured ? 'missing' : 'recovered',
+  });
   context.diagnose({
     code: CAMERA_RECORDING_UNAVAILABLE_CONDITION,
     capability: 'camera',
@@ -579,11 +658,13 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const liveSourceOptions = prebufferLengthMs > 0 ? { preBufferSeconds: prebufferLengthMs / 1_000 } : undefined;
   const openLiveSource = camera.live.bind(camera);
   const acquireLiveSnapshot = liveAvailable ? camera.snapshotLive!.bind(camera) : undefined;
+  const openTalkback = talkbackConfigured ? camera.talkback!.bind(camera) : undefined;
   const source: CameraMediaSource = {
     live: () => openLiveSource(liveSourceOptions),
     ...(storedAvailable ? { snapshotStored: camera.snapshotStored!.bind(camera) } : {}),
     ...(acquireLiveSnapshot ? { snapshotLive: () => acquireLiveSnapshot(liveSourceOptions) } : {}),
     ...(recordingAvailable ? { recordFragments: camera.recordFragments!.bind(camera) } : {}),
+    ...(openTalkback ? { talkback: () => openTalkback(liveSourceOptions) } : {}),
   };
   const existing = CAMERA_STREAMING_STATES.get(context.accessory);
   const owner = Symbol('camera-streaming-owner');
@@ -595,6 +676,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     snapshotMode,
     enablement: enablementObservation(context, camera),
     reportSession: liveSessionReporter(context),
+    reportTalkback: talkbackReporter(context),
     reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
   };
@@ -609,12 +691,20 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
         reportAdmission: cameraRecordingCondition(context, CAMERA_RECORDING_REFUSED_CONDITION),
       }
     : undefined;
-  if (existing) {
+  if (existing && existing.audio === binding.audioEnabled && existing.talkback === talkbackConfigured) {
     existing.owner = owner;
     existing.delegate.update(binding);
     existing.recording?.update(recordingBinding);
     CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
     return attachment(context, existing.controller, existing.delegate, existing.recording, owner);
+  }
+  if (existing) {
+    existing.delegate.stop();
+    existing.recording?.stop();
+    context.accessory.removeController(existing.controller);
+    if (!talkbackConfigured) {
+      context.observed(CAMERA_TALKBACK_FAILED_CONDITION);
+    }
   }
 
   const delegate = new LiveCameraDelegate(device.sn, binding, context.hap);
@@ -641,15 +731,15 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
           ? {}
           : {
               audio: {
+                twoWayAudio: talkbackConfigured,
                 codecs: [
                   {
                     type: context.hap.AudioStreamingCodecType.AAC_ELD,
                     audioChannels: 1,
                     bitrate: 0,
-                    samplerate: [
-                      context.hap.AudioStreamingSamplerate.KHZ_16,
-                      context.hap.AudioStreamingSamplerate.KHZ_24,
-                    ],
+                    samplerate: talkbackConfigured
+                      ? [context.hap.AudioStreamingSamplerate.KHZ_16]
+                      : [context.hap.AudioStreamingSamplerate.KHZ_16, context.hap.AudioStreamingSamplerate.KHZ_24],
                   },
                 ],
               },
@@ -673,6 +763,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     owner,
     controller,
     delegate,
+    audio: binding.audioEnabled,
+    talkback: talkbackConfigured,
     ...(recording ? { recording } : {}),
   });
   CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
@@ -841,6 +933,12 @@ function recordingReporter(context: AdapterAttachmentContext): (outcome: Recordi
   return (outcome) => condition(outcome.outcome === 'recording' ? undefined : outcome.reason);
 }
 
+/** Latches an isolated return-audio failure and clears it when later talkback starts producing audio. */
+function talkbackReporter(context: AdapterAttachmentContext): (outcome: TalkbackOutcome) => void {
+  const condition = cameraCondition(context, CAMERA_TALKBACK_FAILED_CONDITION, 'talkback');
+  return (outcome) => condition(outcome.outcome === 'talking' ? undefined : outcome.reason);
+}
+
 /**
  * Reads whether this camera is enabled, or nothing at all when it has no such observation.
  *
@@ -888,6 +986,7 @@ interface LiveCameraBinding {
   readonly snapshotMode: SnapshotMode;
   readonly enablement: () => boolean | undefined;
   readonly reportSession: (outcome: LiveSessionOutcome) => void;
+  readonly reportTalkback: (outcome: TalkbackOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
   readonly reportSnapshot: (substitution?: SnapshotSubstitution) => void;
 }
@@ -1001,6 +1100,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
         this.release(request.sessionID);
       },
       onSessionOutcome: (outcome) => this.binding.reportSession(outcome),
+      onTalkbackOutcome: (outcome) => this.binding.reportTalkback(outcome),
     });
     return {
       session: { prepared, videoSsrc, ...(audioSsrc === undefined ? {} : { audioSsrc }) },

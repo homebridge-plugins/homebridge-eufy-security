@@ -46,6 +46,7 @@ import type {
   AdaptedRecording,
   LiveMediaAdapter,
   LiveMediaSource,
+  LiveMediaTransport,
   LiveSessionOutcome,
   NegotiatedRecording,
   PreparedLiveMedia,
@@ -1926,6 +1927,16 @@ function recordingEvidence(
   ]);
 }
 
+/** Exact SDK action evidence that admits controller return audio. */
+function talkbackEvidence(
+  evidence: AdapterAttachmentContext['evidence'] = recordingEvidence(),
+): AdapterAttachmentContext['evidence'] {
+  return new Map([
+    ...evidence,
+    ['camera.talkback.momentary-action', { id: 'camera.talkback.momentary-action', kind: 'momentary-action' as const }],
+  ]);
+}
+
 function attachRecordingCamera(
   name: string,
   overrides: Partial<AdapterAttachmentContext> = {},
@@ -1965,6 +1976,7 @@ function liveMedia() {
     async () =>
       ({
         videoPort: 41100,
+        audioPort: 41101,
         start: async (source: LiveMediaSource) => {
           started.push(source);
         },
@@ -1979,6 +1991,27 @@ function liveMedia() {
 async function startLiveSession(delegate: CameraStreamingDelegate, sessionID = 'synthetic-prebuffer-session') {
   const response = await callPrepare(delegate, prepareRequest(sessionID));
   await callStream(delegate, startRequest(sessionID, response.video.ssrc));
+}
+
+/** Negotiate and start the 16 kHz AAC-ELD audio selection return audio is defined against. */
+async function startAudioLiveSession(delegate: CameraStreamingDelegate, sessionID = 'synthetic-talkback-session') {
+  const response = await callPrepare(delegate, prepareRequest(sessionID));
+  await callStream(delegate, {
+    ...startRequest(sessionID, response.video.ssrc),
+    audio: {
+      codec: AudioStreamingCodecType.AAC_ELD,
+      channel: 1,
+      bit_rate: 0,
+      sample_rate: AudioStreamingSamplerate.KHZ_16,
+      packet_time: 30,
+      pt: 110,
+      ssrc: response.audio!.ssrc,
+      max_bit_rate: 24,
+      rtcp_interval: 0.5,
+      comfort_pt: 13,
+      comfortNoiseEnabled: false,
+    },
+  } as StreamingRequest);
 }
 
 /** Consumes a recording stream the way HAP's own recording transport does. */
@@ -2026,6 +2059,178 @@ describe('camera recording bundle adapter', () => {
     const container = decodeTlv(advertised[3]);
     expect(container[1][0]).toBe(MediaContainerType.FRAGMENTED_MP4);
     expect(decodeTlv(container[2])[1].readInt32LE(0)).toBe(4_000);
+  });
+
+  it('admits one 16 kHz return-audio source only from exact talkback evidence and a bound SDK action', async () => {
+    const streaming = liveMedia();
+    const talkback = vi.fn(async () => ({}) as never);
+    const { controller, accessory } = attachRecordingCamera('Synthetic talkback camera', {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), talkback, recordFragments: vi.fn() }) } as never,
+      evidence: talkbackEvidence(),
+      liveMedia: streaming.adapter,
+    });
+
+    await startAudioLiveSession((controller as { delegate: CameraStreamingDelegate }).delegate);
+    expect(streaming.started[0].talkback).toEqual(expect.any(Function));
+    await streaming.started[0].talkback!();
+    expect(talkback).toHaveBeenCalledExactlyOnceWith({ preBufferSeconds: 4 });
+
+    for (const management of streamManagements(accessory)) {
+      const advertised = decodeTlv(
+        Buffer.from(
+          management.getCharacteristic(Characteristic.SupportedAudioStreamConfiguration).value as string,
+          'base64',
+        ),
+      );
+      const codec = decodeTlv(advertised[1]);
+      const parameters = decodeTlv(codec[2]);
+      expect([...parameters[3]]).toEqual([1]);
+    }
+  });
+
+  it('does not infer talkback from an SDK action without its exact evidence', async () => {
+    const streaming = liveMedia();
+    const talkback = vi.fn(async () => ({}) as never);
+    const { controller, diagnose } = attachRecordingCamera('Synthetic unevidenced talkback camera', {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), talkback, recordFragments: vi.fn() }) } as never,
+      liveMedia: streaming.adapter,
+    });
+
+    await startAudioLiveSession((controller as { delegate: CameraStreamingDelegate }).delegate);
+    expect(streaming.started[0].talkback).toBeUndefined();
+    expect(talkback).not.toHaveBeenCalled();
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-talkback-capability-unavailable',
+      capability: 'camera',
+      member: 'talkback',
+      active: false,
+      reason: 'recovered',
+    });
+  });
+
+  it('reports talkback evidence whose SDK action is unavailable', () => {
+    const { diagnose } = attachRecordingCamera('Synthetic unavailable talkback camera', {
+      evidence: talkbackEvidence(),
+    });
+
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-talkback-capability-unavailable',
+      capability: 'camera',
+      member: 'talkback',
+      active: true,
+      reason: 'missing',
+    });
+  });
+
+  it('does not admit talkback when camera audio is disabled', async () => {
+    const streaming = liveMedia();
+    const talkback = vi.fn(async () => ({}) as never);
+    const { controller } = attachRecordingCamera('Synthetic muted talkback camera', {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), talkback, recordFragments: vi.fn() }) } as never,
+      evidence: talkbackEvidence(),
+      liveMedia: streaming.adapter,
+      audioEnabled: false,
+    });
+
+    await startLiveSession((controller as { delegate: CameraStreamingDelegate }).delegate, 'synthetic-muted-talkback');
+    expect(streaming.started[0].talkback).toBeUndefined();
+  });
+
+  it('opens battery or solar talkback without a pre-event window', async () => {
+    const streaming = liveMedia();
+    const talkback = vi.fn(async () => ({}) as never);
+    const { controller } = attachRecordingCamera('Synthetic battery talkback camera', {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn(), talkback, recordFragments: vi.fn() }) } as never,
+      evidence: talkbackEvidence(
+        recordingEvidence(
+          new Map([
+            [
+              'battery.level.read',
+              { id: 'battery.level.read', kind: 'read' as const, type: 'number' as const, writable: false },
+            ],
+          ]),
+        ),
+      ),
+      liveMedia: streaming.adapter,
+    });
+
+    await startAudioLiveSession((controller as { delegate: CameraStreamingDelegate }).delegate);
+    await streaming.started[0].talkback!();
+    expect(talkback).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
+  it('latches a talkback failure independently and clears it when later return audio starts', async () => {
+    let transport: LiveMediaTransport | undefined;
+    const { controller, diagnose, observed } = attachRecordingCamera('Synthetic failed talkback camera', {
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ live: vi.fn(), talkback: vi.fn(async () => ({}) as never), recordFragments: vi.fn() }),
+      } as never,
+      evidence: talkbackEvidence(),
+      liveMedia: {
+        prepare: vi.fn(async (preparedTransport) => {
+          transport = preparedTransport;
+          return { videoPort: 41000, audioPort: 41001, start: vi.fn(), reconfigure: vi.fn(), stop: vi.fn() };
+        }),
+      },
+    });
+    await callPrepare((controller as { delegate: CameraStreamingDelegate }).delegate, prepareRequest());
+
+    transport!.onTalkbackOutcome?.({ outcome: 'failed', reason: 'device-audio-failed' });
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-talkback-failed',
+      capability: 'camera',
+      member: 'talkback',
+      active: true,
+      reason: 'device-audio-failed',
+    });
+
+    transport!.onTalkbackOutcome?.({ outcome: 'talking' });
+    expect(observed).toHaveBeenCalledWith('camera-talkback-failed');
+  });
+
+  it('rebuilds the camera controller when reconciliation changes its audio or talkback advertisement', () => {
+    const accessory = new Accessory(
+      'Synthetic reconciled talkback camera',
+      uuid.generate('synthetic-reconciled-talkback'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(accessory, 'configureController');
+    const removeController = vi.spyOn(accessory, 'removeController');
+    const observed = vi.fn();
+    const base = {
+      accessory,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      recordingMedia: recordingMedia().adapter,
+      diagnose: vi.fn(),
+      observed,
+      persist: vi.fn(),
+    } satisfies Partial<AdapterAttachmentContext>;
+    const attach = (talkback: boolean, audioEnabled = true): void => {
+      CAMERA_STREAMING_ADAPTER.attach({
+        ...base,
+        audioEnabled,
+        device: {
+          sn: SNAPSHOT_SERIAL,
+          camera: () => ({ live: vi.fn(), recordFragments: vi.fn(), ...(talkback ? { talkback: vi.fn() } : {}) }),
+        } as never,
+        evidence: talkback ? talkbackEvidence() : recordingEvidence(),
+      } as AdapterAttachmentContext);
+    };
+
+    attach(false, true);
+    const withAudio = configureController.mock.calls[0][0] as CameraController;
+    attach(false, false);
+    const withoutAudio = configureController.mock.calls[1][0] as CameraController;
+    attach(true, true);
+    const withTalkback = configureController.mock.calls[2][0] as CameraController;
+    attach(false, true);
+
+    expect(configureController).toHaveBeenCalledTimes(4);
+    expect(removeController).toHaveBeenNthCalledWith(1, withAudio);
+    expect(removeController).toHaveBeenNthCalledWith(2, withoutAudio);
+    expect(removeController).toHaveBeenNthCalledWith(3, withTalkback);
+    expect(observed).toHaveBeenCalledWith('camera-talkback-failed');
   });
 
   it('links the motion sensor that triggers a recording to its recording management service', () => {

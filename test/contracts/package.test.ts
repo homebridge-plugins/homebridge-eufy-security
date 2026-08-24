@@ -643,7 +643,13 @@ describe('packed plugin', () => {
       expect(
         result.files.map((file) => file.path).filter((path) => path.startsWith('scripts/')),
         'maintainer tooling that writes to a real device must not reach an installed plugin',
-      ).not.toEqual(expect.arrayContaining(['scripts/eufy-camera-power.mjs']));
+      ).not.toEqual(
+        expect.arrayContaining([
+          'scripts/eufy-camera-power.mjs',
+          'scripts/live-hap-disabled-camera-check.mjs',
+          'scripts/live-talkback-check.mjs',
+        ]),
+      );
       expect(Object.keys(runtimeMessages).every((key) => key.startsWith('log.'))).toBe(true);
       expect(runtimeMessages['log.condition.active']).toContain('{summary}');
       expect(uiShellFiles).toEqual([

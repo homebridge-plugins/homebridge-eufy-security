@@ -8,13 +8,13 @@ V5 distinguishes three claims:
 
 ## Current implementation status
 
-| Area | Status |
-|---|---|
-| Account and device discovery | Runtime available |
-| Contact sensor adapter | Published from complete runtime registry snapshots |
-| Cameras, streaming, snapshots, talkback, HKSV | Deferred/in progress |
-| Motion and doorbell events | Deferred/in progress |
-| Security modes, locks, lights, sirens, battery | Deferred/in progress |
+| Area                                           | Status                                             |
+| ---------------------------------------------- | -------------------------------------------------- |
+| Account and device discovery                   | Runtime available                                  |
+| Contact sensor adapter                         | Published from complete runtime registry snapshots |
+| Cameras, streaming, snapshots, talkback, HKSV  | Implemented in the V5 closed beta                  |
+| Motion and doorbell events                     | Deferred/in progress                               |
+| Security modes, locks, lights, sirens, battery | Deferred/in progress                               |
 
 Primitive type similarity never admits a mapping. Unsupported members remain diagnostic-only or blocked
 until verified SDK evidence and a semantic HomeKit contract both exist.

@@ -1,11 +1,22 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame } from '@mega-yfue/eufy-sdk';
+import type {
+  LiveAudioFrame,
+  LiveStreamHandle,
+  LiveVideoFrame,
+  StreamBudgetNotice,
+  TalkbackHandle,
+} from '@mega-yfue/eufy-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { LiveSessionOutcome, NegotiatedLiveAudio, NegotiatedLiveVideo } from '../../src/media/contracts.js';
-import { FfmpegLiveMedia, type LiveMediaProcess } from '../../src/media/live-stream.js';
+import type {
+  LiveSessionOutcome,
+  NegotiatedLiveAudio,
+  NegotiatedLiveVideo,
+  TalkbackOutcome,
+} from '../../src/media/contracts.js';
+import { FfmpegLiveMedia, type MediaProcess } from '../../src/media/live-stream.js';
 
 const NEGOTIATED_VIDEO: NegotiatedLiveVideo = {
   width: 1280,
@@ -53,7 +64,7 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
   }
 }
 
-type SyntheticProcess = LiveMediaProcess & { emit(event: string, ...args: unknown[]): boolean };
+type SyntheticProcess = MediaProcess & { emit(event: string, ...args: unknown[]): boolean };
 
 /**
  * The options one adaptation process applies to its input, which is everything before `-i`. FFmpeg reads
@@ -73,6 +84,108 @@ function process(): SyntheticProcess {
     emit: events.emit.bind(events),
     kill: vi.fn(() => true),
   };
+}
+
+type SyntheticReturnAudioProcess = SyntheticProcess & { stdout: PassThrough; input: Buffer[] };
+
+function returnAudioProcess(): SyntheticReturnAudioProcess {
+  const child = process() as SyntheticReturnAudioProcess;
+  child.stdout = new PassThrough();
+  child.input = [];
+  child.stdin.on('data', (chunk: Buffer) => child.input.push(Buffer.from(chunk)));
+  return child;
+}
+
+class SyntheticTalkback extends EventEmitter implements TalkbackHandle {
+  readonly written: Buffer[] = [];
+  readonly sink = new PassThrough();
+  readonly stop = vi.fn(async () => {
+    this.emit('stop');
+  });
+  readonly pending = 0;
+
+  constructor() {
+    super();
+    this.sink.on('data', (chunk: Buffer) => this.written.push(Buffer.from(chunk)));
+  }
+
+  write(chunk: Buffer): void {
+    this.sink.write(chunk);
+  }
+
+  writable(): PassThrough {
+    return this.sink;
+  }
+
+  end(): void {
+    this.sink.end();
+  }
+
+  budget(notice: StreamBudgetNotice): void {
+    this.emit('budget', notice);
+  }
+
+  fail(): void {
+    this.emit('error', new Error('synthetic talkback failure'));
+  }
+}
+
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 8; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/** One live session with controller return audio and every isolated talkback resource exposed. */
+async function talkbackSession(talkback: () => Promise<TalkbackHandle>) {
+  const stream = new SyntheticLiveStream();
+  const children: SyntheticProcess[] = [];
+  const returned: SyntheticReturnAudioProcess[] = [];
+  const spawned: string[][] = [];
+  const returnedArgs: string[][] = [];
+  const ports: Array<{ port: number; onMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
+  const talkbackOutcomes: TalkbackOutcome[] = [];
+  const onVideoFailure = vi.fn();
+  const media = new FfmpegLiveMedia(
+    '/synthetic/ffmpeg',
+    (_executable, args) => {
+      const child = process();
+      children.push(child);
+      spawned.push([...args]);
+      return child;
+    },
+    async () => {
+      const port = { port: 41000 + ports.length, onMessage: vi.fn(), close: vi.fn(async () => undefined) };
+      ports.push(port);
+      return port;
+    },
+    (_executable, args) => {
+      const child = returnAudioProcess();
+      returned.push(child);
+      returnedArgs.push([...args]);
+      return child;
+    },
+  );
+  const prepared = await media.prepare({
+    addressVersion: 'ipv4',
+    targetAddress: '192.0.2.10',
+    video: {
+      port: 50100,
+      srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+      srtpKey: Buffer.alloc(16),
+      srtpSalt: Buffer.alloc(14),
+    },
+    audio: {
+      port: 50101,
+      srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+      srtpKey: Buffer.alloc(16),
+      srtpSalt: Buffer.alloc(14),
+    },
+    onVideoFailure,
+    onTalkbackOutcome: (outcome) => talkbackOutcomes.push(outcome),
+  });
+  await prepared.start({ live: async () => stream, talkback }, { video: NEGOTIATED_VIDEO, audio: AAC_ELD_16 });
+  return { prepared, stream, children, spawned, returned, returnedArgs, ports, talkbackOutcomes, onVideoFailure };
 }
 
 /**
@@ -269,7 +382,7 @@ describe('live media adaptation', () => {
 
   it('transcodes H.264 when passthrough compliance cannot be proven from SDK frames', async () => {
     const stream = new SyntheticLiveStream();
-    const spawned: Array<{ executable: string; args: string[]; process: LiveMediaProcess }> = [];
+    const spawned: Array<{ executable: string; args: string[]; process: MediaProcess }> = [];
     const spawn = vi.fn((executable: string, args: readonly string[]) => {
       const child = process();
       spawned.push({ executable, args: [...args], process: child });
@@ -831,5 +944,238 @@ describe('live media adaptation', () => {
       { outcome: 'failed', reason: 'no-video-within-backstop' },
     ]);
     vi.useRealTimers();
+  });
+});
+
+describe('isolated return-audio adaptation', () => {
+  it('binds the advertised return-audio endpoint before acknowledging stream start', async () => {
+    let releaseAudio!: () => void;
+    const audioReleased = new Promise<void>((resolve) => (releaseAudio = resolve));
+    let reservations = 0;
+    const returned: SyntheticReturnAudioProcess[] = [];
+    const media = new FfmpegLiveMedia(
+      '/synthetic/ffmpeg',
+      () => process(),
+      async () => {
+        const audio = reservations++ === 1;
+        return {
+          port: audio ? 41001 : 41000,
+          onMessage: vi.fn(),
+          close: vi.fn(() => (audio ? audioReleased : undefined)),
+        };
+      },
+      () => {
+        const child = returnAudioProcess();
+        returned.push(child);
+        return child;
+      },
+    );
+    const prepared = await media.prepare({
+      addressVersion: 'ipv4',
+      targetAddress: '192.0.2.10',
+      video: {
+        port: 50100,
+        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+        srtpKey: Buffer.alloc(16),
+        srtpSalt: Buffer.alloc(14),
+      },
+      audio: {
+        port: 50101,
+        srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
+        srtpKey: Buffer.alloc(16),
+        srtpSalt: Buffer.alloc(14),
+      },
+    });
+    let started = false;
+    const start = prepared
+      .start(
+        { live: async () => new SyntheticLiveStream(), talkback: async () => new SyntheticTalkback() },
+        { video: NEGOTIATED_VIDEO, audio: AAC_ELD_16 },
+      )
+      .then(() => (started = true));
+    await settle();
+
+    expect(started).toBe(false);
+    expect(returned).toHaveLength(0);
+
+    releaseAudio();
+    await settle();
+    expect(returned).toHaveLength(1);
+    expect(started).toBe(false);
+    await start;
+    expect(started).toBe(true);
+    prepared.stop();
+  });
+
+  it('transcodes HomeKit return audio to 16 kHz mono AAC-LC ADTS before opening one SDK handle', async () => {
+    const handle = new SyntheticTalkback();
+    const talkback = vi.fn(async () => handle);
+    const session = await talkbackSession(talkback);
+
+    expect(session.ports[1]!.close).toHaveBeenCalledOnce();
+    expect(session.returned).toHaveLength(1);
+    expect(session.returnedArgs[0]).toEqual(
+      expect.arrayContaining([
+        '-protocol_whitelist',
+        'pipe,udp,rtp,crypto',
+        '-f',
+        'sdp',
+        '-c:a',
+        'libfdk_aac',
+        '-profile:a',
+        'aac_low',
+        '-ar',
+        '16k',
+        '-ac',
+        '1',
+        '-b:a',
+        '32k',
+        '-f',
+        'adts',
+        'pipe:1',
+      ]),
+    );
+    expect(inputOptions(session.returnedArgs[0]!)).toEqual(
+      expect.arrayContaining(['-protocol_whitelist', 'pipe,udp,rtp,crypto', '-f', 'sdp', '-c:a', 'libfdk_aac']),
+    );
+    const sdp = Buffer.concat(session.returned[0]!.input).toString();
+    expect(sdp).toContain('m=audio 41001 RTP/AVP 110');
+    expect(sdp).toContain('a=rtpmap:110 MPEG4-GENERIC/16000/1');
+    expect(sdp).toContain('sizelength=13;indexlength=3;indexdeltalength=3; config=F8F0212C00BC00');
+    expect(sdp).toContain('a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:');
+    expect(talkback).not.toHaveBeenCalled();
+
+    const first = Buffer.from([0xff, 0xf1, 0x60]);
+    const second = Buffer.from([0x40, 0x03, 0xff, 0xfc]);
+    session.returned[0]!.stdout.write(first);
+    await settle();
+    session.returned[0]!.stdout.write(second);
+    await settle();
+
+    expect(talkback).toHaveBeenCalledOnce();
+    expect(Buffer.concat(handle.written)).toEqual(Buffer.concat([first, second]));
+    expect(session.talkbackOutcomes).toEqual([{ outcome: 'talking' }]);
+    session.prepared.stop();
+    await settle();
+    expect(handle.stop).toHaveBeenCalledOnce();
+  });
+
+  it('extends a source budget only while HomeKit return audio is being consumed', async () => {
+    const handle = new SyntheticTalkback();
+    const session = await talkbackSession(async () => handle);
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+
+    const extend = vi.fn();
+    handle.budget({ graceMs: 10_000, extend });
+    expect(extend).toHaveBeenCalledOnce();
+
+    session.prepared.stop();
+    await settle();
+    handle.budget({ graceMs: 10_000, extend });
+    expect(extend).toHaveBeenCalledOnce();
+  });
+
+  it('cleans a device-audio failure without stopping outbound video or audio', async () => {
+    const handle = new SyntheticTalkback();
+    const session = await talkbackSession(async () => handle);
+    session.stream.video(KEYFRAME);
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.from([0xff, 0xf1, 1]) });
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+
+    handle.fail();
+    await settle();
+
+    expect(handle.stop).toHaveBeenCalledOnce();
+    expect(session.returned[0]!.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(session.children).toHaveLength(2);
+    expect(session.children.every((child) => !vi.mocked(child.kill).mock.calls.length)).toBe(true);
+    expect(session.stream.stop).not.toHaveBeenCalled();
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    expect(session.talkbackOutcomes).toEqual([
+      { outcome: 'talking' },
+      { outcome: 'failed', reason: 'device-audio-failed' },
+    ]);
+  });
+
+  it('reports return-audio adaptation failure without coupling it to outbound media', async () => {
+    const handle = new SyntheticTalkback();
+    const talkback = vi.fn(async () => handle);
+    const session = await talkbackSession(talkback);
+    session.stream.video(KEYFRAME);
+
+    session.returned[0]!.emit('error', new Error('synthetic return adaptation failure'));
+    await settle();
+
+    expect(talkback).not.toHaveBeenCalled();
+    expect(session.returned[0]!.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(session.children[0]!.kill).not.toHaveBeenCalled();
+    expect(session.stream.stop).not.toHaveBeenCalled();
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    expect(session.talkbackOutcomes).toEqual([{ outcome: 'failed', reason: 'adaptation-failed' }]);
+  });
+
+  it('contains a synchronous SDK talkback acquisition failure inside return audio', async () => {
+    const session = await talkbackSession(() => {
+      throw new Error('synthetic synchronous talkback failure');
+    });
+    session.stream.video(KEYFRAME);
+
+    expect(() => session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]))).not.toThrow();
+    await settle();
+
+    expect(session.returned[0]!.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(session.children[0]!.kill).not.toHaveBeenCalled();
+    expect(session.stream.stop).not.toHaveBeenCalled();
+    expect(session.talkbackOutcomes).toEqual([{ outcome: 'failed', reason: 'source-unavailable' }]);
+  });
+
+  it('cleans a handle whose writable return-audio seam cannot be opened', async () => {
+    const handle = new SyntheticTalkback();
+    vi.spyOn(handle, 'writable').mockImplementation(() => {
+      throw new Error('synthetic writable failure');
+    });
+    const session = await talkbackSession(async () => handle);
+
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+
+    expect(handle.stop).toHaveBeenCalledOnce();
+    expect(session.returned[0]!.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(session.stream.stop).not.toHaveBeenCalled();
+    expect(session.talkbackOutcomes).toEqual([{ outcome: 'failed', reason: 'device-audio-failed' }]);
+  });
+
+  it('does not report recovery when the SDK rejects the first return-audio write synchronously', async () => {
+    const handle = new SyntheticTalkback();
+    vi.spyOn(handle.sink, 'write').mockImplementation(() => {
+      handle.emit('error', new Error('synthetic frame rejection'));
+      return true;
+    });
+    const session = await talkbackSession(async () => handle);
+
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+
+    expect(handle.stop).toHaveBeenCalledOnce();
+    expect(session.talkbackOutcomes).toEqual([{ outcome: 'failed', reason: 'device-audio-failed' }]);
+  });
+
+  it('stops a talkback handle that resolves after HomeKit cancelled the session', async () => {
+    let resolveTalkback!: (handle: TalkbackHandle) => void;
+    const talkback = vi.fn(() => new Promise<TalkbackHandle>((resolve) => (resolveTalkback = resolve)));
+    const session = await talkbackSession(talkback);
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+    expect(talkback).toHaveBeenCalledOnce();
+
+    session.prepared.stop();
+    const late = new SyntheticTalkback();
+    resolveTalkback(late);
+    await settle();
+
+    expect(late.stop).toHaveBeenCalledOnce();
+    expect(late.written).toEqual([]);
   });
 });

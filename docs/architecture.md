@@ -321,6 +321,29 @@ AAC-ELD output requires an explicit global header. `libfdk_aac` picks its transp
 output asks for and defaults to ADTS, which cannot carry AAC-ELD at all, so without that header the
 encoder refuses to initialize and the negotiated audio codec is unreachable.
 
+### Return audio adaptation
+
+Controller-to-accessory audio shares the live session's negotiated audio endpoint but not its outbound
+adaptation. When exact SDK talkback evidence is present and camera audio is enabled, HomeKit is offered
+16 kHz mono AAC-ELD return audio. The prepared media session hands its reserved audio UDP port to one
+isolated FFmpeg process at start; FFmpeg authenticates and decrypts HomeKit SRTP, depacketizes the RFC 3640
+AAC-hbr stream, decodes AAC-ELD, and emits 16 kHz mono AAC-LC ADTS at 32 kbit/s.
+
+The SDK owns the ADTS byte stream after that boundary. It recovers complete frames across arbitrary FFmpeg
+stdout chunks, rejects any frame that is not AAC-LC/16-kHz/mono or exceeds 640 bytes, and paces accepted
+1024-sample frames at 64 ms. The plugin opens exactly one SDK talkback handle lazily, on the first decoded
+return-audio bytes, so a live view whose controller never speaks holds no talkback handle and contributes
+no talkback-owned budget extension. Once opened, budget notices are extended only until that handle fails,
+stops, or the HomeKit session ends; a handle that resolves after cancellation is stopped without receiving
+media.
+
+Return audio has its own failure boundary. SRTP adaptation failure, SDK acquisition failure, and device
+audio failure stop only the return process and talkback handle, latch one bounded `camera-talkback-failed`
+condition, and leave outbound video, outbound audio, their SDK consumer, and the HomeKit session running.
+A later talkback lifecycle that starts producing audio withdraws the condition. The camera-controls adapter
+continues to own the one SDK-backed Speaker service; the camera controller stays in legacy service mode so
+return audio does not create a duplicate speaker or microphone service.
+
 ### Recorded fragment adaptation
 
 A HomeKit Secure Video recording is adapted from the SDK's fragment recording, not from the live

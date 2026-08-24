@@ -39,11 +39,12 @@ homebridge-ui/public/i18n/*
 *.xcf
 dist/media/media
 
-# Maintainer acceptance tooling that writes to a real device, and the script that drives it. Every other
-# script here is observation-only; these two turn a camera off and on, so they stay out of the package a
-# user installs.
+# Maintainer acceptance tooling that writes to a real device, and the scripts that drive it. Every other
+# script here is observation-only; these change camera state or play camera audio, so they stay out of the
+# package a user installs.
 scripts/eufy-camera-power.mjs
 scripts/live-hap-disabled-camera-check.mjs
+scripts/live-talkback-check.mjs
 
 # ------------- Defaults ------------- #
 

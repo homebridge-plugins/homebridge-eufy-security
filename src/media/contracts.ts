@@ -1,4 +1,4 @@
-import type { FragmentRecordingHandle, LiveStreamHandle } from '@mega-yfue/eufy-sdk';
+import type { FragmentRecordingHandle, LiveStreamHandle, TalkbackHandle } from '@mega-yfue/eufy-sdk';
 
 import type { SnapshotMode } from '../configuration.js';
 
@@ -6,6 +6,7 @@ export type { SnapshotMode } from '../configuration.js';
 
 export interface LiveMediaSource {
   live(): Promise<LiveStreamHandle>;
+  talkback?(): Promise<TalkbackHandle>;
 }
 
 export interface LiveMediaTarget {
@@ -56,6 +57,14 @@ export type LiveSessionOutcome =
   | { readonly outcome: 'streaming' }
   | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure };
 
+/** Why one return-audio lifecycle ended without usable device audio. */
+export type TalkbackFailure = 'source-unavailable' | 'unsupported-selection' | 'adaptation-failed' | 'device-audio-failed';
+
+/** One isolated return-audio outcome, carrying no media, address, key, or device identity. */
+export type TalkbackOutcome =
+  | { readonly outcome: 'talking' }
+  | { readonly outcome: 'failed'; readonly reason: TalkbackFailure };
+
 export interface LiveMediaTransport {
   readonly addressVersion: 'ipv4' | 'ipv6';
   readonly targetAddress: string;
@@ -63,6 +72,7 @@ export interface LiveMediaTransport {
   readonly audio?: LiveMediaTarget;
   readonly onVideoFailure?: () => void;
   readonly onSessionOutcome?: (outcome: LiveSessionOutcome) => void;
+  readonly onTalkbackOutcome?: (outcome: TalkbackOutcome) => void;
 }
 
 export interface PreparedLiveMedia {

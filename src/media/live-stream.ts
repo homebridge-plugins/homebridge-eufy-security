@@ -1,10 +1,11 @@
-import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame } from '@mega-yfue/eufy-sdk';
+import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
 import { createSocket } from 'node:dgram';
 import { spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
 import type {
   LiveMediaAdapter,
+  LiveMediaSource,
   LiveMediaTarget,
   LiveMediaTransport,
   LiveSessionFailure,
@@ -13,12 +14,14 @@ import type {
   NegotiatedLiveMedia,
   NegotiatedLiveVideo,
   PreparedLiveMedia,
+  TalkbackFailure,
 } from './contracts.js';
 
 /** How long a deliberately stopped adaptation process is given to exit before it is killed. */
 export const PROCESS_STOP_GRACE_MS = 2_000;
 const INITIAL_RTCP_GRACE_MS = 15_000;
 const SOURCE_ACQUISITION_DEADLINE_MS = 10_000;
+const RETURN_AUDIO_BIND_GRACE_MS = 250;
 /**
  * Backstop for a started media session that never produces adapted output. The SDK source owns the
  * warm-up window, retries the start inside it, and fails its consumers with a typed `error` event, which
@@ -41,10 +44,14 @@ export interface MediaProcess {
 export interface ReservedMediaPort {
   readonly port: number;
   onMessage(listener: () => void): void;
-  close(): void;
+  close(): void | Promise<void>;
 }
 
 export type LiveMediaProcessFactory = (executable: string, args: readonly string[]) => MediaProcess;
+export interface ReturnAudioProcess extends MediaProcess {
+  readonly stdout: Readable;
+}
+export type ReturnAudioProcessFactory = (executable: string, args: readonly string[]) => ReturnAudioProcess;
 export type MediaPortFactory = (addressVersion: 'ipv4' | 'ipv6') => Promise<ReservedMediaPort>;
 
 /** Adapts separate SDK elementary streams into independently failing HomeKit SRTP outputs. */
@@ -53,6 +60,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     private readonly executable: string,
     private readonly createProcess: LiveMediaProcessFactory = spawnLiveMediaProcess,
     private readonly reservePort: MediaPortFactory = reserveMediaPort,
+    private readonly createReturnAudioProcess: ReturnAudioProcessFactory = spawnReturnAudioProcess,
   ) {}
 
   /**
@@ -75,6 +83,11 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     let source: LiveStreamHandle | undefined;
     let videoProcess: MediaProcess | undefined;
     let audioProcess: MediaProcess | undefined;
+    let returnAudioProcess: ReturnAudioProcess | undefined;
+    let talkbackHandle: TalkbackHandle | undefined;
+    let talkbackSink: Writable | undefined;
+    let talkbackStarting = false;
+    let talkbackEnded = false;
     let negotiated: NegotiatedLiveMedia | undefined;
     let stopped = false;
     let receivedVideoKeyframe = false;
@@ -100,6 +113,28 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       killDeadline.unref?.();
       process.on('exit', () => clearTimeout(killDeadline));
     };
+    const stopTalkback = (stopHandle = true): void => {
+      if (talkbackEnded) {
+        return;
+      }
+      talkbackEnded = true;
+      stopProcess(returnAudioProcess);
+      returnAudioProcess = undefined;
+      talkbackSink?.destroy();
+      talkbackSink = undefined;
+      const handle = talkbackHandle;
+      talkbackHandle = undefined;
+      if (stopHandle && handle) {
+        void handle.stop().catch(() => undefined);
+      }
+    };
+    const failTalkback = (reason: TalkbackFailure): void => {
+      if (stopped || talkbackEnded) {
+        return;
+      }
+      transport.onTalkbackOutcome?.({ outcome: 'failed', reason });
+      stopTalkback();
+    };
     const stop = (): void => {
       if (stopped) {
         return;
@@ -108,6 +143,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       clearTimeout(rtcpDeadline);
       clearTimeout(initialRtcpGrace);
       clearTimeout(videoStartBackstop);
+      stopTalkback();
       stopProcess(videoProcess);
       stopProcess(audioProcess);
       source?.stop();
@@ -269,6 +305,132 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       audioProcess.stdin.write(frame.data);
     };
 
+    /**
+     * Write one decoded return-audio chunk through the SDK writable that owns ADTS frame recovery,
+     * validation, pacing, and transport backpressure. The first chunk opens exactly one SDK handle;
+     * stdout stays paused while that handle is acquired so acquisition cannot create an unbounded queue.
+     */
+    const writeReturnAudio = (camera: LiveMediaSource, child: ReturnAudioProcess, chunk: Buffer): void => {
+      if (stopped || talkbackEnded) {
+        return;
+      }
+      if (talkbackSink) {
+        try {
+          if (!talkbackSink.write(chunk)) {
+            child.stdout.pause();
+            talkbackSink.once('drain', () => {
+              if (!stopped && !talkbackEnded) {
+                child.stdout.resume();
+              }
+            });
+          }
+        } catch {
+          failTalkback('device-audio-failed');
+        }
+        return;
+      }
+      if (talkbackStarting || !camera.talkback) {
+        return;
+      }
+      talkbackStarting = true;
+      child.stdout.pause();
+      let acquisition: Promise<TalkbackHandle>;
+      try {
+        acquisition = camera.talkback();
+      } catch {
+        failTalkback('source-unavailable');
+        return;
+      }
+      void acquisition.then(
+        (handle) => {
+          if (stopped || talkbackEnded) {
+            void handle.stop().catch(() => undefined);
+            return;
+          }
+          talkbackHandle = handle;
+          try {
+            const sink = handle.writable();
+            talkbackSink = sink;
+            handle.on('budget', (notice) => {
+              if (!stopped && !talkbackEnded) {
+                notice.extend();
+              }
+            });
+            handle.on('error', () => failTalkback('device-audio-failed'));
+            handle.on('stop', () => {
+              if (!stopped && !talkbackEnded && talkbackHandle === handle) {
+                talkbackHandle = undefined;
+                stopTalkback(false);
+              }
+            });
+            sink.on('error', () => failTalkback('device-audio-failed'));
+            const accepted = sink.write(chunk);
+            if (talkbackEnded) {
+              return;
+            }
+            transport.onTalkbackOutcome?.({ outcome: 'talking' });
+            if (accepted) {
+              child.stdout.resume();
+            } else {
+              sink.once('drain', () => {
+                if (!stopped && !talkbackEnded) {
+                  child.stdout.resume();
+                }
+              });
+            }
+          } catch {
+            failTalkback('device-audio-failed');
+          }
+        },
+        () => failTalkback('source-unavailable'),
+      );
+    };
+
+    /**
+     * Hand the accessory audio endpoint to FFmpeg and give the spawned process a bounded bind grace before
+     * stream start is acknowledged. FFmpeg owns SRTP authentication, RTP AAC-ELD depacketization, decoding,
+     * and AAC-LC ADTS encoding; the SDK handle remains unopened until the process produces decoded audio.
+     */
+    const startReturnAudio = async (camera: LiveMediaSource, selection: NegotiatedLiveAudio | undefined): Promise<void> => {
+      if (!camera.talkback || !selection || !transport.audio || !audioPort) {
+        return;
+      }
+      if (selection.sampleRate !== 16 || selection.channels !== 1) {
+        failTalkback('unsupported-selection');
+        return;
+      }
+      try {
+        await audioPort.close();
+        if (stopped || talkbackEnded) {
+          return;
+        }
+        const child = this.createReturnAudioProcess(this.executable, returnAudioArguments());
+        returnAudioProcess = child;
+        child.stderr.resume();
+        child.stdin.on('error', () => {
+          if (!stoppingProcesses.has(child)) {
+            failTalkback('adaptation-failed');
+          }
+        });
+        child.stdout.on('data', (chunk: Buffer) => writeReturnAudio(camera, child, chunk));
+        child.stdout.on('error', () => failTalkback('adaptation-failed'));
+        child.on('error', () => {
+          if (!stoppingProcesses.has(child)) {
+            failTalkback('adaptation-failed');
+          }
+        });
+        child.on('exit', () => {
+          if (!stopped && !talkbackEnded && !stoppingProcesses.has(child)) {
+            failTalkback('adaptation-failed');
+          }
+        });
+        child.stdin.end(returnAudioSdp(audioPort.port, selection, transport.audio, transport.addressVersion));
+        await new Promise((resolve) => setTimeout(resolve, RETURN_AUDIO_BIND_GRACE_MS));
+      } catch {
+        failTalkback('adaptation-failed');
+      }
+    };
+
     return {
       videoPort: videoPort.port,
       ...(audioPort ? { audioPort: audioPort.port } : {}),
@@ -277,6 +439,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           throw new Error('live media session is already stopped');
         }
         negotiated = selection;
+        const returnAudioReady = startReturnAudio(camera, selection.audio);
         let sourcePromise: Promise<LiveStreamHandle>;
         let acquisitionDeadline: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -317,6 +480,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         });
         source.on('error', () => failVideo('source-error'));
         source.on('stop', () => failVideo('source-stopped'));
+        await returnAudioReady;
       },
       /**
        * Acknowledges a reconfigured selection and applies it at the next source keyframe.
@@ -486,8 +650,80 @@ function audioArguments(
   ];
 }
 
+/**
+ * Decode HomeKit's controller-to-accessory AAC-ELD SRTP and emit the SDK's exact talkback input: 16 kHz
+ * mono AAC-LC in ADTS. The SDK owns complete-frame recovery, the 640-byte frame limit, and 64 ms pacing,
+ * so FFmpeg must produce a byte stream rather than impose another clock.
+ */
+function returnAudioArguments(): string[] {
+  return [
+    '-hide_banner',
+    '-loglevel',
+    'warning',
+    '-nostats',
+    '-protocol_whitelist',
+    'pipe,udp,rtp,crypto',
+    '-f',
+    'sdp',
+    '-c:a',
+    'libfdk_aac',
+    '-i',
+    'pipe:0',
+    '-map',
+    '0:a:0',
+    '-vn',
+    '-c:a',
+    'libfdk_aac',
+    '-profile:a',
+    'aac_low',
+    '-ar',
+    '16k',
+    '-ac',
+    '1',
+    '-b:a',
+    '32k',
+    '-f',
+    'adts',
+    'pipe:1',
+  ];
+}
+
+/**
+ * Describe the one return-audio RTP stream HomeKit negotiated. AAC-ELD at 16 kHz mono uses the
+ * established MPEG4-GENERIC AAC-hbr configuration below; the crypto material is the audio endpoint key
+ * HomeKit supplied during SetupEndpoints and no media or identity enters diagnostics.
+ */
+function returnAudioSdp(
+  port: number,
+  selection: NegotiatedLiveAudio,
+  target: LiveMediaTarget,
+  addressVersion: 'ipv4' | 'ipv6',
+): string {
+  const network = addressVersion === 'ipv6' ? 'IP6' : 'IP4';
+  const address = addressVersion === 'ipv6' ? '::' : '0.0.0.0';
+  const key = Buffer.concat([target.srtpKey, target.srtpSalt]).toString('base64');
+  return [
+    'v=0',
+    `o=- 0 0 IN ${network} ${address}`,
+    's=HomeKit Return Audio',
+    `c=IN ${network} ${address}`,
+    't=0 0',
+    `m=audio ${port} RTP/AVP ${selection.payloadType}`,
+    `b=AS:${selection.maxBitRate}`,
+    `a=rtpmap:${selection.payloadType} MPEG4-GENERIC/16000/1`,
+    `a=fmtp:${selection.payloadType} profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3; config=F8F0212C00BC00`,
+    `a=crypto:1 ${target.srtpCryptoSuite} inline:${key}`,
+    'a=rtcp-mux',
+    '',
+  ].join('\r\n');
+}
+
 function spawnLiveMediaProcess(executable: string, args: readonly string[]): MediaProcess {
   return spawn(executable, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+}
+
+function spawnReturnAudioProcess(executable: string, args: readonly string[]): ReturnAudioProcess {
+  return spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 function reserveMediaPort(addressVersion: 'ipv4' | 'ipv6'): Promise<ReservedMediaPort> {
@@ -497,10 +733,14 @@ function reserveMediaPort(addressVersion: 'ipv4' | 'ipv6'): Promise<ReservedMedi
     socket.bind(0, () => {
       const address = socket.address();
       socket.removeListener('error', reject);
+      let closing: Promise<void> | undefined;
       resolve({
         port: address.port,
         onMessage: (listener) => socket.on('message', listener),
-        close: () => socket.close(),
+        close: () =>
+          (closing ??= new Promise<void>((done) => {
+            socket.close(done);
+          })),
       });
     });
   });

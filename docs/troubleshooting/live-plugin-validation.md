@@ -130,6 +130,7 @@ to any controller and a `hap-controller` module installed outside this repositor
 | `live-hap-disabled-camera-check.mjs`  | Live view, snapshots, and recovery for a camera that is turned off            |
 | `live-hap-capture.mjs`                | One MP4 and still per camera when a maintainer must look at a frame           |
 | `live-hksv-check.mjs`                 | Negotiated HomeKit Secure Video output, measured on the adapted fragments     |
+| `live-talkback-check.mjs`             | Audible return audio, one SDK handle, and isolated outbound media             |
 
 `live-hap-stream-check.mjs` decrypts and authenticates the inbound SRTP with the keys it supplied, so it
 judges what the accessory actually encoded rather than what a command line asked for: negotiated payload
@@ -278,6 +279,24 @@ recording delegate's HAP surface — the advertised container and trigger, the c
 selects, recording-audio state, cancellation, and the failure conditions — is covered hermetically against
 the real HAP definitions in `test/contracts/camera-streaming-adapter.test.ts`. Playable recordings with
 expected audio remain a paired Home app acceptance step.
+
+### Talkback write
+
+`live-talkback-check.mjs` is different from the observation-only checks above: it opens the real camera
+speaker and plays a short synthetic tone. Run it only with explicit approval, with the Homebridge owner
+stopped, and against a copy of the storage root:
+
+```bash
+node scripts/live-talkback-check.mjs \
+  --storage /tmp/hb-check/homebridge-eufy --serial T8XXXXXXXXXXXXXX --battery --seconds 2
+```
+
+The local controller side emits the exact 16 kHz mono AAC-ELD SRTP HomeKit negotiates. The plugin receives
+that endpoint through its own return-audio FFmpeg adaptation, emits 16 kHz mono AAC-LC ADTS to one SDK
+talkback handle, and stops that handle with the media session. On an approved battery-doorbell run the path
+reported one `talking` outcome, exactly one handle opened and stopped, no isolated talkback failure, and no
+outbound media failure. The tool is excluded from the installed package because it writes audible media to
+a real device.
 
 ## 7. Record the result safely
 

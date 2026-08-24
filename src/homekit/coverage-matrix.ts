@@ -5,7 +5,7 @@ import { INFORMATION_SDK_ROWS } from './adapters/information.js';
 import { ADAPTER_REGISTRY } from './adapters/registry.js';
 
 export type CoverageMemberKind = 'read' | 'event' | 'persistent-operation' | 'momentary-action';
-export type CoverageDisposition = 'required-adapter' | 'diagnostic-only' | 'blocked-sdk-gap' | 'explicitly-deferred';
+export type CoverageDisposition = 'required-adapter' | 'diagnostic-only' | 'blocked-sdk-gap';
 
 export interface CoverageVerification {
   file: string;
@@ -26,7 +26,6 @@ export interface CoverageRow {
   identityEffect: string;
   diagnostics: string;
   verification: CoverageVerification[];
-  followUp?: string;
 }
 
 export interface SdkHapCoverageMatrix {
@@ -74,15 +73,6 @@ const BLOCKED = new Set([
   'storage.total.read',
 ]);
 
-const DEFERRED: Record<string, string> = {};
-
-function defer(rows: readonly string[], issue: string, risk: string): void {
-  for (const row of rows) {
-    DEFERRED[row] = `${issue}: ${risk}`;
-  }
-}
-
-defer(['camera.talkback.momentary-action'], '#1001', 'requires isolated return-audio adaptation');
 /** Derives the current semantic member inventory directly from the pinned SDK contract. */
 function currentSdkSurface(): string[] {
   const rows: string[] = [];
@@ -137,14 +127,11 @@ function memberEvidence(module: CapabilityModule | undefined, memberName: string
 function makeRow(id: string): CoverageRow {
   const { capability, member, memberKind } = parseRowId(id);
   const represented = COVERAGE_BY_ROW.get(id);
-  const followUp = DEFERRED[id];
   const disposition: CoverageDisposition = represented
     ? 'required-adapter'
     : BLOCKED.has(id)
       ? 'blocked-sdk-gap'
-      : followUp
-        ? 'explicitly-deferred'
-        : 'diagnostic-only';
+      : 'diagnostic-only';
 
   return {
     id,
@@ -159,9 +146,7 @@ function makeRow(id: string): CoverageRow {
       represented?.coverage.hapFit ??
       (disposition === 'blocked-sdk-gap'
         ? 'No HAP representation is permitted without verified SDK truth'
-        : disposition === 'explicitly-deferred'
-          ? 'A selected official HAP contract exists but its named adapter policy is not admitted by this matrix version'
-          : 'No selected semantically matching official HAP contract'),
+        : 'No selected semantically matching official HAP contract'),
     disposition,
     adapter: represented?.adapter ?? null,
     representationStatus: represented ? 'represented' : 'not-represented',
@@ -175,9 +160,7 @@ function makeRow(id: string): CoverageRow {
       represented?.coverage.diagnostics ??
       (disposition === 'blocked-sdk-gap'
         ? 'Report the SDK evidence gap without representation'
-        : disposition === 'explicitly-deferred'
-          ? 'Report the member as deferred without representation'
-          : 'Report the member as diagnostic-only without representation'),
+        : 'Report the member as diagnostic-only without representation'),
     verification: [
       {
         file: 'test/contracts/coverage-matrix.test.ts',
@@ -185,14 +168,13 @@ function makeRow(id: string): CoverageRow {
       },
       ...(represented?.coverage.verification ?? []),
     ],
-    followUp,
   };
 }
 
 function reviewedRows(): CoverageRow[] {
   const surface = currentSdkSurface();
   const current = new Set(surface);
-  const stalePolicy = [...BLOCKED, ...Object.keys(DEFERRED)].find((id) => !current.has(id));
+  const stalePolicy = [...BLOCKED].find((id) => !current.has(id));
   if (stalePolicy) {
     throw new TypeError(`coverage policy references a missing SDK member: ${stalePolicy}`);
   }

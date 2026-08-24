@@ -11,10 +11,10 @@ The beta is closed to maintainers and enrollment is not open.
 - One account-scoped runtime owner
 - Complete device discovery, canonical registry, and versioned runtime snapshot
 - Explicit coverage matrix and serial-based contact-sensor accessory publication
+- Camera streaming, snapshots, isolated talkback, and HomeKit Secure Video
 
 ## Not yet available as HomeKit behavior
 
-- Camera streaming, snapshots, talkback, and HomeKit Secure Video
 - Motion and doorbell events
 - Security modes, locks, lights, sirens, and battery services
 

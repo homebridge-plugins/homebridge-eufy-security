@@ -35,9 +35,6 @@ describe('SDK/HAP coverage matrix', () => {
         expect(row.verification.length, row.id).toBeGreaterThan(1);
         expect(row.representationStatus).toBe('represented');
       }
-      if (row.disposition === 'explicitly-deferred') {
-        expect(row.followUp, row.id).toMatch(/^#[0-9]+: /);
-      }
     }
   });
 
@@ -82,7 +79,6 @@ describe('SDK/HAP coverage matrix', () => {
     const informationRows = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ capability }) => capability === 'info');
     const representedInformation = informationRows.filter(({ adapter }) => adapter === 'accessory.information');
     expect(representedInformation).toHaveLength(6);
-    expect(representedInformation.every(({ followUp }) => followUp === undefined)).toBe(true);
     expect(
       representedInformation.every(({ verification }) =>
         verification.some(({ file }) => file === 'test/contracts/homekit-reconciler.test.ts'),
@@ -98,13 +94,11 @@ describe('SDK/HAP coverage matrix', () => {
         'battery.batteryAlert.event',
       ].sort(),
     );
-    expect(representedBattery.every(({ followUp }) => followUp === undefined)).toBe(true);
 
     const representedSiren = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'siren.test');
     expect(representedSiren.map(({ id }) => id).sort()).toEqual(
       ['siren.active.read', 'siren.test.momentary-action', 'siren.stop.momentary-action'].sort(),
     );
-    expect(representedSiren.every(({ followUp }) => followUp === undefined)).toBe(true);
     expect(representedSiren.find(({ id }) => id === 'siren.active.read')?.controlStatus).toBe('not-controllable');
     expect(
       representedSiren
@@ -125,7 +119,6 @@ describe('SDK/HAP coverage matrix', () => {
         'smart_light.setColor.momentary-action',
       ].sort(),
     );
-    expect(representedSmartLight.every(({ followUp }) => followUp === undefined)).toBe(true);
 
     const representedCameraControls = SDK_HAP_COVERAGE_MATRIX.rows.filter(
       ({ adapter }) => adapter === 'camera.controls',
@@ -147,14 +140,12 @@ describe('SDK/HAP coverage matrix', () => {
         'audio.volume.persistent-operation',
       ].sort(),
     );
-    expect(representedCameraControls.every(({ followUp }) => followUp === undefined)).toBe(true);
 
     const representedLock = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'lock.mechanism');
     expect(representedLock.map(({ id }) => id).sort()).toEqual(
       ['lock.lock.momentary-action', 'lock.unlock.momentary-action'].sort(),
     );
     expect(representedLock.every(({ controlStatus }) => controlStatus === 'controllable')).toBe(true);
-    expect(representedLock.every(({ followUp }) => followUp === undefined)).toBe(true);
     expect(representedLock.every(({ evidence }) => evidence.some((item) => item.includes('T8531')))).toBe(true);
     expect(
       SDK_HAP_COVERAGE_MATRIX.rows

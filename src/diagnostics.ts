@@ -1235,6 +1235,7 @@ const MEMBERS = new Set([
   'power',
   'snapshot',
   'stop',
+  'talkback',
   'test',
 ]);
 const REASONS = new Set([
@@ -1257,8 +1258,11 @@ const REASONS = new Set([
   'source-acquisition-timeout',
   'source-error',
   'source-stopped',
+  'source-unavailable',
   'timeout',
   'unsupported',
+  'unsupported-selection',
+  'device-audio-failed',
 ]);
 const RUNTIME_CONDITION_REASONS = new Set([
   'stopped',
@@ -1441,6 +1445,14 @@ const HOMEKIT_CONDITIONS = {
   'camera-snapshot-unavailable': {
     summaryKey: 'log.homekit.cameraSnapshotUnavailable',
     actionKey: 'log.action.checkCameraSnapshot',
+  },
+  'camera-talkback-failed': {
+    summaryKey: 'log.homekit.cameraTalkbackFailed',
+    actionKey: 'log.action.retryTalkback',
+  },
+  'camera-talkback-capability-unavailable': {
+    summaryKey: 'log.homekit.cameraTalkbackUnavailable',
+    actionKey: 'log.action.waitTalkback',
   },
 } as const;
 
