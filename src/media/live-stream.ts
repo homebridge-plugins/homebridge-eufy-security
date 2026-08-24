@@ -113,6 +113,12 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       killDeadline.unref?.();
       process.on('exit', () => clearTimeout(killDeadline));
     };
+    /** Stop a caller-owned SDK handle without allowing synchronous or asynchronous faults to abort cleanup. */
+    const stopTalkbackHandle = (handle: TalkbackHandle): void => {
+      try {
+        void handle.stop().catch(() => undefined);
+      } catch {}
+    };
     const stopTalkback = (stopHandle = true): void => {
       if (talkbackEnded) {
         return;
@@ -125,7 +131,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       const handle = talkbackHandle;
       talkbackHandle = undefined;
       if (stopHandle && handle) {
-        void handle.stop().catch(() => undefined);
+        stopTalkbackHandle(handle);
       }
     };
     const failTalkback = (reason: TalkbackFailure): void => {
@@ -344,7 +350,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       void acquisition.then(
         (handle) => {
           if (stopped || talkbackEnded) {
-            void handle.stop().catch(() => undefined);
+            stopTalkbackHandle(handle);
             return;
           }
           talkbackHandle = handle;
@@ -357,12 +363,11 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
               }
             });
             handle.on('error', () => failTalkback('device-audio-failed'));
-            handle.on('stop', () => {
-              if (!stopped && !talkbackEnded && talkbackHandle === handle) {
-                talkbackHandle = undefined;
-                stopTalkback(false);
-              }
-            });
+          handle.on('stop', () => {
+            if (!stopped && !talkbackEnded && talkbackHandle === handle) {
+              failTalkback('device-audio-failed');
+            }
+          });
             sink.on('error', () => failTalkback('device-audio-failed'));
             const accepted = sink.write(chunk);
             if (talkbackEnded) {

@@ -1099,6 +1099,25 @@ describe('isolated return-audio adaptation', () => {
     ]);
   });
 
+  it('reports an SDK-stopped talkback path while outbound media continues', async () => {
+    const handle = new SyntheticTalkback();
+    const session = await talkbackSession(async () => handle);
+    session.stream.video(KEYFRAME);
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+
+    handle.emit('stop');
+    await settle();
+
+    expect(session.returned[0]!.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(session.children[0]!.kill).not.toHaveBeenCalled();
+    expect(session.stream.stop).not.toHaveBeenCalled();
+    expect(session.talkbackOutcomes).toEqual([
+      { outcome: 'talking' },
+      { outcome: 'failed', reason: 'device-audio-failed' },
+    ]);
+  });
+
   it('reports return-audio adaptation failure without coupling it to outbound media', async () => {
     const handle = new SyntheticTalkback();
     const talkback = vi.fn(async () => handle);
@@ -1177,5 +1196,21 @@ describe('isolated return-audio adaptation', () => {
 
     expect(late.stop).toHaveBeenCalledOnce();
     expect(late.written).toEqual([]);
+  });
+
+  it('finishes whole-session cleanup when the SDK handle throws synchronously on stop', async () => {
+    const handle = new SyntheticTalkback();
+    handle.stop.mockImplementation(() => {
+      throw new Error('synthetic synchronous stop failure');
+    });
+    const session = await talkbackSession(async () => handle);
+    session.stream.video(KEYFRAME);
+    session.returned[0]!.stdout.write(Buffer.from([0xff, 0xf1, 1]));
+    await settle();
+
+    expect(() => session.prepared.stop()).not.toThrow();
+    expect(session.children[0]!.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.ports.every(({ close }) => close.mock.calls.length > 0)).toBe(true);
   });
 });

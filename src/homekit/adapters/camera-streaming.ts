@@ -294,11 +294,19 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/live-media.test.ts',
+          behavior: 'reports an SDK-stopped talkback path while outbound media continues',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
           behavior: 'reports return-audio adaptation failure without coupling it to outbound media',
         },
         {
           file: 'test/contracts/live-media.test.ts',
           behavior: 'stops a talkback handle that resolves after HomeKit cancelled the session',
+        },
+        {
+          file: 'test/contracts/live-media.test.ts',
+          behavior: 'finishes whole-session cleanup when the SDK handle throws synchronously on stop',
         },
         {
           file: 'test/contracts/live-media.test.ts',
