@@ -24,11 +24,18 @@ export interface HomeKitCondition {
   reason: string;
 }
 
-export interface HomeKitEventTrace {
-  adapter: string;
-  event: string;
-  observation: string;
-}
+export type HomeKitEventTrace =
+  | { adapter: string; event: string; observation: string }
+  | {
+      adapter: string;
+      event: 'live-video-selected';
+      operation: 'start' | 'reconfigure';
+      profile: 'baseline' | 'main' | 'high';
+      level: '3.1' | '3.2' | '4.0';
+      width: number;
+      height: number;
+      fps: number;
+    };
 
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
@@ -186,7 +193,7 @@ const DIAGNOSTICS_PROFILES: Readonly<Record<DiagnosticsProfile, readonly Diagnos
   'startup-authentication': ['plugin-log', 'sdk-log'],
   'device-representation': ['plugin-log', 'sdk-log', 'homekit-log'],
   'control-state': ['plugin-log', 'sdk-log', 'homekit-log'],
-  'live-media': ['plugin-log', 'sdk-log', 'ffmpeg-log'],
+  'live-media': ['plugin-log', 'sdk-log', 'homekit-log', 'ffmpeg-log'],
   'hksv-recording': ['plugin-log', 'sdk-log', 'ffmpeg-log'],
   'dashboard-ui': ['plugin-log', 'ui-log'],
   other: ['plugin-log', 'sdk-log', 'homekit-log'],
@@ -1286,6 +1293,11 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'smart-light.lightbulb': new Set(['smart-light-state']),
 };
 const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
+const HOMEKIT_LIVE_VIDEO_OPERATIONS = new Set(['start', 'reconfigure']);
+const HOMEKIT_LIVE_VIDEO_PROFILES = new Set(['baseline', 'main', 'high']);
+const HOMEKIT_LIVE_VIDEO_LEVELS = new Set(['3.1', '3.2', '4.0']);
+const HOMEKIT_LIVE_VIDEO_GEOMETRIES = new Set(['320x180', '640x360', '1280x720', '1920x1080']);
+const HOMEKIT_LIVE_VIDEO_FRAME_RATES = new Set([15, 30]);
 const RUNTIME_NOTICES = {
   'status-publication-failed': {
     level: 'warn',
@@ -1529,6 +1541,10 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
   }
 
   if (value.scope === 'homekit') {
+    if (value.adapter === 'camera.streaming' && value.event === 'live-video-selected') {
+      const selection = sanitizeLiveVideoSelection(value);
+      return selection ? { scope: 'homekit', level: 'debug', ...selection } : undefined;
+    }
     if (
       typeof value.adapter !== 'string' ||
       typeof value.event !== 'string' ||
@@ -1663,9 +1679,17 @@ export function reportInvalidSnapshotCache(
 
 /** Emits one allowlisted HomeKit event trace only when host debug output is available. */
 export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace: HomeKitEventTrace): void {
+  if ('operation' in trace) {
+    const selection = sanitizeLiveVideoSelection(trace as unknown as Record<string, unknown>);
+    if (target.debug && selection) {
+      target.debug(JSON.stringify({ scope: 'homekit', level: 'debug', ...selection }));
+    }
+    return;
+  }
   if (
     !target.debug ||
     !HOMEKIT_EVENT_ROUTES[trace.adapter]?.has(trace.event) ||
+    typeof trace.observation !== 'string' ||
     !HOMEKIT_OBSERVATIONS.has(trace.observation)
   ) {
     return;
@@ -1679,6 +1703,40 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
       observation: trace.observation,
     }),
   );
+}
+
+function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const operation = typeof value.operation === 'string' ? value.operation : undefined;
+  const profile = typeof value.profile === 'string' ? value.profile : undefined;
+  const codecLevel = typeof value.level === 'string' ? value.level : undefined;
+  const width = typeof value.width === 'number' ? value.width : undefined;
+  const height = typeof value.height === 'number' ? value.height : undefined;
+  const fps = typeof value.fps === 'number' ? value.fps : undefined;
+  if (
+    !operation ||
+    !HOMEKIT_LIVE_VIDEO_OPERATIONS.has(operation) ||
+    !profile ||
+    !HOMEKIT_LIVE_VIDEO_PROFILES.has(profile) ||
+    !codecLevel ||
+    !HOMEKIT_LIVE_VIDEO_LEVELS.has(codecLevel) ||
+    width === undefined ||
+    height === undefined ||
+    !HOMEKIT_LIVE_VIDEO_GEOMETRIES.has(`${width}x${height}`) ||
+    fps === undefined ||
+    !HOMEKIT_LIVE_VIDEO_FRAME_RATES.has(fps)
+  ) {
+    return undefined;
+  }
+  return {
+    adapter: 'camera.streaming',
+    event: 'live-video-selected',
+    operation,
+    profile,
+    levelName: codecLevel,
+    width,
+    height,
+    fps,
+  };
 }
 
 /** Emits bounded normal-output condition transitions without stable device or account identity. */

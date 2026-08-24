@@ -167,6 +167,10 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'traces the identity-free video selection a controller starts and reconfigures',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves a snapshot during an active live session without disturbing its media',
         },
         {
@@ -692,6 +696,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     reportTalkback: talkbackReporter(context),
     reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
+    reportSelection: context.trace,
   };
   const recordingBinding: RecordingCameraBinding | undefined = recordingConfigured
     ? {
@@ -1035,6 +1040,7 @@ interface LiveCameraBinding {
   readonly reportTalkback: (outcome: TalkbackOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
   readonly reportSnapshot: (substitution?: SnapshotSubstitution) => void;
+  readonly reportSelection?: AdapterAttachmentContext['trace'];
 }
 
 /** Owns HomeKit camera negotiation while delegating source adaptation to the media domain. */
@@ -1211,6 +1217,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       const video = negotiatedVideo({ ...session.selection.video, ...request.video }, session.videoSsrc, this.hap);
       session.prepared.reconfigure(video);
       session.selection = { ...session.selection, video: { ...session.selection.video, ...request.video } };
+      this.traceSelection('reconfigure', video);
       callback();
       return;
     }
@@ -1220,12 +1227,14 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       return;
     }
     session.selection = request;
+    const video = negotiatedVideo(request.video, session.videoSsrc, this.hap);
+    this.traceSelection('start', video);
     const source = this.binding.source;
     session.source = source;
     this.supervise();
     void session.prepared
       .start(source, {
-        video: negotiatedVideo(request.video, session.videoSsrc, this.hap),
+        video,
         ...(this.binding.audioEnabled && session.audioSsrc !== undefined
           ? {
               audio: {
@@ -1246,6 +1255,18 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
           callback(error instanceof Error ? error : new Error('stream failed'));
         },
       );
+  }
+
+  private traceSelection(operation: 'start' | 'reconfigure', video: NegotiatedLiveVideo): void {
+    this.binding.reportSelection?.({
+      event: 'live-video-selected',
+      operation,
+      profile: video.profile,
+      level: video.level,
+      width: video.width,
+      height: video.height,
+      fps: video.fps,
+    });
   }
 
   stop(): void {

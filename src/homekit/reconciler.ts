@@ -12,7 +12,7 @@ import type {
 import type {
   AdapterDetachmentReason,
   AdapterDiagnostic,
-  AdapterEventTrace,
+  AdapterTrace,
   AttachedAdapter,
   HomeKitDefinitions,
 } from './adapter.js';
@@ -57,11 +57,7 @@ export type HomeKitDiagnostic = RepresentationDiagnostic | AdapterDiagnostic;
 export type HomeKitDiagnosticSink = (diagnostic: HomeKitDiagnostic, affectedDeviceIds: readonly string[]) => void;
 
 /** Redacted debug evidence that an SDK event reached one self-hosted adapter. */
-export interface HomeKitEventReport {
-  adapter: string;
-  event: string;
-  observation: AdapterEventTrace['observation'];
-}
+export type HomeKitEventReport = { adapter: string } & AdapterTrace;
 
 export type HomeKitEventReportSink = (trace: HomeKitEventReport) => void;
 
@@ -205,6 +201,7 @@ export class HomeKitReconciler {
           availability: () => this.source.currentAvailability?.(serial),
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
+          trace: (trace) => this.trace?.({ adapter: key, ...trace }),
           persist: () => this.store.update([accessory]),
         });
         if (handle) {

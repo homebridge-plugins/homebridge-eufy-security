@@ -8,6 +8,7 @@ import type {
 } from '../device/member-evidence.js';
 import type {
   LiveMediaAdapter,
+  NegotiatedLiveVideo,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
   SnapshotMode,
@@ -54,6 +55,14 @@ export interface AdapterEventTrace {
   observation: 'valid' | 'missing' | 'malformed';
 }
 
+/** An identity-free account of one live video selection made by a HomeKit controller. */
+export type AdapterLiveVideoTrace = Pick<NegotiatedLiveVideo, 'profile' | 'level' | 'width' | 'height' | 'fps'> & {
+  event: 'live-video-selected';
+  operation: 'start' | 'reconfigure';
+};
+
+export type AdapterTrace = AdapterEventTrace | AdapterLiveVideoTrace;
+
 /** Dependencies supplied by the reconciler when an adapter attaches to one accessory container. */
 export interface AdapterAttachmentContext {
   readonly device: Device;
@@ -68,6 +77,7 @@ export interface AdapterAttachmentContext {
   readonly availability?: () => AvailabilityObservation | undefined;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;
+  trace?(trace: AdapterTrace): void;
   persist(): void;
 }
 

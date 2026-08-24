@@ -1151,7 +1151,7 @@ describe('camera streaming bundle adapter', () => {
     }
   });
 
-  it('drives negotiated prepare, start, reconfigure, and stop through the media seam', async () => {
+  it('drives negotiated prepare, start, reconfigure, and stop through the media seam and traces the identity-free video selection a controller starts and reconfigures', async () => {
     const target = new Accessory(
       'Synthetic camera',
       uuid.generate('synthetic-camera-stream'),
@@ -1163,6 +1163,7 @@ describe('camera streaming bundle adapter', () => {
     const prepared: PreparedLiveMedia = { videoPort: 41000, audioPort: 41001, start, reconfigure, stop };
     const prepare = vi.fn(async () => prepared);
     const camera = { live: vi.fn() } as unknown as CameraActions;
+    const trace = vi.fn();
 
     CAMERA_STREAMING_ADAPTER.attach({
       device: { camera: () => camera } as never,
@@ -1173,6 +1174,7 @@ describe('camera streaming bundle adapter', () => {
       audioEnabled: true,
       diagnose: vi.fn(),
       observed: vi.fn(),
+      trace,
       persist: vi.fn(),
     } satisfies AdapterAttachmentContext);
 
@@ -1234,6 +1236,15 @@ describe('camera streaming bundle adapter', () => {
         audio: expect.objectContaining({ codec: 'AAC-eld', sampleRate: 16, channels: 1 }),
       }),
     );
+    expect(trace).toHaveBeenCalledWith({
+      event: 'live-video-selected',
+      operation: 'start',
+      profile: 'main',
+      level: '3.1',
+      width: 1280,
+      height: 720,
+      fps: 30,
+    });
 
     await callStream(controller.delegate, {
       sessionID: request.sessionID,
@@ -1241,6 +1252,15 @@ describe('camera streaming bundle adapter', () => {
       video: { width: 640, height: 360, fps: 15, max_bit_rate: 150, rtcp_interval: 0.5 },
     });
     expect(reconfigure).toHaveBeenCalledWith(expect.objectContaining({ width: 640, height: 360, fps: 15 }));
+    expect(trace).toHaveBeenLastCalledWith({
+      event: 'live-video-selected',
+      operation: 'reconfigure',
+      profile: 'main',
+      level: '3.1',
+      width: 640,
+      height: 360,
+      fps: 15,
+    });
 
     await callStream(controller.delegate, { sessionID: request.sessionID, type: StreamRequestTypes.STOP });
     expect(stop).toHaveBeenCalledOnce();

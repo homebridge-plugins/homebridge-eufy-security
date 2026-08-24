@@ -438,8 +438,12 @@ level whose own frame-size limit the selected geometry exceeds. `libx264` writes
 literally in that case, measured on the wire for all nine advertised profile and level combinations at
 `1280x720@30` and again at `1920x1080@30`. Exact coded fidelity therefore holds for every advertised
 profile and level, and whether a profile, level and resolution triple is itself conformant is a property
-of the advertised matrix rather than of adaptation. That property is open: see
-[#1041](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1041).
+of the advertised matrix rather than of adaptation. A real Apple Home session selected High profile at
+level 4.0 for `1280x720@30`, then reconfigured to `640x360@30` at the same level; it supplied no evidence
+that Apple Home chooses an under-levelled triple. The plugin therefore preserves both the established
+advertisement and exact coded fidelity rather than changing either without controller evidence. Every
+start and reconfiguration records its identity-free profile, level, geometry and frame rate as the
+allowlisted `live-video-selected` debug trace so future real-controller evidence can revisit that decision.
 
 No hardware encoder reachable on a Homebridge host clears that bar. The encoders present in every
 bundled Linux artifact cannot express the advertised profile set at all, and the encoders that can

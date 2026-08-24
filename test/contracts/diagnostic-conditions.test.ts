@@ -515,6 +515,90 @@ describe('diagnostic conditions', () => {
     );
   });
 
+  it('emits only allowlisted live video selections in debug output', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, {
+      adapter: 'camera.streaming',
+      event: 'live-video-selected',
+      operation: 'start',
+      profile: 'high',
+      level: '4.0',
+      width: 1280,
+      height: 720,
+      fps: 30,
+      serial: 'T8000P0000000000',
+    } as never);
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'reconfigure',
+        profile: 'main',
+        level: '3.1',
+        width: 1920,
+        height: 1080,
+        fps: 30,
+      },
+    );
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'extended' as never,
+        level: '5.2' as never,
+        width: 8192,
+        height: 8192,
+        fps: 240,
+      },
+    );
+    reportHomeKitEvent({ debug }, {
+      adapter: 'camera.streaming',
+      event: 'live-video-selected',
+      operation: 'start',
+      profile: 'high',
+      level: '4.0',
+      width: '1280',
+      height: 720,
+      fps: '30',
+    } as never);
+
+    expect(debug).toHaveBeenCalledTimes(2);
+    expect(debug).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'high',
+        levelName: '4.0',
+        width: 1280,
+        height: 720,
+        fps: 30,
+      }),
+    );
+    expect(debug).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'reconfigure',
+        profile: 'main',
+        levelName: '3.1',
+        width: 1920,
+        height: 1080,
+        fps: 30,
+      }),
+    );
+  });
+
   it('keeps plugin and SDK events together in JSONL while Homebridge receives human messages', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-diagnostics-'));
     const debug = vi.fn();
