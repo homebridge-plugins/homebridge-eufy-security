@@ -1,4 +1,4 @@
-import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, AvailabilityObservation, Device } from '@mega-yfue/eufy-sdk';
 import type { Characteristic, HAP, HapStatusError, PlatformAccessory, Service } from 'homebridge';
 
 import type {
@@ -65,6 +65,7 @@ export interface AdapterAttachmentContext {
   readonly snapshotMedia?: SnapshotMediaAdapter;
   readonly audioEnabled?: boolean;
   readonly snapshotMode?: SnapshotMode;
+  readonly availability?: () => AvailabilityObservation | undefined;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;
   persist(): void;

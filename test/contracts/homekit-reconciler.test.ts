@@ -548,7 +548,17 @@ describe('HomeKit registry reconciliation', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
     const diagnostics: HomeKitDiagnostic[] = [];
-    new HomeKitReconciler(source, recording.api, (diagnostic) => diagnostics.push(diagnostic)).start();
+    const snapshotMedia = { acquire: vi.fn(), discard: vi.fn() };
+    new HomeKitReconciler(
+      source,
+      recording.api,
+      (diagnostic) => diagnostics.push(diagnostic),
+      [],
+      undefined,
+      {},
+      undefined,
+      snapshotMedia,
+    ).start();
     const serial = 'synthetic-battery-only';
 
     source.publish(
@@ -556,6 +566,7 @@ describe('HomeKit registry reconciliation', () => {
     );
 
     expect(recording.registerPlatformAccessories).not.toHaveBeenCalled();
+    expect(snapshotMedia.discard).toHaveBeenCalledWith(serial);
     expect(diagnostics).toContainEqual({
       code: 'recognized-device-not-represented',
       active: true,
@@ -567,14 +578,52 @@ describe('HomeKit registry reconciliation', () => {
     const source = new RegistrySource();
     const recording = recordingApi();
     const serial = 'synthetic-disabled-representation';
-    new HomeKitReconciler(source, recording.api, vi.fn(), [], undefined, {
-      [serial]: { represented: false },
-    }).start();
+    const snapshotMedia = { acquire: vi.fn(), discard: vi.fn(), reconcile: vi.fn() };
+    new HomeKitReconciler(
+      source,
+      recording.api,
+      vi.fn(),
+      [],
+      undefined,
+      { [serial]: { represented: false } },
+      undefined,
+      snapshotMedia,
+    ).start();
 
     source.publish(registryView(1, new Map([[serial, contactDevice(false)]]), snapshot(contactManifest(serial))));
 
     expect(recording.registerPlatformAccessories).not.toHaveBeenCalled();
     expect(recording.uuidInputs).toEqual([]);
+    expect(snapshotMedia.discard).toHaveBeenCalledWith(serial);
+    expect(snapshotMedia.reconcile).toHaveBeenCalledWith(expect.anything());
+  });
+
+  it('reconciles retained images only from a complete authoritative inventory publication', () => {
+    const source = new RegistrySource();
+    const snapshotMedia = { acquire: vi.fn(), reconcile: vi.fn() };
+    const reconciler = new HomeKitReconciler(
+      source,
+      recordingApi().api,
+      vi.fn(),
+      [],
+      undefined,
+      {},
+      undefined,
+      snapshotMedia,
+    );
+    reconciler.start();
+
+    source.publish(
+      registryView(
+        1,
+        new Map([['synthetic-contact', contactDevice(false)]]),
+        snapshot(contactManifest('synthetic-contact')),
+      ),
+    );
+
+    expect([...snapshotMedia.reconcile.mock.calls[0]![0]]).toEqual(['synthetic-contact']);
+    reconciler.stop();
+    expect(snapshotMedia.reconcile).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1051,9 +1100,20 @@ describe('HomeKit registry reconciliation', () => {
     const recording = recordingApi();
     const diagnostics: HomeKitDiagnostic[] = [];
     const serial = 'synthetic-unavailable-contact';
-    new HomeKitReconciler(source, recording.api, (diagnostic) => diagnostics.push(diagnostic)).start();
+    const snapshotMedia = { acquire: vi.fn(), discard: vi.fn() };
+    new HomeKitReconciler(
+      source,
+      recording.api,
+      (diagnostic) => diagnostics.push(diagnostic),
+      [],
+      undefined,
+      {},
+      undefined,
+      snapshotMedia,
+    ).start();
     source.publish(registryView(1, new Map([[serial, {} as Device]]), snapshot(contactManifest(serial))));
 
+    expect(snapshotMedia.discard).toHaveBeenCalledWith(serial);
     expect(diagnostics).toContainEqual(
       expect.objectContaining({ code: 'contact-capability-unavailable', active: true }),
     );

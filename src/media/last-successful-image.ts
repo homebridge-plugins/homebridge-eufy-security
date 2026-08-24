@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { MAXIMUM_IMAGE_BYTES, isBoundedJpeg, type SnapshotProvenance } from './snapshot.js';
@@ -27,9 +27,15 @@ interface RetainedImage {
 export class PersistedLastSuccessfulImages {
   private readonly directory: string;
   private readonly retained = new Map<string, RetainedImage>();
+  private readonly discardedNames = new Set<string>();
   private replacements = 0;
+  private invalidReported = false;
+  private restoreEnabled = true;
 
-  constructor(storageRoot: string) {
+  constructor(
+    storageRoot: string,
+    private readonly onInvalid?: () => void,
+  ) {
     this.directory = join(storageRoot, SNAPSHOT_DIRECTORY);
   }
 
@@ -37,6 +43,9 @@ export class PersistedLastSuccessfulImages {
     const known = this.retained.get(serial);
     if (known) {
       return known.jpeg;
+    }
+    if (!this.restoreEnabled || this.discardedNames.has(this.name(serial))) {
+      return undefined;
     }
     const restored = this.restore(serial);
     this.retained.set(serial, restored ? { jpeg: restored } : {});
@@ -50,7 +59,40 @@ export class PersistedLastSuccessfulImages {
     if (!this.persist(serial, jpeg)) {
       return;
     }
+    this.discardedNames.delete(this.name(serial));
     this.retained.set(serial, { jpeg, provenance, acceptedAtMs: Date.now() });
+  }
+
+  /** Removes one entity's persisted and process-local fallback without exposing its opaque filename. */
+  discard(serial: string): void {
+    this.retained.set(serial, {});
+    this.discardedNames.add(this.name(serial));
+    this.discardPath(this.file(serial));
+  }
+
+  /** Removes images not belonging to the latest complete authoritative inventory. */
+  reconcile(serials: Iterable<string>): void {
+    const retainedNames = new Set([...serials].map((serial) => this.name(serial)));
+    try {
+      for (const name of readdirSync(this.directory)) {
+        if (/^[0-9a-f]{64}\.jpg$/.test(name) && !retainedNames.has(name)) {
+          this.discardedNames.add(name);
+          this.discardPath(join(this.directory, name));
+        }
+      }
+    } catch {}
+    for (const serial of this.retained.keys()) {
+      if (!retainedNames.has(this.name(serial))) {
+        this.retained.set(serial, {});
+      }
+    }
+  }
+
+  /** Removes every retained image for explicit account or plugin-data cleanup. */
+  discardAll(): void {
+    this.retained.clear();
+    this.restoreEnabled = false;
+    this.discardPath(this.directory, true);
   }
 
   /**
@@ -75,10 +117,17 @@ export class PersistedLastSuccessfulImages {
     const file = this.file(serial);
     try {
       if (statSync(file).size > MAXIMUM_IMAGE_BYTES) {
+        this.reportInvalid();
+        this.discardPath(file);
         return undefined;
       }
       const jpeg = readFileSync(file);
-      return isBoundedJpeg(jpeg) ? jpeg : undefined;
+      if (isBoundedJpeg(jpeg)) {
+        return jpeg;
+      }
+      this.reportInvalid();
+      this.discardPath(file);
+      return undefined;
     } catch {
       return undefined;
     }
@@ -94,21 +143,50 @@ export class PersistedLastSuccessfulImages {
       renameSync(staged, file);
       return true;
     } catch {
-      this.discard(staged);
+      this.remove(staged);
       return false;
     }
   }
 
-  /** A staged replacement that cannot be removed is not a reason to fail a snapshot request. */
-  private discard(staged: string): void {
+  /** A file that cannot be removed is not a reason to fail startup or a snapshot request. */
+  private remove(file: string): void {
     try {
-      rmSync(staged, { force: true });
+      rmSync(file, { force: true });
     } catch {
       return;
     }
   }
 
+  /** Moves discarded data out of the readable namespace before best-effort physical removal. */
+  private discardPath(path: string, recursive = false): void {
+    const discarded = `${path}.discarded.${process.pid}.${(this.replacements += 1)}`;
+    try {
+      renameSync(path, discarded);
+    } catch {
+      try {
+        rmSync(path, { force: true, recursive });
+      } catch {}
+      return;
+    }
+    try {
+      rmSync(discarded, { force: true, recursive });
+    } catch {}
+  }
+
   private file(serial: string): string {
-    return join(this.directory, `${createHash('sha256').update(serial).digest('hex')}.jpg`);
+    return join(this.directory, this.name(serial));
+  }
+
+  private name(serial: string): string {
+    return `${createHash('sha256').update(serial).digest('hex')}.jpg`;
+  }
+
+  private reportInvalid(): void {
+    if (!this.invalidReported) {
+      this.invalidReported = true;
+      try {
+        this.onInvalid?.();
+      } catch {}
+    }
   }
 }

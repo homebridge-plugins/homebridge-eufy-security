@@ -65,16 +65,16 @@ src/
 
 Dependencies follow these directions:
 
-| Source        | Allowed internal dependencies                                                              |
-| ------------- | ------------------------------------------------------------------------------------------ |
-| `device/`     | None                                                                                       |
-| `account/`    | configuration, device                                                                      |
-| `runtime/`    | account, configuration, device                                                             |
-| `media/`      | configuration, device                                                                      |
-| `homekit/`    | device, plus type-only imports from `media/contracts.ts`                                   |
-| `ui/`         | account, configuration, device, HomeKit admission policy, persisted runtime views, storage |
-| `platform.ts` | configuration, runtime, HomeKit, media, storage                                            |
-| `index.ts`    | platform and settings                                                                      |
+| Source        | Allowed internal dependencies                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `device/`     | None                                                                                                        |
+| `account/`    | configuration, device                                                                                       |
+| `runtime/`    | account, configuration, device                                                                              |
+| `media/`      | configuration, device                                                                                       |
+| `homekit/`    | device, plus type-only imports from `media/contracts.ts`                                                    |
+| `ui/`         | account, configuration, device, HomeKit admission policy, media retention, persisted runtime views, storage |
+| `platform.ts` | configuration, runtime, HomeKit, media, storage                                                             |
+| `index.ts`    | platform and settings                                                                                       |
 
 V5 state lives under `homebridge-eufy` in the Homebridge storage directory. `storage.ts` atomically
 adopts the earlier `eufy-security` V5 directory only when no live SDK owner holds it. If both roots
@@ -99,9 +99,10 @@ shared evidence seam before attachment. Primitive shape alone never selects an a
 connect them, but they contain no domain behavior.
 
 The runtime composition root connects account persistence, ownership, the long-lived SDK adapter,
-registry publication, HomeKit reconciliation, and eventually media adapters. The UI composition root
-connects the temporary authentication owner to account stores and reads allowlisted persisted runtime
-views. Its dashboard projection consumes the same closed HomeKit adapter registry used by reconciliation,
+registry publication, HomeKit reconciliation, and media adapters. The UI composition root connects the
+temporary authentication owner to account stores, clears account-bound retained images only after a
+successful account replacement, and reads allowlisted persisted runtime views. Its dashboard projection
+consumes the same closed HomeKit adapter registry used by reconciliation,
 so the browser receives recognized, represented, and controllable summaries without reconstructing the
 SDK capability model.
 

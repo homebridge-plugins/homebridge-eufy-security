@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -119,5 +129,59 @@ describe('last successful image', () => {
     restarted.write(SERIAL, jpeg('synthetic stored image'), 'stored-only');
 
     expect(restarted.read(SERIAL)?.equals(jpeg('synthetic stored image'))).toBe(true);
+  });
+
+  it('deletes malformed and oversized restored files', () => {
+    const directory = join(root, 'snapshots');
+    mkdirSync(directory);
+
+    const reportInvalid = vi.fn();
+    const images = new PersistedLastSuccessfulImages(root, reportInvalid);
+    for (const [serial, invalid] of [
+      [SERIAL, Buffer.from('not a jpeg')],
+      ['SYNTHETIC0000000002', Buffer.alloc(MAXIMUM_IMAGE_BYTES + 1)],
+    ] as const) {
+      const file = join(directory, opaqueName(serial));
+      writeFileSync(file, invalid);
+      expect(images.read(serial)).toBeUndefined();
+      expect(existsSync(file)).toBe(false);
+    }
+    expect(reportInvalid).toHaveBeenCalledOnce();
+  });
+
+  it('deletes one entity without disturbing another retained image', () => {
+    const other = 'SYNTHETIC0000000002';
+    const images = new PersistedLastSuccessfulImages(root);
+    images.write(SERIAL, jpeg('first image'), 'live');
+    images.write(other, jpeg('second image'), 'live');
+
+    images.discard(SERIAL);
+
+    expect(images.read(SERIAL)).toBeUndefined();
+    expect(images.read(other)?.equals(jpeg('second image'))).toBe(true);
+  });
+
+  it('removes only images absent from a complete authoritative inventory', () => {
+    const retained = 'SYNTHETIC0000000002';
+    const removed = 'SYNTHETIC0000000003';
+    const images = new PersistedLastSuccessfulImages(root);
+    images.write(retained, jpeg('retained image'), 'live');
+    images.write(removed, jpeg('removed image'), 'live');
+
+    images.reconcile([retained]);
+
+    expect(images.read(retained)?.equals(jpeg('retained image'))).toBe(true);
+    expect(images.read(removed)).toBeUndefined();
+  });
+
+  it('deletes every retained image only on an explicit all-image cleanup', () => {
+    const images = new PersistedLastSuccessfulImages(root);
+    images.write(SERIAL, jpeg('first image'), 'live');
+    images.write('SYNTHETIC0000000002', jpeg('second image'), 'live');
+
+    images.discardAll();
+
+    expect(existsSync(join(root, 'snapshots'))).toBe(false);
+    expect(images.read(SERIAL)).toBeUndefined();
   });
 });

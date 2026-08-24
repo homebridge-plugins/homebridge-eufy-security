@@ -1651,6 +1651,16 @@ export function reportDiscardedV4Settings(
   );
 }
 
+/** Emits one identity-free warning after an invalid retained camera image is discarded. */
+export function reportInvalidSnapshotCache(
+  target: Pick<PlatformLogger, 'warn'> & Partial<Pick<PlatformLogger, 'debug'>>,
+): void {
+  const code = 'camera-snapshot-cache-invalid';
+  const messageKey = 'log.snapshotCacheInvalid';
+  target.warn(`[${code}] ${localize(target, messageKey)}`);
+  target.debug?.(JSON.stringify({ scope: 'media-notice', level: 'warn', code, messageKey }));
+}
+
 /** Emits one allowlisted HomeKit event trace only when host debug output is available. */
 export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace: HomeKitEventTrace): void {
   if (

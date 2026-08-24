@@ -6,6 +6,7 @@ import {
   DiagnosticConditions,
   reportDiscardedV4Settings,
   reportHomeKitEvent,
+  reportInvalidSnapshotCache,
   type PlatformLogger,
 } from './diagnostics.js';
 import { HomeKitReconciler, type HomeKitAccessoryStore } from './homekit/reconciler.js';
@@ -60,7 +61,9 @@ export function createEufyPlatform(
         ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath)
         : undefined;
       const snapshotMedia = new SnapshotAcquisition(
-        storageRoot ? new PersistedLastSuccessfulImages(storageRoot) : undefined,
+        storageRoot
+          ? new PersistedLastSuccessfulImages(storageRoot, () => reportInvalidSnapshotCache(diagnosticLog))
+          : undefined,
       );
       if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
         reportDiscardedV4Settings(diagnosticLog);

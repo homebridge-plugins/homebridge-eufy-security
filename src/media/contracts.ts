@@ -171,6 +171,8 @@ export interface SnapshotAcquisitionScope {
 export interface SnapshotPresentation {
   /** Whether the camera is enabled, when an admitted observation reports it, and nothing otherwise. */
   readonly enabled?: boolean;
+  /** The latest explicit SDK availability state, and nothing when no authoritative observation exists. */
+  readonly availability?: 'available' | 'unavailable';
   /** Called when the packaged unavailable image was served in place of a camera image. */
   onPlaceholder?(): void;
 }
@@ -183,4 +185,8 @@ export interface SnapshotMediaAdapter {
     mode: SnapshotMode,
     presentation?: SnapshotPresentation,
   ): Promise<Buffer>;
+  captureFromWarmLive?(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<void>;
+  discard?(serial: string): void;
+  reconcile?(serials: Iterable<string>): void;
+  discardAll?(): void;
 }

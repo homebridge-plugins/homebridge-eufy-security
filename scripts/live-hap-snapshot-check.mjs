@@ -31,7 +31,7 @@
  *   node scripts/live-hap-snapshot-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
  *     [--storage /tmp/hb-check/homebridge-eufy] [--serial T8XXXXXXXXXXXXXX] [--battery] [--limit 1]
- *     [--settle-ms 25000]
+ *     [--settle-ms 25000] [--presentations 10:disabled,12:offline]
  *
  * Behavior notes this check exercises:
  *   - `Refresh` with no retained image presents unavailable while starting one live refresh.
@@ -58,13 +58,18 @@ import {
   snapshotImage,
 } from './hap-live-harness.mjs';
 
-const PRESENTATION_DIGESTS = new Set(
-  ['../media/Snapshot-Unavailable.jpg', '../media/camera-disabled.jpg'].map((path) =>
+const PRESENTATION_DIGESTS = new Map(
+  [
+    ['../media/Snapshot-Unavailable.jpg', 'unavailable'],
+    ['../media/camera-disabled.jpg', 'disabled'],
+    ['../media/camera-offline.jpg', 'offline'],
+  ].map(([path, presentation]) => [
     createHash('sha256')
       .update(readFileSync(new URL(path, import.meta.url)))
       .digest('hex')
       .slice(0, 12),
-  ),
+    presentation,
+  ]),
 );
 
 function retained(storage) {
@@ -102,6 +107,18 @@ const retainedBeforeInodesByName = new Map((retainedBefore?.images ?? []).map((i
 const results = observations('live snapshot qualification');
 const check = results.check;
 const sourceImageAids = new Set();
+const intentionalPresentationAids = new Set();
+const expectedPresentations = new Map(
+  String(parsed.get('presentations') ?? '')
+    .split(',')
+    .filter(Boolean)
+    .map((entry) => entry.split(':')),
+);
+for (const [aid, presentation] of expectedPresentations) {
+  if (!/^\d+$/.test(aid) || !['disabled', 'offline'].includes(presentation)) {
+    throw new Error('--presentations must contain comma-separated aid:disabled or aid:offline entries');
+  }
+}
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
   throw new Error(`hap-controller is unavailable at ${controllerModule}; install it outside this repository`);
@@ -141,8 +158,26 @@ try {
         const image = await snapshotImage(client, aid);
         console.log(`aid=${aid} round=${round} served bytes=${image.bytes} digest=${image.digest}`);
         check(image.structural, `aid=${aid} round=${round} served a structurally complete JPEG`);
-        if (!PRESENTATION_DIGESTS.has(image.digest)) {
+        const presentation = PRESENTATION_DIGESTS.get(image.digest);
+        const expectedPresentation = expectedPresentations.get(String(aid));
+        check(
+          expectedPresentation
+            ? presentation === expectedPresentation
+            : presentation === undefined || (round === 1 && presentation === 'unavailable'),
+          expectedPresentation
+            ? `aid=${aid} round=${round} served the explicit ${expectedPresentation} presentation`
+            : `aid=${aid} round=${round} served source imagery or the initial unavailable presentation`,
+        );
+        if (!presentation) {
           sourceImageAids.add(aid);
+        } else if (presentation !== 'unavailable') {
+          check(
+            expectedPresentations.get(String(aid)) === presentation,
+            `aid=${aid} served the explicitly expected ${presentation} presentation`,
+          );
+          if (expectedPresentations.get(String(aid)) === presentation) {
+            intentionalPresentationAids.add(aid);
+          }
         }
       } catch (error) {
         console.log(`aid=${aid} round=${round} refused: ${error instanceof Error ? error.message : String(error)}`);
@@ -154,7 +189,9 @@ try {
         await delay(settleMs);
       }
     }
-    check(sourceImageAids.has(aid), `aid=${aid} served source imagery rather than only a packaged presentation`);
+    if (!expectedPresentations.has(String(aid))) {
+      check(sourceImageAids.has(aid), `aid=${aid} served source imagery after its refresh interval`);
+    }
   }
 
   if (storage) {
@@ -172,11 +209,20 @@ try {
         'a retained image uses an opaque name, owner-only modes, and structural JPEG bytes',
       );
     }
-    check(images.length > 0, 'the plugin retained at least one last successful image');
+    if (sourceImageAids.size > 0) {
+      check(images.length > 0, 'the plugin retained at least one last successful image');
+    }
     const retainedByName = new Map(images.map((image) => [image.name, image]));
     for (const candidate of selected) {
       const name = retainedSnapshotName(candidate);
       const image = name ? retainedByName.get(name) : undefined;
+      if (intentionalPresentationAids.has(candidate.aid) && !sourceImageAids.has(candidate.aid)) {
+        check(
+          image?.inode === retainedBeforeInodesByName.get(name),
+          `aid=${candidate.aid} did not create or replace retained imagery while intentionally presented`,
+        );
+        continue;
+      }
       check(Boolean(image), `aid=${candidate.aid} has a retained source image`);
       check(
         Boolean(image && retainedBeforeInodesByName.get(image.name) !== image.inode),

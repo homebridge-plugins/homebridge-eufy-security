@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import type { AnyDeviceEvent, Device, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, AvailabilityObservation, Device, FcmStore, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import { AccountOwnership, type AccountOwnerEvidence, type AccountReleaseResult } from '../account/ownership.js';
 import { AccountSessionPersistence } from '../account/persistence.js';
@@ -124,6 +124,10 @@ export class RuntimeOwner {
 
   currentState(): RuntimeState {
     return this.runtimeState;
+  }
+
+  currentAvailability(serial: string): AvailabilityObservation | undefined {
+    return this.client?.deviceAvailability?.(serial);
   }
 
   subscribeRegistry(listener: RuntimeRegistryListener): () => void {

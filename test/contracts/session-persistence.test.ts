@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { PersistedPush, PersistedSession } from '@mega-yfue/eufy-sdk';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AccountSessionPersistence } from '../../src/account/persistence.js';
 
@@ -86,6 +86,24 @@ describe('account session persistence', () => {
     expect(active?.account).toBe('replacement@example.invalid');
     expect(active?.session.load()).toEqual(session('replacement'));
     expect(active?.push.load()).toEqual(push('replacement'));
+  });
+
+  it('announces an account replacement only after the new active generation is published', async () => {
+    const replaced = vi.fn();
+    const persistence = new AccountSessionPersistence(await temporaryRoot(), undefined, undefined, replaced);
+    const first = await persistence.stage('first@example.invalid');
+    await first.commit();
+    expect(replaced).not.toHaveBeenCalled();
+
+    const sameAccount = await persistence.stage('first@example.invalid');
+    await sameAccount.commit();
+    expect(replaced).not.toHaveBeenCalled();
+
+    const replacement = await persistence.stage('replacement@example.invalid');
+    await replacement.commit();
+
+    expect(replaced).toHaveBeenCalledOnce();
+    expect((await persistence.active())?.account).toBe('replacement@example.invalid');
   });
 
   it('does not publish a staged account when commit is cancelled', async () => {

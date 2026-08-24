@@ -55,7 +55,8 @@ or dependency edge requires updating this section and the architecture contract 
 - `homekit/` may import device and types from `media/contracts.ts`. It never imports account, runtime,
   UI, or concrete media implementations.
 - `platform.ts` and `ui/server.ts` are composition roots. The UI server may consume diagnostics to
-  manage explicitly initiated support sessions, and the `ui/` dashboard projection may consume
+  manage explicitly initiated support sessions and media retention to clear account-bound images after
+  successful account replacement, and the `ui/` dashboard projection may consume
   HomeKit admission policy so the browser does not recreate a second capability model. They construct and connect modules but do not
   absorb their behavior. `index.ts` only registers the platform.
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   SessionExpiredError,
+  type AvailabilityObservation,
   type Device,
   type DeviceManifest,
   type EufyMega,
@@ -151,6 +152,13 @@ describe('persisted runtime owner', () => {
       onReleased?.();
       return { state: 'stopped' as const };
     });
+    const availability: AvailabilityObservation = {
+      entity: { kind: 'device', sn: 'synthetic-current' },
+      availability: 'unavailable',
+      source: { transport: 'smqtt', signal: 'state-info' },
+      scope: 'device',
+      receivedAt: 1,
+    };
     const client: SdkClient = {
       start: vi.fn(async () => {
         calls.push('client:start');
@@ -163,6 +171,7 @@ describe('persisted runtime owner', () => {
       stop: vi.fn(async () => {
         calls.push('client:stop');
       }),
+      deviceAvailability: vi.fn(() => availability),
     };
     const runtime = new RuntimeOwner({ error: vi.fn(), warn: vi.fn() }, config, () => client, {
       storageRoot: '/synthetic-runtime',
@@ -199,7 +208,9 @@ describe('persisted runtime owner', () => {
     });
 
     await Promise.all([runtime.start(), runtime.start()]);
+    expect(runtime.currentAvailability('synthetic-current')).toBe(availability);
     await Promise.all([runtime.stop(), runtime.stop()]);
+    expect(runtime.currentAvailability('synthetic-current')).toBeUndefined();
 
     expect(client.start).toHaveBeenCalledOnce();
     expect(client.stop).toHaveBeenCalledOnce();

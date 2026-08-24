@@ -1,4 +1,4 @@
-import type { AnyDeviceEvent, Device } from '@mega-yfue/eufy-sdk';
+import type { AnyDeviceEvent, AvailabilityObservation, Device } from '@mega-yfue/eufy-sdk';
 import type { PlatformAccessory } from 'homebridge';
 
 import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
@@ -33,6 +33,7 @@ export interface HomeKitRegistrySource {
   currentRegistry(): HomeKitRegistryView | undefined;
   subscribeRegistry(listener: HomeKitRegistryListener): () => void;
   subscribeEvents(listener: (event: AnyDeviceEvent) => void): () => void;
+  currentAvailability?(serial: string): AvailabilityObservation | undefined;
 }
 
 /** Homebridge operations used to create and persist accessory containers. */
@@ -115,6 +116,11 @@ export class HomeKitReconciler {
         this.representedSerials.add(serial);
       }
     }
+    for (const [serial, preference] of Object.entries(this.entityPreferences)) {
+      if (preference.represented === false) {
+        this.snapshotMedia?.discard?.(serial);
+      }
+    }
   }
 
   start(): void {
@@ -150,6 +156,7 @@ export class HomeKitReconciler {
     if (manifests.size !== view.registry.size || [...manifests.keys()].some((serial) => !view.registry.has(serial))) {
       throw new TypeError('HomeKit registry view does not match its complete snapshot');
     }
+    this.snapshotMedia?.reconcile?.(manifests.keys());
 
     const nextRepresented = new Set<string>();
     for (const [serial, device] of view.registry) {
@@ -165,6 +172,7 @@ export class HomeKitReconciler {
       }
       this.activeAdapters.set(serial, admittedKeys);
       if (this.entityPreferences[serial]?.represented === false) {
+        this.snapshotMedia?.discard?.(serial);
         this.detachHandles(previousHandles);
         this.attachedAdapters.delete(serial);
         this.clearRepresentationDiagnostic(serial);
@@ -172,6 +180,7 @@ export class HomeKitReconciler {
       }
       const admittedPrimaryAdapters = admittedAdapters.filter(([, adapter]) => adapter.role === 'primary-purpose');
       if (admittedPrimaryAdapters.length === 0) {
+        this.snapshotMedia?.discard?.(serial);
         this.detachHandles(previousHandles);
         this.attachedAdapters.delete(serial);
         this.setRepresentationDiagnostic(serial, 'no-primary-purpose-member');
@@ -193,6 +202,7 @@ export class HomeKitReconciler {
           snapshotMedia: this.snapshotMedia,
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
           snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
+          availability: () => this.source.currentAvailability?.(serial),
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
           persist: () => this.store.update([accessory]),
@@ -212,6 +222,7 @@ export class HomeKitReconciler {
         primaryAvailable = attachOrRetain(key, adapter) || primaryAvailable;
       }
       if (!primaryAvailable) {
+        this.snapshotMedia?.discard?.(serial);
         this.detachReplacedHandles(previousHandles, handles);
         this.attachedAdapters.set(serial, handles);
         this.setRepresentationDiagnostic(serial, 'primary-adapter-unavailable');

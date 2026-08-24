@@ -1,4 +1,12 @@
-import type { AnyDeviceEvent, Device, EufyMega, FcmStore, Logger, SessionStore } from '@mega-yfue/eufy-sdk';
+import type {
+  AnyDeviceEvent,
+  AvailabilityObservation,
+  Device,
+  EufyMega,
+  FcmStore,
+  Logger,
+  SessionStore,
+} from '@mega-yfue/eufy-sdk';
 
 import type { EufyConfig } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
@@ -28,6 +36,7 @@ export interface SdkClient {
   stop(): Promise<void>;
   onInventory?(listener: (result: SdkStartResult) => void): void;
   onEvent?(listener: (event: AnyDeviceEvent) => void): void;
+  deviceAvailability?(serial: string): AvailabilityObservation | undefined;
 }
 
 export interface RuntimeClientStores {
@@ -181,6 +190,10 @@ export class PersistedSdkClient implements SdkClient {
 
   onEvent(listener: (event: AnyDeviceEvent) => void): void {
     this.eventListener = listener;
+  }
+
+  deviceAvailability(serial: string): AvailabilityObservation | undefined {
+    return this.client?.deviceAvailability(serial);
   }
 
   private scheduleRefresh(): void {

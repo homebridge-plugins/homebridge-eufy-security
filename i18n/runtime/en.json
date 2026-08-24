@@ -33,6 +33,7 @@
   "log.condition.recovered": "Recovered: {summary}.",
   "log.diagnosticFileFailed": "Diagnostic file logging failed; check storage permissions.",
   "log.discardedSettings": "Some legacy settings were discarded. Review and acknowledge them in the Homebridge Eufy dashboard.",
+  "log.snapshotCacheInvalid": "An invalid retained camera image was removed",
   "log.homekit.batteryCapabilityUnavailable": "Battery information is unavailable",
   "log.homekit.armingCapabilityUnavailable": "Security-system information is unavailable",
   "log.homekit.armingOperationFailed": "A security-system control failed",

@@ -320,7 +320,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image, and consume nothing at all while an admitted observation reports the camera disabled',
       identityEffect: 'Stored snapshots use the stable camera controller without creating another service',
       diagnostics:
-        'Cloud never substitutes live media and Refresh reports missing stored acquisition only when live refresh is also unavailable; a request no admitted acquisition can answer serves the packaged unavailable image and latches one bounded reason until a later real image withdraws it',
+        'Cloud never calls live acquisition; retained real imagery precedes typed offline presentation, while a request with neither serves the packaged unavailable image and latches one bounded reason until a later real or intentional presentation withdraws it',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -344,6 +344,10 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'presents typed offline only when no retained real image exists',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'fails a snapshot request when this package carries no usable placeholder',
         },
         {
@@ -358,7 +362,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         'Official camera snapshot requests consume a fresh SDK live still in Live mode and one rate-limited refresh in Refresh mode',
       identityEffect: 'Live snapshots use the stable camera controller without creating another service',
       diagnostics:
-        'Live never falls back to stored imagery and Refresh reports missing live acquisition only when stored acquisition is also unavailable; a failed acquisition serves the packaged unavailable image rather than an image from another camera path',
+        'Live never calls stored acquisition and Refresh reports missing live acquisition only when stored acquisition is also unavailable; failed acquisition preserves the last successful real image before selecting a typed placeholder',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -683,6 +687,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     audioEnabled: context.audioEnabled !== false,
     snapshotMode,
     enablement: enablementObservation(context, camera),
+    availability: availabilityObservation(context.device.sn, context.availability),
     reportSession: liveSessionReporter(context),
     reportTalkback: talkbackReporter(context),
     reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
@@ -970,11 +975,43 @@ function enablementObservation(context: AdapterAttachmentContext, camera: Camera
   };
 }
 
+/** Reduces only a well-formed, correctly attributed SDK observation to snapshot presentation state. */
+function availabilityObservation(
+  serial: string,
+  read: AdapterAttachmentContext['availability'],
+): () => 'available' | 'unavailable' | undefined {
+  return () => {
+    try {
+      const observation = read?.();
+      if (
+        !observation ||
+        observation.entity?.kind !== 'device' ||
+        observation.entity.sn !== serial ||
+        observation.scope !== 'device' ||
+        observation.source?.transport !== 'smqtt' ||
+        observation.source.signal !== 'state-info' ||
+        (observation.availability !== 'available' && observation.availability !== 'unavailable') ||
+        !Number.isFinite(observation.receivedAt) ||
+        (observation.observedAt !== undefined && !Number.isFinite(observation.observedAt)) ||
+        (observation.sequence !== undefined && !Number.isFinite(observation.sequence))
+      ) {
+        return undefined;
+      }
+      return observation.availability;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
 interface PendingSession {
   prepared: PreparedLiveMedia;
   videoSsrc: number;
   audioSsrc?: number;
   selection?: StartStreamRequest;
+  source?: CameraMediaSource;
+  snapshotMedia?: SnapshotMediaAdapter;
+  capturedFallback?: boolean;
 }
 
 interface CameraMediaSource extends LiveMediaSource, SnapshotMediaSource, RecordingMediaSource {}
@@ -993,6 +1030,7 @@ interface LiveCameraBinding {
   readonly audioEnabled: boolean;
   readonly snapshotMode: SnapshotMode;
   readonly enablement: () => boolean | undefined;
+  readonly availability: () => 'available' | 'unavailable' | undefined;
   readonly reportSession: (outcome: LiveSessionOutcome) => void;
   readonly reportTalkback: (outcome: TalkbackOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
@@ -1038,9 +1076,11 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     }
     let substituted = false;
     const enabled = this.binding.enablement();
+    const availability = this.binding.availability();
     void snapshotMedia
       .acquire(this.snapshotScope, this.binding.source, this.binding.snapshotMode, {
         ...(enabled === undefined ? {} : { enabled }),
+        ...(availability === undefined ? {} : { availability }),
         onPlaceholder: () => {
           substituted = true;
           this.binding.reportSnapshot('no-acquisition');
@@ -1098,6 +1138,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   private async prepare(request: PrepareStreamRequest) {
     const videoSsrc = this.hap.CameraController.generateSynchronisationSource();
     const audioSsrc = this.binding.audioEnabled ? this.hap.CameraController.generateSynchronisationSource() : undefined;
+    let session: PendingSession | undefined;
     const prepared = await this.binding.media.prepare({
       addressVersion: request.addressVersion,
       targetAddress: request.targetAddress,
@@ -1107,11 +1148,28 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
         this.controller?.forceStopStreamingSession(request.sessionID);
         this.release(request.sessionID);
       },
-      onSessionOutcome: (outcome) => this.binding.reportSession(outcome),
+      onSessionOutcome: (outcome) => {
+        this.binding.reportSession(outcome);
+        if (
+          outcome.outcome === 'streaming' &&
+          session?.source &&
+          session.snapshotMedia?.captureFromWarmLive &&
+          !session.capturedFallback
+        ) {
+          session.capturedFallback = true;
+          void session.snapshotMedia.captureFromWarmLive(this.snapshotScope, session.source).catch(() => undefined);
+        }
+      },
       onTalkbackOutcome: (outcome) => this.binding.reportTalkback(outcome),
     });
+    session = {
+      prepared,
+      videoSsrc,
+      ...(audioSsrc === undefined ? {} : { audioSsrc }),
+      ...(this.binding.snapshotMedia ? { snapshotMedia: this.binding.snapshotMedia } : {}),
+    };
     return {
-      session: { prepared, videoSsrc, ...(audioSsrc === undefined ? {} : { audioSsrc }) },
+      session,
       response: {
         video: {
           port: prepared.videoPort,
@@ -1162,9 +1220,11 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       return;
     }
     session.selection = request;
+    const source = this.binding.source;
+    session.source = source;
     this.supervise();
     void session.prepared
-      .start(this.binding.source, {
+      .start(source, {
         video: negotiatedVideo(request.video, session.videoSsrc, this.hap),
         ...(this.binding.audioEnabled && session.audioSsrc !== undefined
           ? {

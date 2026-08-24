@@ -22,6 +22,7 @@ import {
   type DiagnosticsUiEvent,
 } from '../diagnostics.js';
 import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
+import { PersistedLastSuccessfulImages } from '../media/last-successful-image.js';
 import { RuntimeTracker } from '../runtime/tracker.js';
 import { resolveStorageRoot } from '../storage.js';
 import { readDashboard } from './dashboard.js';
@@ -209,7 +210,9 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
     }
     const root = resolveStorageRoot(this.homebridgeStoragePath);
     this.ownership = new AccountOwnership(join(root, 'ownership'));
-    this.persistence = new AccountSessionPersistence(join(root, 'accounts'));
+    this.persistence = new AccountSessionPersistence(join(root, 'accounts'), undefined, undefined, () =>
+      new PersistedLastSuccessfulImages(root).discardAll(),
+    );
     this.runtimeTracker = new RuntimeTracker(join(root, 'tracker.json'));
     this.diagnostics = new GuidedDiagnostics(root);
 

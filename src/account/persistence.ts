@@ -195,6 +195,7 @@ export class AccountSessionPersistence {
     private readonly root: string,
     private readonly maxRecordBytes = DEFAULT_MAX_RECORD_BYTES,
     private readonly hooks?: AccountPersistenceHooks,
+    private readonly onAccountReplacement?: () => void,
   ) {
     if (!Number.isSafeInteger(maxRecordBytes) || maxRecordBytes <= 0 || maxRecordBytes > MAX_RECORD_BYTES) {
       throw new Error(`maxRecordBytes must be between 1 and ${MAX_RECORD_BYTES}`);
@@ -228,6 +229,7 @@ export class AccountSessionPersistence {
 
   async commit(staging: StagedAccountStores, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
+    const previous = await this.readActiveGeneration();
     const generationsRoot = join(this.root, 'generations');
     await mkdir(generationsRoot, { mode: 0o700, recursive: true });
     await chmod(generationsRoot, 0o700);
@@ -248,6 +250,12 @@ export class AccountSessionPersistence {
     } catch (error) {
       await rm(destination, { force: true, recursive: true });
       throw error;
+    }
+
+    if (previous && previous.account !== staging.account) {
+      try {
+        this.onAccountReplacement?.();
+      } catch {}
     }
 
     void (async () => {
