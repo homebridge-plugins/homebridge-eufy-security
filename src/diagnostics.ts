@@ -1183,6 +1183,12 @@ function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | un
     if (!topology || !action || typeof candidate.level2 !== 'boolean') return undefined;
     return { phase, topology, action, level2: candidate.level2 };
   }
+  if (phase === 'media-command-ack') {
+    return candidate.action === 'start' ? { phase, action: 'start' } : undefined;
+  }
+  if (phase === 'media-command-retry' || phase === 'media-command-unacknowledged') {
+    return candidate.action === 'start' ? { phase, action: 'start' } : undefined;
+  }
   if (phase === 'first-video-command') {
     return signCode === undefined || typeof candidate.accepted !== 'boolean'
       ? undefined
@@ -1196,6 +1202,13 @@ function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | un
     return ['audio', 'video'].includes(String(candidate.media)) ? { phase, media: String(candidate.media) } : undefined;
   }
   if (phase === 'video-decode-empty') return signCode === undefined ? undefined : { phase, signCode };
+  if (phase === 'datagram-gap') {
+    return Number.isSafeInteger(candidate.dataType) &&
+      Number(candidate.dataType) >= 0 &&
+      Number(candidate.dataType) <= 3
+      ? { phase, dataType: Number(candidate.dataType) }
+      : undefined;
+  }
   return undefined;
 }
 
@@ -1541,6 +1554,7 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       return undefined;
     }
     if (value.event === 'live-start-trace') {
+      if (level !== 'debug') return undefined;
       const trace = sanitizeSdkLiveStartTrace(value);
       return trace ? { scope: 'sdk', level, subsystem: 'p2p', event: 'live-start-trace', ...trace } : undefined;
     }

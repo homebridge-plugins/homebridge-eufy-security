@@ -282,6 +282,33 @@ describe('diagnostic conditions', () => {
       level2: true,
       level: 'debug',
     });
+
+    sdk.debug('[live] start trace', { phase: 'media-command-ack', action: 'start', serial: 'T8000P0000000000' });
+    expect(JSON.parse(debug.mock.calls[1]![0])).toEqual({
+      scope: 'sdk',
+      subsystem: 'p2p',
+      event: 'live-start-trace',
+      phase: 'media-command-ack',
+      action: 'start',
+      level: 'debug',
+    });
+
+    sdk.debug('[live] start trace', { phase: 'datagram-gap', dataType: 1, payload: 'must-not-survive' });
+    expect(JSON.parse(debug.mock.calls[2]![0])).toEqual({
+      scope: 'sdk',
+      subsystem: 'p2p',
+      event: 'live-start-trace',
+      phase: 'datagram-gap',
+      dataType: 1,
+      level: 'debug',
+    });
+
+    sdk.debug('[live] start trace', { phase: 'media-command-retry', action: 'start' });
+    sdk.debug('[live] start trace', { phase: 'media-command-unacknowledged', action: 'start' });
+    expect(debug.mock.calls.slice(3).map(([message]) => JSON.parse(message).phase)).toEqual([
+      'media-command-retry',
+      'media-command-unacknowledged',
+    ]);
   });
 
   it('persists an SDK live startup trace only during authorized live diagnostics', async () => {
