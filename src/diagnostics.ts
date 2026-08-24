@@ -71,6 +71,7 @@ const SDK_EVENT_KEYS = new Set([
   'connection-closed',
   'connection-opened',
   'connection-retrying',
+  'live-start-trace',
   'media-error',
   'media-warning',
   'operation-failed',
@@ -1168,12 +1169,46 @@ function classifySdkEvent(message: string): string {
   return 'sdk-diagnostic';
 }
 
+function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const phase = String(candidate.phase);
+  const signCode =
+    Number.isSafeInteger(candidate.signCode) && Number(candidate.signCode) >= 0 && Number(candidate.signCode) <= 255
+      ? Number(candidate.signCode)
+      : undefined;
+  if (phase === 'media-command') {
+    const topology = ['attached', 'own'].includes(String(candidate.topology)) ? String(candidate.topology) : undefined;
+    const action = ['keepalive', 'start'].includes(String(candidate.action)) ? String(candidate.action) : undefined;
+    if (!topology || !action || typeof candidate.level2 !== 'boolean') return undefined;
+    return { phase, topology, action, level2: candidate.level2 };
+  }
+  if (phase === 'first-video-command') {
+    return signCode === undefined || typeof candidate.accepted !== 'boolean'
+      ? undefined
+      : { phase, signCode, accepted: candidate.accepted };
+  }
+  if (phase === 'first-video-unit') {
+    return typeof candidate.keyframe === 'boolean' ? { phase, keyframe: candidate.keyframe } : undefined;
+  }
+  if (phase === 'first-keyframe') return { phase };
+  if (phase === 'first-foreign-media-command') {
+    return ['audio', 'video'].includes(String(candidate.media)) ? { phase, media: String(candidate.media) } : undefined;
+  }
+  if (phase === 'video-decode-empty') return signCode === undefined ? undefined : { phase, signCode };
+  return undefined;
+}
+
 /** Adapts SDK protocol detail to bounded debug output without preserving supplied values. */
 export function createSdkLogger(target: Partial<PlatformLogger> | undefined): Logger | undefined {
   if (!target?.debug) {
     return undefined;
   }
   const format = (message: string, args: unknown[]): Record<string, unknown> | undefined => {
+    if (message === '[live] start trace') {
+      const trace = sanitizeSdkLiveStartTrace(args[0]);
+      if (trace) return { scope: 'sdk', subsystem: 'p2p', event: 'live-start-trace', ...trace };
+    }
     const requestedSubsystem = /^\[([a-z0-9-]+)(?:\s+[^\]]+)?\]/i.exec(message)?.[1]?.toLowerCase();
     if (requestedSubsystem === 'ffmpeg') {
       return undefined;
@@ -1504,6 +1539,10 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       !SDK_EVENT_KEYS.has(value.event)
     ) {
       return undefined;
+    }
+    if (value.event === 'live-start-trace') {
+      const trace = sanitizeSdkLiveStartTrace(value);
+      return trace ? { scope: 'sdk', level, subsystem: 'p2p', event: 'live-start-trace', ...trace } : undefined;
     }
     const details: Array<Record<string, unknown>> = [];
     for (const detail of Array.isArray(value.details) ? value.details.slice(0, MAX_SDK_DETAILS) : []) {

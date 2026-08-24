@@ -258,6 +258,62 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify(records)).not.toContain('synthetic-property');
   });
 
+  it('retains only bounded identity-free live startup details from SDK debug records', () => {
+    const debug = vi.fn();
+    const sdk = createSdkLogger({ debug })!;
+
+    sdk.debug('[live] start trace', {
+      phase: 'media-command',
+      topology: 'own',
+      action: 'start',
+      level2: true,
+      signCode: 8,
+      keyframe: false,
+      serial: 'T8000P0000000000',
+    });
+
+    expect(JSON.parse(debug.mock.calls[0]![0])).toEqual({
+      scope: 'sdk',
+      subsystem: 'p2p',
+      event: 'live-start-trace',
+      phase: 'media-command',
+      topology: 'own',
+      action: 'start',
+      level2: true,
+      level: 'debug',
+    });
+  });
+
+  it('persists an SDK live startup trace only during authorized live diagnostics', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-live-start-'));
+    await new GuidedDiagnostics(root).authorize('live-media', 'now');
+    const logger = createDiagnosticLogger({ debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() }, root);
+
+    try {
+      createSdkLogger(logger)!.debug('[live] start trace', {
+        phase: 'first-video-command',
+        signCode: 8,
+        accepted: true,
+        serial: 'T8000P0000000000',
+      });
+      await logger.flush?.();
+
+      const record = JSON.parse(readFileSync(join(root, 'logs', 'homebridge-eufy.jsonl'), 'utf8').trim());
+      expect(record).toMatchObject({
+        scope: 'sdk',
+        level: 'debug',
+        subsystem: 'p2p',
+        event: 'live-start-trace',
+        phase: 'first-video-command',
+        signCode: 8,
+        accepted: true,
+      });
+      expect(JSON.stringify(record)).not.toContain('T8000P0000000000');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it('allowlists every bounded live camera session reason without media or device material', () => {
     const warn = vi.fn();
     const info = vi.fn();
