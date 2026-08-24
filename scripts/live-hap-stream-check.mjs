@@ -76,8 +76,10 @@ import {
   STREAMING_AVAILABLE,
   STREAMING_IN_USE,
   accessoryModel,
+  adaptationProcessRoles,
   adaptationProcesses,
   advertisedVideo,
+  appendedJsonRecords,
   appendedLines,
   cameraStreamManagements,
   conditionCodes,
@@ -148,13 +150,7 @@ function judgePluginLog(mark) {
     results.unverified('plugin-jsonl=not-observed (pass --jsonl to verify it)');
     return;
   }
-  const records = appendedLines(mark).flatMap((line) => {
-    try {
-      return [JSON.parse(line)];
-    } catch {
-      return [];
-    }
-  });
+  const records = appendedJsonRecords(mark);
   const levels = {};
   const codes = new Set();
   for (const record of records) {
@@ -184,17 +180,23 @@ function observeAdaptation(label, expectedSessions, applied) {
     results.unverified(`${label} adaptation processes=not-observed (pass --homebridge-pid to verify them)`);
     return;
   }
-  const video = processes.filter(({ args }) => / -an\b/.test(args));
-  const audio = processes.filter(({ args }) => / -vn\b/.test(args));
-  console.log(`${label} adaptation processes=${processes.length} video=${video.length} audio=${audio.length}`);
+  const { video, audio, returnAudio, other } = adaptationProcessRoles(processes);
+  console.log(
+    `${label} adaptation processes=${processes.length} video=${video.length} audio=${audio.length}` +
+      ` return-audio=${returnAudio.length} other=${other.length}`,
+  );
   check(video.length === expectedSessions, `${label} ran exactly ${expectedSessions} video adaptation(s)`);
   check(
     audio.length <= expectedSessions,
     `${label} ran no more than ${expectedSessions} audio adaptation(s), one per session that carried source audio`,
   );
   check(
-    video.length + audio.length === processes.length,
-    `${label} ran no adaptation process that was neither the video nor the audio of a session`,
+    returnAudio.length <= expectedSessions,
+    `${label} ran no more than ${expectedSessions} return-audio adaptation(s), one per talkback-capable session`,
+  );
+  check(
+    video.length + audio.length + returnAudio.length === processes.length,
+    `${label} ran no unclassified adaptation process`,
   );
   if (!applied || video.length === 0) {
     return;

@@ -693,6 +693,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     enablement: enablementObservation(context, camera),
     availability: availabilityObservation(context.device.sn, context.availability),
     reportSession: liveSessionReporter(context),
+    reportRelease: () => context.trace?.({ event: 'live-session-released' }),
     reportTalkback: talkbackReporter(context),
     reportAdmission: cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
@@ -916,7 +917,14 @@ function snapshotUnavailable(active: boolean, member: 'snapshotStored' | 'snapsh
  */
 function liveSessionReporter(context: AdapterAttachmentContext): (outcome: LiveSessionOutcome) => void {
   const condition = cameraLiveCondition(context, CAMERA_LIVE_SESSION_CONDITION);
-  return (outcome) => condition(outcome.outcome === 'streaming' ? undefined : outcome.reason);
+  return (outcome) => {
+    if (outcome.outcome === 'streaming') {
+      condition();
+      return;
+    }
+    context.trace?.({ event: 'live-session-failed', ...outcome });
+    condition(outcome.reason);
+  };
 }
 
 /**
@@ -1037,6 +1045,7 @@ interface LiveCameraBinding {
   readonly enablement: () => boolean | undefined;
   readonly availability: () => 'available' | 'unavailable' | undefined;
   readonly reportSession: (outcome: LiveSessionOutcome) => void;
+  readonly reportRelease: () => void;
   readonly reportTalkback: (outcome: TalkbackOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
   readonly reportSnapshot: (substitution?: SnapshotSubstitution) => void;
@@ -1166,6 +1175,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
           void session.snapshotMedia.captureFromWarmLive(this.snapshotScope, session.source).catch(() => undefined);
         }
       },
+      onSessionReleased: this.binding.reportRelease,
       onTalkbackOutcome: (outcome) => this.binding.reportTalkback(outcome),
     });
     session = {

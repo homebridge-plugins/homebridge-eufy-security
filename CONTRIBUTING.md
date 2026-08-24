@@ -55,6 +55,12 @@ keyframe cadence, and bit rate the accessory actually produced, negotiates a con
 with `--concurrent`, matches the negotiated selection against the adaptation process arguments, and
 confirms no adaptation process survives the session. It measures decrypted media and keeps none of it.
 
+`scripts/live-hap-repeated-start-check.mjs` alternates bounded cold starts between two explicitly selected
+cameras. Battery cameras require the deliberate `--battery` flag. It reports per-camera pass/fail totals,
+attributes each failure to HAP preparation, SDK source acquisition, first source keyframe, first adapted
+output, controller RTCP, or cleanup, and requires both the identity-free selected-video trace and complete
+FFmpeg/SDK-consumer release after every successful attempt.
+
 `scripts/live-hap-codec-matrix-check.mjs` qualifies the whole advertised codec matrix: it reads what the
 accessory advertises, negotiates one bounded session per advertised profile and level, and requires each
 coded parameter set to carry exactly the combination its session requested. Every live script reads the

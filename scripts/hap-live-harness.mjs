@@ -384,6 +384,17 @@ export function appendedLines(mark) {
     .filter((line) => line.trim().length > 0);
 }
 
+/** Structured records appended after a mark, ignoring incomplete or non-JSON lines without exposing them. */
+export function appendedJsonRecords(mark) {
+  return appendedLines(mark).flatMap((line) => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /**
  * The bounded condition codes a Homebridge log section reported. The plugin prints one `[code] summary`
  * line per condition transition, so the codes are readable without reading a line of context.
@@ -480,6 +491,69 @@ export function adaptationProcesses(pid) {
       return { parent: Number(line.slice(0, separator)), args: line.slice(separator + 1) };
     })
     .filter(({ parent, args }) => parent === Number(pid) && args.includes('ffmpeg'));
+}
+
+/** Separates the three live-session FFmpeg roles without exposing their key-bearing arguments. */
+export function adaptationProcessRoles(processes) {
+  const roles = { video: [], audio: [], returnAudio: [], other: [] };
+  for (const process of processes) {
+    if (/(?:^|\s)-an(?:\s|$)/.test(process.args)) {
+      roles.video.push(process);
+    } else if (/(?:^|\s)-profile:a\s+aac_eld(?:\s|$)/.test(process.args)) {
+      roles.audio.push(process);
+    } else if (/(?:^|\s)-profile:a\s+aac_low(?:\s|$)/.test(process.args)) {
+      roles.returnAudio.push(process);
+    } else {
+      roles.other.push(process);
+    }
+  }
+  return roles;
+}
+
+/** Attributes a failed cold start to the narrowest lifecycle boundary visible to the live harness. */
+export function classifyLiveStartFailure({
+  endpointStatus,
+  startRejected = false,
+  packets,
+  outputContinued,
+  reason,
+  stage,
+  cleanupReleased,
+}) {
+  if (endpointStatus !== ENDPOINTS_ACCEPTED) {
+    return {
+      stage: 'hap-preparation',
+      reason:
+        reason ??
+        (endpointStatus === undefined
+          ? 'setup-error'
+          : endpointStatus === ENDPOINTS_BUSY
+            ? 'endpoints-busy'
+            : 'endpoints-refused'),
+    };
+  }
+  if (startRejected) {
+    return { stage: stage ?? 'hap-preparation', reason: reason ?? 'start-command-refused' };
+  }
+  if ((packets ?? 0) === 0) {
+    if (!stage) {
+      throw new Error('a failed live start has no bounded lifecycle-stage trace');
+    }
+    return {
+      stage,
+      reason: reason ?? 'failure-reason-missing',
+    };
+  }
+  if (stage || reason === 'rtcp-timeout') {
+    return { stage: stage ?? 'controller-rtcp', reason: reason ?? 'lifecycle-trace-missing' };
+  }
+  if (outputContinued === false || reason !== undefined) {
+    return { stage: stage ?? 'first-adapted-output', reason: reason ?? 'output-stalled' };
+  }
+  if (cleanupReleased === false) {
+    return { stage: 'cleanup', reason: 'resources-retained' };
+  }
+  return undefined;
 }
 
 /** RFC 3711 4.3.1 key derivation with AES-CM and a zero key-derivation rate. */

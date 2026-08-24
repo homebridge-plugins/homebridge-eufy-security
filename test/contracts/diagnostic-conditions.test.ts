@@ -599,6 +599,109 @@ describe('diagnostic conditions', () => {
     );
   });
 
+  it('reconstructs only allowlisted live-session lifecycle traces', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, {
+      adapter: 'camera.streaming',
+      event: 'live-session-released',
+      serial: 'T8000P0000000000',
+    } as never);
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'camera.streaming',
+        event: 'live-session-failed',
+        outcome: 'failed',
+        reason: 'source-error',
+        stage: 'raw-transport' as never,
+      },
+    );
+
+    expect(debug).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'live-session-released',
+      }),
+    );
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('T8000P0000000000');
+  });
+
+  it('persists an allowlisted live video selection through the production diagnostic logger', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-live-selection-'));
+    await new GuidedDiagnostics(root).authorize('live-media', 'now');
+    const logger = createDiagnosticLogger({ debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() }, root);
+
+    reportHomeKitEvent(logger, {
+      adapter: 'camera.streaming',
+      event: 'live-video-selected',
+      operation: 'start',
+      profile: 'high',
+      level: '4.0',
+      width: 1280,
+      height: 720,
+      fps: 30,
+    });
+    reportHomeKitEvent(logger, {
+      adapter: 'camera.streaming',
+      event: 'live-session-released',
+    });
+    reportHomeKitEvent(logger, {
+      adapter: 'camera.streaming',
+      event: 'live-session-failed',
+      outcome: 'failed',
+      reason: 'source-error',
+      stage: 'first-source-keyframe',
+    });
+    await logger.flush?.();
+
+    const records = readFileSync(join(root, 'logs', 'homebridge-eufy.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-video-selected',
+          operation: 'start',
+          profile: 'high',
+          levelName: '4.0',
+          width: 1280,
+          height: 720,
+          fps: 30,
+        }),
+      ]),
+    );
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-session-failed',
+          outcome: 'failed',
+          reason: 'source-error',
+          stage: 'first-source-keyframe',
+        }),
+      ]),
+    );
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-session-released',
+        }),
+      ]),
+    );
+  });
+
   it('keeps plugin and SDK events together in JSONL while Homebridge receives human messages', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-diagnostics-'));
     const debug = vi.fn();

@@ -125,6 +125,7 @@ to any controller and a `hap-controller` module installed outside this repositor
 | ------------------------------------- | ----------------------------------------------------------------------------- |
 | `live-hap-snapshot-check.mjs`         | HomeKit snapshot requests, retained image policy, and on-disk modes           |
 | `live-hap-stream-check.mjs`           | Negotiated live streaming, measured on the decrypted wire                     |
+| `live-hap-repeated-start-check.mjs`   | Repeated cold-start comparison with bounded lifecycle attribution             |
 | `live-hap-codec-matrix-check.mjs`     | One session per advertised profile and level, judged for exact coded fidelity |
 | `live-hap-prepared-session-check.mjs` | What a prepared session that never starts holds, and what releases it         |
 | `live-hap-disabled-camera-check.mjs`  | Live view, snapshots, and recovery for a camera that is turned off            |
@@ -181,6 +182,23 @@ here and has to be judged from the matrix itself rather than from a coded parame
 
 The measurement itself is covered hermetically by `test/contracts/live-hap-harness.test.ts`, so a green
 live result is not the only evidence that the harness reads packets correctly.
+
+Use `live-hap-repeated-start-check.mjs` when one camera starts less reliably than a control. Authorize and
+start a guided diagnostics reproduction with the `live-media` profile, select exactly two camera accessory
+ids, and keep network conditions fixed for the whole alternating run:
+
+```bash
+node scripts/live-hap-repeated-start-check.mjs \
+  --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
+  --aids 6,14 --attempts 5 --seconds 10 --profile high --level 4.0 \
+  --homebridge-pid <homebridge pid> \
+  --jsonl /tmp/hb-check/homebridge-eufy/logs/homebridge-eufy.jsonl
+```
+
+The script alternates cameras to reduce time-of-run bias. A failed attempt is assigned to HAP preparation,
+SDK source acquisition, first source keyframe, first adapted output, controller RTCP, or cleanup from the
+narrowest evidence observed. Successful attempts report the selected profile, level, geometry, frame rate,
+and first-video latency, then require the stream service, adaptation processes, and SDK consumer to release.
 
 `live-hap-stream-check.mjs` also requests one snapshot in the middle of the session. The session must keep
 its synchronisation source, its SRTP key, its in-use status, and its single adaptation process across it. A

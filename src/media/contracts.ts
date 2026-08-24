@@ -52,10 +52,17 @@ export type LiveSessionFailure =
   | 'rtcp-timeout'
   | 'adaptation-failed';
 
+/** The live-start boundary at which a bounded session failure became observable. */
+export type LiveSessionFailureStage =
+  | 'sdk-source-acquisition'
+  | 'first-source-keyframe'
+  | 'first-adapted-output'
+  | 'controller-rtcp';
+
 /** One live session lifecycle outcome, carrying no device identity, address, key, or media material. */
 export type LiveSessionOutcome =
   | { readonly outcome: 'streaming' }
-  | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure };
+  | { readonly outcome: 'failed'; readonly reason: LiveSessionFailure; readonly stage: LiveSessionFailureStage };
 
 /** Why one return-audio lifecycle ended without usable device audio. */
 export type TalkbackFailure = 'source-unavailable' | 'unsupported-selection' | 'adaptation-failed' | 'device-audio-failed';
@@ -72,6 +79,7 @@ export interface LiveMediaTransport {
   readonly audio?: LiveMediaTarget;
   readonly onVideoFailure?: () => void;
   readonly onSessionOutcome?: (outcome: LiveSessionOutcome) => void;
+  readonly onSessionReleased?: () => void;
   readonly onTalkbackOutcome?: (outcome: TalkbackOutcome) => void;
 }
 

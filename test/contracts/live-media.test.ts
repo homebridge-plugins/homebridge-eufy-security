@@ -199,6 +199,7 @@ async function liveSession(
   const stream = new SyntheticLiveStream();
   const onVideoFailure = vi.fn();
   const outcomes: LiveSessionOutcome[] = [];
+  const released = vi.fn();
   const children: SyntheticProcess[] = [];
   const spawned: string[][] = [];
   let receiverReport: (() => void) | undefined;
@@ -239,6 +240,7 @@ async function liveSession(
       : {}),
     onVideoFailure,
     onSessionOutcome: (outcome) => outcomes.push(outcome),
+    onSessionReleased: released,
   });
   return {
     prepared,
@@ -247,6 +249,7 @@ async function liveSession(
     spawned,
     onVideoFailure,
     outcomes,
+    released,
     start: (): Promise<void> =>
       prepared.start(source ?? { live: async () => stream }, { video: NEGOTIATED_VIDEO, ...(audio ? { audio } : {}) }),
     receiverReport: (): void => receiverReport?.(),
@@ -273,6 +276,7 @@ describe('live media adaptation', () => {
     expect(session.onVideoFailure).not.toHaveBeenCalled();
     expect(session.outcomes).toEqual([{ outcome: 'streaming' }]);
     session.prepared.stop();
+    expect(session.released).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
@@ -286,7 +290,7 @@ describe('live media adaptation', () => {
 
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
     expect(session.stream.stop).toHaveBeenCalledOnce();
-    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'source-error' }]);
+    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'source-error', stage: 'first-source-keyframe' }]);
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
@@ -305,7 +309,9 @@ describe('live media adaptation', () => {
 
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
     expect(session.stream.stop).toHaveBeenCalledOnce();
-    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'no-video-within-backstop' }]);
+    expect(session.outcomes).toEqual([
+      { outcome: 'failed', reason: 'no-video-within-backstop', stage: 'first-source-keyframe' },
+    ]);
     vi.useRealTimers();
   });
 
@@ -326,7 +332,10 @@ describe('live media adaptation', () => {
 
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
     expect(session.stream.stop).toHaveBeenCalledOnce();
-    expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'rtcp-timeout' }]);
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'rtcp-timeout', stage: 'controller-rtcp' },
+    ]);
     vi.useRealTimers();
   });
 
@@ -349,7 +358,10 @@ describe('live media adaptation', () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'rtcp-timeout' }]);
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'rtcp-timeout', stage: 'controller-rtcp' },
+    ]);
     vi.useRealTimers();
   });
 
@@ -361,7 +373,10 @@ describe('live media adaptation', () => {
     session.children[0]!.stderr.push('progress=continue\n');
     session.stream.emit('stop');
 
-    expect(session.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'source-stopped' }]);
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'source-stopped', stage: 'first-adapted-output' },
+    ]);
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
@@ -648,7 +663,7 @@ describe('live media adaptation', () => {
 
     expect(session.outcomes).toEqual([
       { outcome: 'streaming' },
-      { outcome: 'failed', reason: 'no-video-within-backstop' },
+      { outcome: 'failed', reason: 'no-video-within-backstop', stage: 'first-adapted-output' },
     ]);
     vi.useRealTimers();
   });
@@ -896,7 +911,9 @@ describe('live media adaptation', () => {
     expect(session.children).toHaveLength(0);
     expect(session.stream.stop).toHaveBeenCalledOnce();
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
-    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'no-video-within-backstop' }]);
+    expect(session.outcomes).toEqual([
+      { outcome: 'failed', reason: 'no-video-within-backstop', stage: 'first-source-keyframe' },
+    ]);
     vi.useRealTimers();
   });
 
@@ -908,7 +925,9 @@ describe('live media adaptation', () => {
     await start;
 
     expect(stalled.onVideoFailure).toHaveBeenCalledOnce();
-    expect(stalled.outcomes).toEqual([{ outcome: 'failed', reason: 'source-acquisition-timeout' }]);
+    expect(stalled.outcomes).toEqual([
+      { outcome: 'failed', reason: 'source-acquisition-timeout', stage: 'sdk-source-acquisition' },
+    ]);
 
     const noRtcp = await liveSession();
     await noRtcp.start();
@@ -918,7 +937,10 @@ describe('live media adaptation', () => {
 
     expect(noRtcp.onVideoFailure).toHaveBeenCalledOnce();
     expect(noRtcp.stream.stop).toHaveBeenCalledOnce();
-    expect(noRtcp.outcomes).toEqual([{ outcome: 'streaming' }, { outcome: 'failed', reason: 'rtcp-timeout' }]);
+    expect(noRtcp.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'rtcp-timeout', stage: 'controller-rtcp' },
+    ]);
     vi.useRealTimers();
   });
 
@@ -941,7 +963,7 @@ describe('live media adaptation', () => {
     expect(session.stream.stop).toHaveBeenCalledOnce();
     expect(session.outcomes).toEqual([
       { outcome: 'streaming' },
-      { outcome: 'failed', reason: 'no-video-within-backstop' },
+      { outcome: 'failed', reason: 'no-video-within-backstop', stage: 'first-adapted-output' },
     ]);
     vi.useRealTimers();
   });

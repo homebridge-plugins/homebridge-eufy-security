@@ -8,6 +8,7 @@ import type {
 } from '../device/member-evidence.js';
 import type {
   LiveMediaAdapter,
+  LiveSessionOutcome,
   NegotiatedLiveVideo,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
@@ -61,7 +62,12 @@ export type AdapterLiveVideoTrace = Pick<NegotiatedLiveVideo, 'profile' | 'level
   operation: 'start' | 'reconfigure';
 };
 
-export type AdapterTrace = AdapterEventTrace | AdapterLiveVideoTrace;
+/** An identity-free live-session failure or release milestone. */
+export type AdapterLiveSessionTrace =
+  | (Extract<LiveSessionOutcome, { outcome: 'failed' }> & { event: 'live-session-failed' })
+  | { event: 'live-session-released' };
+
+export type AdapterTrace = AdapterEventTrace | AdapterLiveVideoTrace | AdapterLiveSessionTrace;
 
 /** Dependencies supplied by the reconciler when an adapter attaches to one accessory container. */
 export interface AdapterAttachmentContext {

@@ -1678,8 +1678,10 @@ describe('camera streaming bundle adapter', () => {
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
     const reporters: Array<(outcome: LiveSessionOutcome) => void> = [];
-    const prepare = vi.fn(async (transport: { onSessionOutcome?(outcome: LiveSessionOutcome): void }) => {
+    const releases: Array<() => void> = [];
+    const prepare = vi.fn(async (transport: LiveMediaTransport) => {
       reporters.push((outcome) => transport.onSessionOutcome?.(outcome));
+      releases.push(() => transport.onSessionReleased?.());
       return {
         videoPort: 41000 + reporters.length,
         start: vi.fn(async () => undefined),
@@ -1689,6 +1691,7 @@ describe('camera streaming bundle adapter', () => {
     });
     const diagnose = vi.fn();
     const observed = vi.fn();
+    const trace = vi.fn();
 
     CAMERA_STREAMING_ADAPTER.attach({
       device: { camera: () => ({ live: vi.fn() }) } as never,
@@ -1699,6 +1702,7 @@ describe('camera streaming bundle adapter', () => {
       audioEnabled: false,
       diagnose,
       observed,
+      trace,
       persist: vi.fn(),
     } satisfies AdapterAttachmentContext);
     const controller = configureController.mock.calls[0][0] as CameraController & {
@@ -1706,7 +1710,11 @@ describe('camera streaming bundle adapter', () => {
     };
 
     await callPrepare(controller.delegate, prepareRequest('failed-session'));
-    reporters[0]!({ outcome: 'failed', reason: 'no-video-within-backstop' });
+    reporters[0]!({
+      outcome: 'failed',
+      reason: 'no-video-within-backstop',
+      stage: 'first-source-keyframe',
+    });
     const liveConditions = (): unknown[] =>
       diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-live-session-failed');
 
@@ -1720,6 +1728,14 @@ describe('camera streaming bundle adapter', () => {
       },
     ]);
     expect(observed).not.toHaveBeenCalled();
+    expect(trace).toHaveBeenCalledWith({
+      event: 'live-session-failed',
+      outcome: 'failed',
+      reason: 'no-video-within-backstop',
+      stage: 'first-source-keyframe',
+    });
+    releases[0]!();
+    expect(trace).toHaveBeenCalledWith({ event: 'live-session-released' });
 
     await callPrepare(controller.delegate, prepareRequest('streaming-session'));
     reporters[1]!({ outcome: 'streaming' });

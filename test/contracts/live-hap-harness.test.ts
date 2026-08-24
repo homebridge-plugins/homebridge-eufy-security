@@ -11,6 +11,8 @@ import * as harness from '../../scripts/hap-live-harness.mjs';
 
 const {
   MeasuredVideoStream,
+  adaptationProcessRoles,
+  classifyLiveStartFailure,
   describeSequenceParameterSet,
   appendedLines,
   conditionCodes,
@@ -252,6 +254,87 @@ describe('observed live conditions', () => {
     expect(appendedLines(mark)).toHaveLength(2);
     expect(conditionCodes(appendedLines(mark))).toEqual(new Set(['camera-live-session-refused']));
     expect(logMark(undefined)).toBeUndefined();
+  });
+
+  it('separates outbound video, outbound audio, and return-audio adaptation', () => {
+    const roles = adaptationProcessRoles([
+      { parent: 123, args: 'ffmpeg -i pipe:0 -an -c:v libx264 -f rtp srtp://controller' },
+      { parent: 123, args: 'ffmpeg -i pipe:0 -vn -profile:a aac_eld -f rtp srtp://controller' },
+      { parent: 123, args: 'ffmpeg -f sdp -i pipe:0 -vn -profile:a aac_low -f adts pipe:1' },
+      { parent: 123, args: 'ffmpeg -i pipe:0 -frames:v 1 pipe:1' },
+    ]);
+
+    expect(roles.video).toHaveLength(1);
+    expect(roles.audio).toHaveLength(1);
+    expect(roles.returnAudio).toHaveLength(1);
+    expect(roles.other).toHaveLength(1);
+  });
+
+  it('attributes a failed start to the narrowest observed lifecycle stage', () => {
+    expect(classifyLiveStartFailure({})).toEqual({
+      stage: 'hap-preparation',
+      reason: 'setup-error',
+    });
+    expect(classifyLiveStartFailure({ endpointStatus: 2 })).toEqual({
+      stage: 'hap-preparation',
+      reason: 'endpoints-refused',
+    });
+    expect(classifyLiveStartFailure({ endpointStatus: 2, reason: 'disabled' })).toEqual({
+      stage: 'hap-preparation',
+      reason: 'disabled',
+    });
+    expect(classifyLiveStartFailure({ endpointStatus: 0, startRejected: true, reason: 'source-error' })).toEqual({
+      stage: 'hap-preparation',
+      reason: 'source-error',
+    });
+    expect(
+      classifyLiveStartFailure({
+        endpointStatus: 0,
+        startRejected: true,
+        reason: 'source-error',
+        stage: 'sdk-source-acquisition',
+      }),
+    ).toEqual({ stage: 'sdk-source-acquisition', reason: 'source-error' });
+    expect(
+      classifyLiveStartFailure({
+        endpointStatus: 0,
+        packets: 0,
+        stage: 'first-source-keyframe',
+        reason: 'source-error',
+      }),
+    ).toEqual({ stage: 'first-source-keyframe', reason: 'source-error' });
+    expect(
+      classifyLiveStartFailure({
+        endpointStatus: 0,
+        packets: 0,
+        stage: 'first-adapted-output',
+        reason: 'adaptation-failed',
+      }),
+    ).toEqual({ stage: 'first-adapted-output', reason: 'adaptation-failed' });
+    expect(classifyLiveStartFailure({ endpointStatus: 0, packets: 20, reason: 'rtcp-timeout' })).toEqual({
+      stage: 'controller-rtcp',
+      reason: 'rtcp-timeout',
+    });
+    expect(
+      classifyLiveStartFailure({
+        endpointStatus: 0,
+        packets: 20,
+        reason: 'source-error',
+        stage: 'first-adapted-output',
+      }),
+    ).toEqual({ stage: 'first-adapted-output', reason: 'source-error' });
+    expect(classifyLiveStartFailure({ endpointStatus: 0, packets: 20, outputContinued: false })).toEqual({
+      stage: 'first-adapted-output',
+      reason: 'output-stalled',
+    });
+    expect(() => classifyLiveStartFailure({ endpointStatus: 0, packets: 0 })).toThrow(
+      'a failed live start has no bounded lifecycle-stage trace',
+    );
+    expect(classifyLiveStartFailure({ endpointStatus: 0, packets: 20, cleanupReleased: false })).toEqual({
+      stage: 'cleanup',
+      reason: 'resources-retained',
+    });
+    expect(classifyLiveStartFailure({ endpointStatus: 0, packets: 20, cleanupReleased: true })).toBeUndefined();
   });
 });
 

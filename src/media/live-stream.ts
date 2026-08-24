@@ -152,7 +152,10 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       stopTalkback();
       stopProcess(videoProcess);
       stopProcess(audioProcess);
-      source?.stop();
+      if (source) {
+        source.stop();
+        transport.onSessionReleased?.();
+      }
       videoPort.close();
       audioPort?.close();
     };
@@ -162,7 +165,15 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       }
       videoFailed = true;
       stop();
-      transport.onSessionOutcome?.({ outcome: 'failed', reason });
+      const stage =
+        reason === 'source-acquisition-timeout' || source === undefined
+          ? 'sdk-source-acquisition'
+          : reason === 'rtcp-timeout'
+            ? 'controller-rtcp'
+            : !receivedVideoKeyframe
+              ? 'first-source-keyframe'
+              : 'first-adapted-output';
+      transport.onSessionOutcome?.({ outcome: 'failed', reason, stage });
       transport.onVideoFailure?.();
     };
     /**

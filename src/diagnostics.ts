@@ -35,7 +35,15 @@ export type HomeKitEventTrace =
       width: number;
       height: number;
       fps: number;
-    };
+    }
+  | {
+      adapter: string;
+      event: 'live-session-failed';
+      outcome: 'failed';
+      reason: string;
+      stage: 'sdk-source-acquisition' | 'first-source-keyframe' | 'first-adapted-output' | 'controller-rtcp';
+    }
+  | { adapter: string; event: 'live-session-released' };
 
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
@@ -1298,6 +1306,12 @@ const HOMEKIT_LIVE_VIDEO_PROFILES = new Set(['baseline', 'main', 'high']);
 const HOMEKIT_LIVE_VIDEO_LEVELS = new Set(['3.1', '3.2', '4.0']);
 const HOMEKIT_LIVE_VIDEO_GEOMETRIES = new Set(['320x180', '640x360', '1280x720', '1920x1080']);
 const HOMEKIT_LIVE_VIDEO_FRAME_RATES = new Set([15, 30]);
+const HOMEKIT_LIVE_SESSION_STAGES = new Set([
+  'sdk-source-acquisition',
+  'first-source-keyframe',
+  'first-adapted-output',
+  'controller-rtcp',
+]);
 const RUNTIME_NOTICES = {
   'status-publication-failed': {
     level: 'warn',
@@ -1545,6 +1559,10 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       const selection = sanitizeLiveVideoSelection(value);
       return selection ? { scope: 'homekit', level: 'debug', ...selection } : undefined;
     }
+    if (value.adapter === 'camera.streaming' && String(value.event).startsWith('live-session-')) {
+      const lifecycle = sanitizeLiveSessionTrace(value);
+      return lifecycle ? { scope: 'homekit', level: 'debug', ...lifecycle } : undefined;
+    }
     if (
       typeof value.adapter !== 'string' ||
       typeof value.event !== 'string' ||
@@ -1679,15 +1697,23 @@ export function reportInvalidSnapshotCache(
 
 /** Emits one allowlisted HomeKit event trace only when host debug output is available. */
 export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace: HomeKitEventTrace): void {
-  if ('operation' in trace) {
+  if (trace.event === 'live-video-selected') {
     const selection = sanitizeLiveVideoSelection(trace as unknown as Record<string, unknown>);
     if (target.debug && selection) {
       target.debug(JSON.stringify({ scope: 'homekit', level: 'debug', ...selection }));
     }
     return;
   }
+  if (trace.event === 'live-session-released' || trace.event === 'live-session-failed') {
+    const lifecycle = sanitizeLiveSessionTrace(trace as unknown as Record<string, unknown>);
+    if (target.debug && lifecycle) {
+      target.debug(JSON.stringify({ scope: 'homekit', level: 'debug', ...lifecycle }));
+    }
+    return;
+  }
   if (
     !target.debug ||
+    !('observation' in trace) ||
     !HOMEKIT_EVENT_ROUTES[trace.adapter]?.has(trace.event) ||
     typeof trace.observation !== 'string' ||
     !HOMEKIT_OBSERVATIONS.has(trace.observation)
@@ -1705,10 +1731,37 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
   );
 }
 
+function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (value.adapter !== 'camera.streaming') {
+    return undefined;
+  }
+  if (value.event === 'live-session-released') {
+    return { adapter: value.adapter, event: value.event };
+  }
+  if (
+    value.event !== 'live-session-failed' ||
+    value.outcome !== 'failed' ||
+    typeof value.reason !== 'string' ||
+    !REASONS.has(value.reason) ||
+    typeof value.stage !== 'string' ||
+    !HOMEKIT_LIVE_SESSION_STAGES.has(value.stage)
+  ) {
+    return undefined;
+  }
+  return {
+    adapter: value.adapter,
+    event: value.event,
+    outcome: value.outcome,
+    reason: value.reason,
+    stage: value.stage,
+  };
+}
+
 function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<string, unknown> | undefined {
   const operation = typeof value.operation === 'string' ? value.operation : undefined;
   const profile = typeof value.profile === 'string' ? value.profile : undefined;
-  const codecLevel = typeof value.level === 'string' ? value.level : undefined;
+  const codecLevel =
+    typeof value.levelName === 'string' ? value.levelName : typeof value.level === 'string' ? value.level : undefined;
   const width = typeof value.width === 'number' ? value.width : undefined;
   const height = typeof value.height === 'number' ? value.height : undefined;
   const fps = typeof value.fps === 'number' ? value.fps : undefined;
