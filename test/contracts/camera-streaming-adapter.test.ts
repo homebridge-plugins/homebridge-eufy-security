@@ -504,6 +504,45 @@ describe('camera streaming bundle adapter', () => {
     expect(snapshotStored).toHaveBeenCalledOnce();
   });
 
+  it('presents unavailable when Refresh acquisitions return invalid image bytes', async () => {
+    const target = new Accessory(
+      'Synthetic invalid refresh snapshot camera',
+      uuid.generate('synthetic-invalid-refresh-snapshot-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const images = retainedImages();
+    const invalid = Buffer.from('synthetic non-image payload', 'utf8');
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({
+          snapshotStored: vi.fn(async () => invalid),
+          snapshotLive: vi.fn(async () => ({ jpeg: invalid, width: 1280, height: 720 })),
+          live: vi.fn(),
+        }),
+      } as never,
+      evidence: snapshotEvidence('snapshotStored', 'snapshotLive'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(images),
+      snapshotMode: 'Refresh',
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
+    await vi.waitFor(() => expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ active: true })));
+    expect(images.write).not.toHaveBeenCalled();
+  });
+
   it('serves the packaged unavailable placeholder when no admitted acquisition can answer', async () => {
     const target = new Accessory(
       'Synthetic unavailable refresh camera',
@@ -663,7 +702,7 @@ describe('camera streaming bundle adapter', () => {
       uuid.generate('synthetic-cloud-snapshot-camera'),
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
-    const stored = Buffer.from('synthetic stored jpeg');
+    const stored = jpeg('synthetic stored image');
     const snapshotStored = vi.fn(async () => stored);
     const snapshotLive = vi.fn();
     const live = vi.fn();
@@ -701,8 +740,8 @@ describe('camera streaming bundle adapter', () => {
       uuid.generate('synthetic-live-snapshot-camera'),
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
-    const first = Buffer.from('synthetic first live jpeg');
-    const second = Buffer.from('synthetic second live jpeg');
+    const first = jpeg('synthetic first live image');
+    const second = jpeg('synthetic second live image');
     let resolveFirst!: (value: { jpeg: Buffer; width: number; height: number }) => void;
     const snapshotLive = vi
       .fn()
@@ -819,6 +858,7 @@ describe('camera streaming bundle adapter', () => {
       uuid.generate('synthetic-withdrawn-live-snapshot-camera'),
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
+    const admitted = jpeg('synthetic admitted image');
     let resolveSnapshot!: (value: { jpeg: Buffer; width: number; height: number }) => void;
     const snapshotLive = vi.fn(
       () =>
@@ -856,8 +896,8 @@ describe('camera streaming bundle adapter', () => {
 
     await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
     expect(snapshotLive).toHaveBeenCalledOnce();
-    resolveSnapshot({ jpeg: Buffer.from('synthetic admitted jpeg'), width: 1280, height: 720 });
-    await expect(admittedRequest).resolves.toEqual(Buffer.from('synthetic admitted jpeg'));
+    resolveSnapshot({ jpeg: admitted, width: 1280, height: 720 });
+    await expect(admittedRequest).resolves.toEqual(admitted);
   });
 
   it('serves the placeholder for a failed Live acquisition without falling back to stored imagery', async () => {

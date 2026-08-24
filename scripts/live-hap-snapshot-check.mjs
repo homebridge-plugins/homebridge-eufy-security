@@ -34,13 +34,14 @@
  *     [--settle-ms 25000]
  *
  * Behavior notes this check exercises:
- *   - `Refresh` with no retained image fails the first request while starting one live refresh.
- *   - A later request serves the retained image without another acquisition.
+ *   - `Refresh` with no retained image presents unavailable while starting one live refresh.
+ *   - A later request serves the retained source image without another acquisition.
  *   - Retained files use owner-only modes and opaque serial-derived names.
  *
  * It never prints serials, device names, addresses, or image bytes, and it removes its own pairing
  * before exiting. Wired cameras are used by default because a live acquisition wakes the camera.
  */
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -52,9 +53,19 @@ import {
   observations,
   options,
   required,
+  retainedSnapshotName,
   selectCameras,
   snapshotImage,
 } from './hap-live-harness.mjs';
+
+const PRESENTATION_DIGESTS = new Set(
+  ['../media/Snapshot-Unavailable.jpg', '../media/camera-disabled.jpg'].map((path) =>
+    createHash('sha256')
+      .update(readFileSync(new URL(path, import.meta.url)))
+      .digest('hex')
+      .slice(0, 12),
+  ),
+);
 
 function retained(storage) {
   const directory = join(storage, 'snapshots');
@@ -69,10 +80,12 @@ function retained(storage) {
     images: names.map((name) => {
       const file = join(directory, name);
       const image = readFileSync(file);
+      const fileStat = statSync(file);
       return {
         name,
         bytes: image.length,
-        mode: (statSync(file).mode & 0o777).toString(8),
+        inode: fileStat.ino,
+        mode: (fileStat.mode & 0o777).toString(8),
         directoryMode: (statSync(directory).mode & 0o777).toString(8),
         opaque: /^[0-9a-f]{64}\.jpg$/.test(name),
         structural: isStructuralJpeg(image),
@@ -84,8 +97,11 @@ function retained(storage) {
 const parsed = options(process.argv.slice(2));
 const settleMs = Number(parsed.get('settle-ms') ?? 25_000);
 const storage = parsed.get('storage');
+const retainedBefore = storage ? retained(storage) : undefined;
+const retainedBeforeInodesByName = new Map((retainedBefore?.images ?? []).map((image) => [image.name, image.inode]));
 const results = observations('live snapshot qualification');
 const check = results.check;
+const sourceImageAids = new Set();
 const controllerModule = parsed.get('hap-controller') ?? process.env.HAP_CONTROLLER ?? 'hap-controller';
 const { HttpClient } = await import(controllerModule).catch(() => {
   throw new Error(`hap-controller is unavailable at ${controllerModule}; install it outside this repository`);
@@ -125,6 +141,9 @@ try {
         const image = await snapshotImage(client, aid);
         console.log(`aid=${aid} round=${round} served bytes=${image.bytes} digest=${image.digest}`);
         check(image.structural, `aid=${aid} round=${round} served a structurally complete JPEG`);
+        if (!PRESENTATION_DIGESTS.has(image.digest)) {
+          sourceImageAids.add(aid);
+        }
       } catch (error) {
         console.log(`aid=${aid} round=${round} refused: ${error instanceof Error ? error.message : String(error)}`);
         if (round === 2) {
@@ -135,6 +154,7 @@ try {
         await delay(settleMs);
       }
     }
+    check(sourceImageAids.has(aid), `aid=${aid} served source imagery rather than only a packaged presentation`);
   }
 
   if (storage) {
@@ -153,6 +173,16 @@ try {
       );
     }
     check(images.length > 0, 'the plugin retained at least one last successful image');
+    const retainedByName = new Map(images.map((image) => [image.name, image]));
+    for (const candidate of selected) {
+      const name = retainedSnapshotName(candidate);
+      const image = name ? retainedByName.get(name) : undefined;
+      check(Boolean(image), `aid=${candidate.aid} has a retained source image`);
+      check(
+        Boolean(image && retainedBeforeInodesByName.get(image.name) !== image.inode),
+        `aid=${candidate.aid} atomically created or replaced its retained image during this run`,
+      );
+    }
   } else {
     results.unverified('retained image custody was not verified; pass --storage to include it');
   }

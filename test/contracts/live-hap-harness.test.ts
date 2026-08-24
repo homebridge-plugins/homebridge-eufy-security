@@ -19,6 +19,7 @@ const {
   judgeWindow,
   logMark,
   refuseUnadvertised,
+  retainedSnapshotName,
   selectedVideoConfiguration,
   snapshotImage,
   unadvertisedSelection,
@@ -255,6 +256,22 @@ describe('observed live conditions', () => {
 });
 
 describe('served HomeKit snapshot imagery', () => {
+  it('derives the opaque retained filename without returning the camera serial', () => {
+    const accessory = {
+      services: [
+        {
+          type: '0000003E-0000-1000-8000-0026BB765291',
+          characteristics: [{ type: '00000030-0000-1000-8000-0026BB765291', value: 'SYNTHETIC0000000001' }],
+        },
+      ],
+    };
+
+    expect(retainedSnapshotName(accessory)).toBe(
+      'b493c8118bcb5d34315a2b8ec0e6769f3bbf17143de3e56bacd1d7bbe51704e3.jpg',
+    );
+    expect(retainedSnapshotName({ services: [] })).toBeUndefined();
+  });
+
   it('accepts only a structurally complete JPEG', () => {
     const complete = Buffer.concat([
       Buffer.from([0xff, 0xd8, 0xff]),

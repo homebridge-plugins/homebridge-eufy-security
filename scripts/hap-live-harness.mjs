@@ -308,6 +308,12 @@ function accessorySerial(accessory) {
   return typeof serial?.value === 'string' ? serial.value : undefined;
 }
 
+/** Opaque retained-image filename for an accessory, without exposing its physical serial to callers. */
+export function retainedSnapshotName(accessory) {
+  const serial = accessorySerial(accessory);
+  return serial ? `${createHash('sha256').update(serial).digest('hex')}.jpg` : undefined;
+}
+
 /**
  * Camera accessories a run may stream from. A live session wakes the camera, so battery accessories are
  * excluded unless they are asked for explicitly by `--battery`, by accessory id, or by serial. A serial

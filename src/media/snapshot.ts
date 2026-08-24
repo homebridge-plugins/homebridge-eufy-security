@@ -143,8 +143,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     return Promise.resolve()
       .then(snapshotStored)
       .then((jpeg) => {
-        this.images?.write(scope.serial, jpeg, 'stored-only');
-        return jpeg;
+        return this.retain(scope, jpeg, 'stored-only');
       });
   }
 
@@ -160,8 +159,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     const pending = Promise.resolve()
       .then(snapshotLive)
       .then(({ jpeg }) => {
-        this.images?.write(scope.serial, jpeg, 'live');
-        return jpeg;
+        return this.retain(scope, jpeg, 'live');
       })
       .finally(() => {
         if (this.pendingLive.get(scope.identity) === pending) {
@@ -170,6 +168,15 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       });
     this.pendingLive.set(scope.identity, pending);
     return pending;
+  }
+
+  /** Only validated source images may be presented as camera imagery or retained for later requests. */
+  private retain(scope: SnapshotAcquisitionScope, jpeg: Buffer, provenance: SnapshotProvenance): Buffer {
+    if (!isBoundedJpeg(jpeg)) {
+      throw new Error('camera snapshot is not a bounded JPEG');
+    }
+    this.images?.write(scope.serial, jpeg, provenance);
+    return jpeg;
   }
 
   /** Refresh acquires live imagery only on request, at most once every two minutes, and never polls. */
