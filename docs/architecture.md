@@ -310,6 +310,25 @@ ADTS demuxer the same thing fails the process before it reads a byte. That two-c
 correct per stream and wrong across them when a source hands over a prebuffer in one burst: see
 [#1046](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1046).
 
+### Live adaptation delivery
+
+An input option that costs media does not announce itself: the session still starts, still reports progress,
+and still produces a coded stream, just a much later and much shorter one. The rule that catches it is
+therefore stated over the access unit count rather than over the argument list, and it is split across the
+two places that can hold each half of it.
+
+The hermetic contract holds the half that needs no encoder. No adapted input — video of either codec, ADTS
+audio, or raw A-law — may carry an option that discards what it analysed or fabricates a timeline, and every
+one bounds its analysis window; and every access unit a session accepts reaches the process that codes it,
+byte for byte and in order. Access units between a source geometry change and the keyframe a replacement
+process can start from are the only ones a session may withhold, because no running process can code them.
+
+The other half needs a real encoder, so `scripts/live-adaptation-delivery-check.mjs` measures it. It is an
+accounting identity rather than an equality: the negotiated output is constant rate, so a source delivering
+at another rate is legitimately duplicated or thinned to reach it, and what may never happen is a fed access
+unit that is none of coded, duplicated from, or thinned. Raw equality would only hold when the source rate
+already matches the negotiated one, which no camera guarantees.
+
 ### Live adaptation encoder
 
 Live adaptation always encodes with `libx264` at `-preset superfast -tune zerolatency`. Hardware

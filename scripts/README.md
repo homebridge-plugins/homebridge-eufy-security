@@ -37,6 +37,15 @@ keyframe cadence, and bit rate the accessory actually produced, negotiates a con
 with `--concurrent`, matches the negotiated selection against the adaptation process arguments, and
 confirms no adaptation process survives the session. It measures decrypted media and keeps none of it.
 
+`scripts/live-adaptation-delivery-check.mjs` measures what live adaptation did with the access units it was
+given, which `npm run verify` pins the input contract for but cannot code. It drives the plugin's own
+`FfmpegLiveMedia` and requires every fed access unit to be accounted for in the coded output, allowing only
+the duplication or thinning a constant-rate output legitimately performs, and requires first output not to
+wait on the source keyframe interval. `--serial` runs it on a real SDK live source against a copy of the
+storage root; `--paced` runs it on a locally encoded stream, once per requested keyframe interval, which is
+the comparison that shows first output does not scale with that interval. Both report the source geometry
+changes a window contained, because each one replaces the adaptation process.
+
 `scripts/live-hap-repeated-start-check.mjs` alternates bounded cold starts between two explicitly selected
 cameras. Battery cameras require the deliberate `--battery` flag. It reports per-camera pass/fail totals,
 attributes each failure to HAP preparation, SDK source acquisition, first source keyframe, first adapted
