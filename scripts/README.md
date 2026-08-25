@@ -6,7 +6,7 @@ account, camera, or transport lives here instead of in `test/contracts/`.
 Read a script's own header before running it. Headers state prerequisites, flags, and why the check
 cannot be hermetic.
 
-## Classification
+## What writes
 
 Most scripts are observation-only. These are not, and are excluded from the published package by
 `.npmignore`:
@@ -21,35 +21,78 @@ Most scripts are observation-only. These are not, and are excluded from the publ
 
 Real-device writes require the owner's explicit approval. Observation-only verification is the default.
 
-## HomeKit media qualification
+## Live camera qualification
 
-| Script | Qualifies |
-| --- | --- |
-| `hap-live-harness.mjs` | Shared controller session mechanics the checks below use |
-| `live-hap-snapshot-check.mjs` | HomeKit-initiated snapshots and retained last successful images |
-| `live-hap-stream-check.mjs` | Negotiated live streaming, measured on decrypted SRTP |
-| `live-hap-codec-matrix-check.mjs` | Every advertised profile and level |
-| `live-hap-repeated-start-check.mjs` | Repeated cold starts, with per-failure attribution |
-| `live-hap-prepared-session-check.mjs` | A prepared session that never starts |
-| `live-hap-disabled-camera-check.mjs` | A camera that has no video to give |
-| `live-hksv-check.mjs` | HomeKit Secure Video fragments |
-| `live-talkback-check.mjs` | Controller-to-camera return audio |
-| `live-hap-capture.mjs` | Writes an MP4 and a still for visual inspection |
+`npm run verify` stays hermetic, so HomeKit-initiated snapshots are qualified separately by
+`scripts/live-hap-snapshot-check.mjs`. It pairs one temporary HAP controller against a dedicated,
+unpaired Homebridge instance running this plugin, issues real snapshot resource requests, checks the
+retained last successful images on disk, and removes its own pairing. The script header states the
+prerequisites, including why a production bridge cannot be used and how to provide `hap-controller`
+without changing this repository's lockfile.
 
-## Authentication and account qualification
+`scripts/live-hap-stream-check.mjs` qualifies negotiated live streaming the same way: it drives complete
+`SetupEndpoints` / start / RTCP / reconfigure / end-session cycles, authenticates and decrypts the
+inbound SRTP with the keys it supplied so it can judge the coded dimensions, profile, level, frame rate,
+keyframe cadence, and bit rate the accessory actually produced, negotiates a concurrent second session
+with `--concurrent`, matches the negotiated selection against the adaptation process arguments, and
+confirms no adaptation process survives the session. It measures decrypted media and keeps none of it.
 
-Detailed procedure:
-[docs/troubleshooting/live-authentication-handoff.md](../docs/troubleshooting/live-authentication-handoff.md).
+`scripts/live-hap-repeated-start-check.mjs` alternates bounded cold starts between two explicitly selected
+cameras. Battery cameras require the deliberate `--battery` flag. It reports per-camera pass/fail totals,
+attributes each failure to HAP preparation, SDK source acquisition, first source keyframe, first adapted
+output, controller RTCP, or cleanup, and requires both the identity-free selected-video trace and complete
+FFmpeg/SDK-consumer release after every successful attempt.
 
-| Script | Purpose |
-| --- | --- |
-| `qualify-authentication-handoff.sh` | Walks a maintainer through one real guest-account handoff (issue #1024) |
-| `authentication-handoff-evidence.mjs` | Collects the redacted evidence behind each acceptance criterion |
-| `eufy-camera-session.mjs` | Opens one SDK camera session against a **copy** of a storage root |
+`scripts/live-hap-codec-matrix-check.mjs` qualifies the whole advertised codec matrix: it reads what the
+accessory advertises, negotiates one bounded session per advertised profile and level, and requires each
+coded parameter set to carry exactly the combination its session requested. Every live script reads the
+advertisement first and refuses a selection outside it, because an accessory answers an unadvertised
+selection without complaint.
+
+Both report the accessory id, product model, and power class for every camera they touch, so a recorded
+result identifies its subject without naming rooms.
+
+`scripts/live-hap-prepared-session-check.mjs` qualifies the reservation a prepared live session holds: it
+writes `SetupEndpoints`, never starts, and observes for as long as `--idle-seconds` that the accessory
+still reports the session as set up, that the answered port stays bound, and that no adaptation process
+exists, then proves a start written after that whole window still streams. It also abandons a prepared
+session and closes the controller connection, which must release the reservation and refuse a later start.
+
+`scripts/live-hap-disabled-camera-check.mjs` qualifies a camera that has no video to give, and
+`scripts/live-hksv-check.mjs` qualifies negotiated HomeKit Secure Video output measured on the adapted
+fragments. `scripts/live-talkback-check.mjs` qualifies the controller-to-camera return-audio path.
+
+`scripts/hap-live-harness.mjs` owns the controller session mechanics these scripts share: HAP TLV
+encoding, camera selection, the advertised video vocabulary and the refusal of a selection outside it,
+endpoint setup, negotiated start, reconfigure and end commands, receiver reports, SRTP measurement, and
+the acceptance rules that judge one measured window. Its measurement is covered hermetically by
+`test/contracts/live-hap-harness.test.ts`, so a green live result is not the only evidence that the
+harness reads packets correctly.
+
+`scripts/live-hap-capture.mjs` is the visual counterpart: it decrypts one negotiated session per camera
+and writes an MP4 plus a still frame for inspection. It writes real camera imagery, refuses to write
+inside a git working tree, and its output must stay out of repositories, backups, issues, and support
+archives.
+
+Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
+a camera, so every script uses wired cameras unless `--battery` is passed.
+
+## Live authentication qualification
+
+`scripts/qualify-authentication-handoff.sh` walks a maintainer through one real handoff of a dedicated
+guest account from temporary custom-UI authentication to the long-lived runtime, and
+`scripts/authentication-handoff-evidence.mjs` collects the evidence behind each acceptance criterion. The
+full procedure, including which claims are already proven hermetically and which need a real account, is
+in [docs/troubleshooting/live-authentication-handoff.md](../docs/troubleshooting/live-authentication-handoff.md).
 
 The wizard never asks for the account password; it is typed only into the Homebridge UI. The evidence
 harness prints no credential, account address, device serial, or device name, and no digest or length of
-one, because its output is assembled into a report intended for a public issue.
+one, because its output is assembled into a report intended for a public issue. Its `sinks`, `ownership`,
+and `acquisition` subcommands only read, so they are safe against a running instance; `conflict` takes an
+ownership lease against a live storage root and belongs only to a throwaway instance.
+
+`scripts/eufy-camera-session.mjs` opens one typed SDK camera session for live acceptance against a
+**copy** of a persisted storage root, so it never takes the lease a running plugin owns.
 
 ## Support and repository tooling
 

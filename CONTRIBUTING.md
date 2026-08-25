@@ -39,60 +39,11 @@ The current vocabulary is in [CONTEXT.md](./CONTEXT.md).
   insufficient and what transitive/audit cost is introduced.
 - Treat real-device access as read-only unless the owner explicitly approves a write operation.
 
-### Live camera snapshot qualification
+### Live qualification
 
-`npm run verify` stays hermetic, so HomeKit-initiated snapshots are qualified separately by
-`scripts/live-hap-snapshot-check.mjs`. It pairs one temporary HAP controller against a dedicated,
-unpaired Homebridge instance running this plugin, issues real snapshot resource requests, checks the
-retained last successful images on disk, and removes its own pairing. The script header states the
-prerequisites, including why a production bridge cannot be used and how to provide `hap-controller`
-without changing this repository's lockfile.
-
-`scripts/live-hap-stream-check.mjs` qualifies negotiated live streaming the same way: it drives complete
-`SetupEndpoints` / start / RTCP / reconfigure / end-session cycles, authenticates and decrypts the
-inbound SRTP with the keys it supplied so it can judge the coded dimensions, profile, level, frame rate,
-keyframe cadence, and bit rate the accessory actually produced, negotiates a concurrent second session
-with `--concurrent`, matches the negotiated selection against the adaptation process arguments, and
-confirms no adaptation process survives the session. It measures decrypted media and keeps none of it.
-
-`scripts/live-hap-repeated-start-check.mjs` alternates bounded cold starts between two explicitly selected
-cameras. Battery cameras require the deliberate `--battery` flag. It reports per-camera pass/fail totals,
-attributes each failure to HAP preparation, SDK source acquisition, first source keyframe, first adapted
-output, controller RTCP, or cleanup, and requires both the identity-free selected-video trace and complete
-FFmpeg/SDK-consumer release after every successful attempt.
-
-`scripts/live-hap-codec-matrix-check.mjs` qualifies the whole advertised codec matrix: it reads what the
-accessory advertises, negotiates one bounded session per advertised profile and level, and requires each
-coded parameter set to carry exactly the combination its session requested. Every live script reads the
-advertisement first and refuses a selection outside it, because an accessory answers an unadvertised
-selection without complaint.
-
-Both report the accessory id, product model, and power class for every camera they touch, so a recorded
-result identifies its subject without naming rooms.
-
-`scripts/live-hap-prepared-session-check.mjs` qualifies the reservation a prepared live session holds: it
-writes `SetupEndpoints`, never starts, and observes for as long as `--idle-seconds` that the accessory
-still reports the session as set up, that the answered port stays bound, and that no adaptation process
-exists, then proves a start written after that whole window still streams. It also abandons a prepared
-session and closes the controller connection, which must release the reservation and refuse a later start.
-
-`scripts/hap-live-harness.mjs` owns the controller session mechanics these scripts share: HAP TLV
-encoding, camera selection, the advertised video vocabulary and the refusal of a selection outside it,
-endpoint setup, negotiated start, reconfigure and end commands, receiver reports, SRTP measurement, and
-the acceptance rules that judge one measured window. Its measurement is covered hermetically by
-`test/contracts/live-hap-harness.test.ts`, so a green live result is not the only evidence that the
-harness reads packets correctly.
-
-`scripts/live-hap-capture.mjs` is the visual counterpart: it decrypts one negotiated session per camera
-and writes an MP4 plus a still frame for inspection. It writes real camera imagery, refuses to write
-inside a git working tree, and its output must stay out of repositories, backups, issues, and support
-archives.
-
-Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
-a camera, so every script uses wired cameras unless `--battery` is passed.
-
-[scripts/README.md](./scripts/README.md) indexes every maintainer script, says which ones write and
-which are observation-only, and points at the procedure for each.
+`npm run verify` stays hermetic, so anything needing a real account, camera, or transport is
+qualified by a script in [scripts/](./scripts/). Its index,
+[scripts/README.md](./scripts/README.md), describes every procedure and says which scripts write.
 
 ## Pull requests
 
