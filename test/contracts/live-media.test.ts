@@ -8,6 +8,7 @@ import type {
   StreamBudgetNotice,
   TalkbackHandle,
 } from '@mega-yfue/eufy-sdk';
+import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -298,6 +299,65 @@ describe('live media adaptation', () => {
     expect(session.onVideoFailure).toHaveBeenCalledOnce();
     expect(session.outcomes).toHaveLength(1);
     vi.useRealTimers();
+  });
+
+  it('names a source that answered with audio and never a video frame apart from any other source error', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    session.stream.emit(
+      'error',
+      new LiveStreamStartError({ reason: 'warm-timeout', stage: 'audio-only', timeoutMs: 20_000, attempts: 10 }),
+    );
+
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.outcomes).toEqual([
+      { outcome: 'failed', reason: 'source-audio-only', stage: 'first-source-keyframe' },
+    ]);
+    vi.useRealTimers();
+  });
+
+  it('reports a start that never delivered a frame at all as a source error rather than an audio-only one', async () => {
+    vi.useFakeTimers();
+    const session = await liveSession();
+    await session.start();
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    session.stream.emit(
+      'error',
+      new LiveStreamStartError({
+        reason: 'warm-timeout',
+        stage: 'awaiting-first-frame',
+        timeoutMs: 20_000,
+        attempts: 10,
+      }),
+    );
+
+    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'source-error', stage: 'first-source-keyframe' }]);
+    vi.useRealTimers();
+  });
+
+  it('names an audio-only start that failed the source acquisition itself', async () => {
+    const failure = new LiveStreamStartError({
+      reason: 'source-ended',
+      stage: 'audio-only',
+      timeoutMs: 20_000,
+      attempts: 3,
+    });
+    const session = await liveSession({
+      live: async () => {
+        throw failure;
+      },
+    });
+
+    await expect(session.start()).rejects.toBe(failure);
+
+    expect(session.outcomes).toEqual([
+      { outcome: 'failed', reason: 'source-audio-only', stage: 'sdk-source-acquisition' },
+    ]);
   });
 
   it('bounds a silent source at the video backstop and reports the bounded reason', async () => {

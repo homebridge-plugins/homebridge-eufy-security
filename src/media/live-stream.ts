@@ -1,4 +1,5 @@
 import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
+import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
 import { createSocket } from 'node:dgram';
 import { spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
@@ -31,6 +32,19 @@ const RETURN_AUDIO_BIND_GRACE_MS = 250;
  */
 export const SOURCE_START_BACKSTOP_MS = 30_000;
 const SOURCE_ACQUISITION_TIMEOUT = Symbol('source-acquisition-timeout');
+
+/**
+ * The bounded reason one SDK source failure reports.
+ *
+ * The SDK stages a start that produced no keyframe by what the source delivered, and a start that carried
+ * audio and never a single video frame is the one signature worth naming apart: measured on a real camera
+ * that had been switched off, the source accepted the start, delivered audio for the whole warm-up window,
+ * and reported `audio-only`. Every other stage is a source error, because nothing else distinguishes it
+ * from a transport that failed.
+ */
+function sourceFailure(error: unknown): LiveSessionFailure {
+  return error instanceof LiveStreamStartError && error.stage === 'audio-only' ? 'source-audio-only' : 'source-error';
+}
 
 /** One adaptation process, in the terms every adapted media session controls it by. */
 export interface MediaProcess {
@@ -476,7 +490,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
             }),
           ]);
         } catch (error) {
-          failVideo(error === SOURCE_ACQUISITION_TIMEOUT ? 'source-acquisition-timeout' : 'source-error');
+          failVideo(error === SOURCE_ACQUISITION_TIMEOUT ? 'source-acquisition-timeout' : sourceFailure(error));
           throw error === SOURCE_ACQUISITION_TIMEOUT ? new Error('live media source acquisition timed out') : error;
         } finally {
           clearTimeout(acquisitionDeadline);
@@ -494,7 +508,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
             notice.extend();
           }
         });
-        source.on('error', () => failVideo('source-error'));
+        source.on('error', (error) => failVideo(sourceFailure(error)));
         source.on('stop', () => failVideo('source-stopped'));
         await returnAudioReady;
       },

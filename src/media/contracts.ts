@@ -43,10 +43,18 @@ export interface NegotiatedLiveMedia {
   readonly audio?: NegotiatedLiveAudio;
 }
 
-/** Why one live session ended without usable video, in a bounded plugin-owned vocabulary. */
+/**
+ * Why one live session ended without usable video, in a bounded plugin-owned vocabulary.
+ *
+ * `source-audio-only` names what the SDK source did rather than why: it answered the start, delivered
+ * audio, and never a video frame. That is a switched-off camera's signature, and also that of a camera
+ * whose video this build cannot read, so the reason states the observation and leaves the diagnosis to
+ * whatever else is known about the camera.
+ */
 export type LiveSessionFailure =
   | 'source-acquisition-timeout'
   | 'no-video-within-backstop'
+  | 'source-audio-only'
   | 'source-error'
   | 'source-stopped'
   | 'rtcp-timeout'
