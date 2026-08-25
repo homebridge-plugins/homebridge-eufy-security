@@ -35,6 +35,18 @@ second remote login, and that a real fleet discovers completely.
 - A **throwaway Homebridge instance**. This procedure replaces the active Eufy account of whatever
   instance it runs against, so it must not run against a production service. The wizard refuses a
   production storage root outright.
+- **Every other Homebridge instance stopped.** An ownership lease lives inside one storage root, so two
+  instances with different roots cannot refuse each other the account even when they share one Eufy
+  account. Authenticating while another instance holds that account's session creates two realtime
+  owners, and the session the other instance restored can be invalidated underneath it. The wizard
+  checks this before provisioning and again before the login, and refuses rather than warns.
+
+  ```bash
+  sudo systemctl stop homebridge     # or: hb-service stop
+  ```
+
+  Start it again when the qualification finishes. If you would rather leave your service running, use a
+  second guest account instead, distinct from the one your service authenticated.
 - A built checkout. The evidence harness imports the shipped ownership implementation from `dist/`,
   because a reimplementation would not qualify the lease the plugin actually takes.
 

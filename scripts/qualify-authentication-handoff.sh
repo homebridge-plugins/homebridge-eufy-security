@@ -211,6 +211,76 @@ refuse_production() {
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RUN_DIR="${EUFY_QUALIFICATION_DIR:-/tmp/hb-1024}"
 refuse_production "$RUN_DIR"
+
+# _descends_from PID ANCESTOR — true when PID is ANCESTOR or one of its descendants.
+#
+# Homebridge and hb-service overwrite their process titles, so a running instance shows no arguments
+# and cannot be told apart from another by its storage root. Ancestry is what distinguishes an instance
+# this wizard started from one it must refuse.
+_descends_from() {
+  local pid="$1" ancestor="$2" hops=0
+  while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
+    if [[ "$pid" == "$ancestor" ]]; then
+      return 0
+    fi
+    hops=$((hops + 1))
+    if [[ "$hops" -gt 24 ]]; then
+      return 1
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+  return 1
+}
+
+# refuse_concurrent_homebridge — abort while any other Homebridge instance is running.
+#
+# An ownership lease lives inside one storage root, so two instances with different roots cannot
+# exclude each other even when they share a single Eufy account. Authenticating here while another
+# instance holds that account's session makes two realtime owners, and the session the other instance
+# restored can be invalidated underneath it. The wizard cannot read a service-owned storage root to
+# compare accounts, so the only rule it can enforce without privileges is that nothing else runs.
+refuse_concurrent_homebridge() {
+  local found=() unit pid
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in homebridge homebridge-config-ui-x; do
+      if [[ "$(systemctl is-active "$unit" 2>/dev/null || true)" == "active" ]]; then
+        found+=("systemd unit '$unit' is active")
+      fi
+    done
+  fi
+  if command -v pgrep >/dev/null 2>&1; then
+    for pid in $({ pgrep -x homebridge || true; pgrep -x hb-service || true; } 2>/dev/null | sort -u); do
+      if [[ "$pid" == "$$" ]] || _descends_from "$pid" "$$"; then
+        continue
+      fi
+      found+=("pid $pid is a Homebridge process this wizard did not start")
+    done
+  fi
+
+  if [[ ${#found[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  printf '\n  %s✗ another Homebridge instance is running%s\n\n' "$RED" "$RESET" >&2
+  for unit in "${found[@]}"; do
+    printf '      %s\n' "$unit" >&2
+  done
+  cat >&2 <<'REASON'
+
+  Ownership is scoped to a storage root, so this instance cannot be refused the
+  account by the one already running. Authenticating now would create a second
+  realtime owner on the same Eufy session.
+
+  Stop the other instance first, then re-run:
+
+      sudo systemctl stop homebridge     # or: hb-service stop
+
+  Remember to start it again when the qualification finishes.
+
+REASON
+  exit 1
+}
+
 ENV_FILE="$RUN_DIR/qualification.env"
 STORAGE_ROOT="$RUN_DIR/homebridge-eufy"
 EVIDENCE="$RUN_DIR/evidence.log"
@@ -258,6 +328,7 @@ pause "Is this the branch you mean to qualify?"
 
 # ── Stage 2 ───────────────────────────────────────────────────────────────
 stage "Provision an isolated Homebridge instance"
+refuse_concurrent_homebridge
 say "This qualification replaces the active Eufy account of whatever instance it"
 say "runs against, so it runs against a throwaway instance and never your service."
 note "run directory   $RUN_DIR"
@@ -334,8 +405,10 @@ write_env ACCOUNT_ALIAS "$ACCOUNT_ALIAS"
 
 # ── Stage 4 ───────────────────────────────────────────────────────────────
 stage "AC1 — authenticate interactively through the custom UI"
+refuse_concurrent_homebridge
 say "Homebridge stays STOPPED for this stage. Only the UI runs, so temporary"
 say "authentication ownership is the sole owner of the account session."
+note "re-checked just now: no other Homebridge instance is running"
 say ""
 node "$UI_BIN" -U "$RUN_DIR" -P "$RUN_DIR/plugins" -I > "$RUN_DIR/ui.log" 2>&1 &
 UI_PID=$!
