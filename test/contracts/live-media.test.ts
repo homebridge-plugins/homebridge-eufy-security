@@ -64,7 +64,7 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
   }
 }
 
-type SyntheticProcess = MediaProcess & { emit(event: string, ...args: unknown[]): boolean };
+type SyntheticProcess = MediaProcess & { emit(event: string, ...args: unknown[]): boolean; readonly input: Buffer[] };
 
 /**
  * The options one adaptation process applies to its input, which is everything before `-i`. FFmpeg reads
@@ -77,22 +77,24 @@ function inputOptions(args: readonly string[]): string[] {
 
 function process(): SyntheticProcess {
   const events = new EventEmitter();
+  const stdin = new PassThrough();
+  const input: Buffer[] = [];
+  stdin.on('data', (chunk: Buffer) => input.push(Buffer.from(chunk)));
   return {
-    stdin: new PassThrough(),
+    stdin,
     stderr: new PassThrough(),
+    input,
     on: events.on.bind(events),
     emit: events.emit.bind(events),
     kill: vi.fn(() => true),
   };
 }
 
-type SyntheticReturnAudioProcess = SyntheticProcess & { stdout: PassThrough; input: Buffer[] };
+type SyntheticReturnAudioProcess = SyntheticProcess & { stdout: PassThrough };
 
 function returnAudioProcess(): SyntheticReturnAudioProcess {
   const child = process() as SyntheticReturnAudioProcess;
   child.stdout = new PassThrough();
-  child.input = [];
-  child.stdin.on('data', (chunk: Buffer) => child.input.push(Buffer.from(chunk)));
   return child;
 }
 
@@ -390,8 +392,89 @@ describe('live media adaptation', () => {
     expect(options).toEqual(
       expect.arrayContaining(['-use_wallclock_as_timestamps', '1', '-probesize', '32', '-analyzeduration', '1']),
     );
-    expect(options.join(' ')).not.toContain('genpts');
-    expect(options.join(' ')).not.toContain('nobuffer');
+    session.prepared.stop();
+  });
+
+  /**
+   * Measured live: an input option that discards analysed packets threw away the leading keyframe and made
+   * time to first coded frame scale with the source keyframe interval, from 0.5s to 8.7s across a 15-to-250
+   * frame GOP, while coding 50 of 300 fed access units. One option on one input caused all of it, so the
+   * rule is stated over every adapted input rather than pinned as one argument list.
+   */
+  it('never asks any adapted input to discard what it analysed or to invent a timeline', async () => {
+    const video = await liveSession();
+    await video.start();
+    video.stream.video(KEYFRAME);
+    video.stream.video({ ...KEYFRAME, codec: 'h265', keyframe: true, data: Buffer.from([0, 0, 0, 1, 0x26]) });
+    const audio = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await audio.start();
+    audio.stream.audio({ codec: 'aac-lc', data: Buffer.from([0xff, 0xf1]) });
+    const alaw = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await alaw.start();
+    alaw.stream.audio({ codec: 'g711a', data: Buffer.from([0xd5]) });
+
+    const inputs = [...video.spawned, ...audio.spawned, ...alaw.spawned].map(inputOptions);
+    expect(inputs).toHaveLength(4);
+    for (const options of inputs) {
+      expect(options).toEqual(expect.arrayContaining(['-probesize', '32', '-analyzeduration', '1']));
+      for (const forbidden of ['nobuffer', 'discardcorrupt', 'genpts', 'gendts', 'igndts']) {
+        expect(options.join(' ')).not.toContain(forbidden);
+      }
+    }
+    video.prepared.stop();
+    audio.prepared.stop();
+    alaw.prepared.stop();
+  });
+
+  /**
+   * Every access unit a session accepts has to reach the process that codes it, byte for byte and in order.
+   * The count is the only thing that catches a whole group of pictures being lost silently: a session that
+   * drops frames still starts, still reports progress, and still produces a coded stream.
+   */
+  it('writes every access unit it accepts to the adaptation, in order and unaltered', async () => {
+    const session = await liveSession();
+    await session.start();
+    const gop = [
+      KEYFRAME,
+      ...Array.from({ length: 249 }, (_, index) => ({
+        ...KEYFRAME,
+        keyframe: false,
+        data: Buffer.from([0, 0, 0, 1, 0x41, index >> 8, index & 0xff]),
+      })),
+    ];
+    for (const frame of gop) {
+      session.stream.video(frame);
+    }
+
+    expect(session.children).toHaveLength(1);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(gop.map(({ data }) => data)));
+    session.prepared.stop();
+  });
+
+  /**
+   * A source that changes geometry cannot be coded by the running process, so the access units between the
+   * change and the keyframe a replacement can start from are the only ones a session may withhold. Every
+   * other unit still reaches an adaptation, and each process receives only the units it can code.
+   */
+  it('withholds only the access units no adaptation can code across a source geometry change', async () => {
+    const session = await liveSession();
+    await session.start();
+    const first = [KEYFRAME, { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) }];
+    const withheld = [
+      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 2]) },
+      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
+    ];
+    const second = [
+      { ...KEYFRAME, width: 640, height: 360, data: Buffer.from([0, 0, 0, 1, 0x65, 4]) },
+      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 5]) },
+    ];
+    for (const frame of [...first, ...withheld, ...second]) {
+      session.stream.video(frame);
+    }
+
+    expect(session.children).toHaveLength(2);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(first.map(({ data }) => data)));
+    expect(Buffer.concat(session.children[1]!.input)).toEqual(Buffer.concat(second.map(({ data }) => data)));
     session.prepared.stop();
   });
 
