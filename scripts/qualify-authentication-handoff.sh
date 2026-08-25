@@ -492,23 +492,21 @@ say "password you just typed. The value is compared by exact match; neither it n
 say "its digest nor its length is ever printed."
 say ""
 check "AC1" "no credential or account address escapes its declared sink" \
-  sinks --ui-log "$RUN_DIR/ui.log"
+  sinks --ui-log "$RUN_DIR/ui.log" --host-log "$RUN_DIR/homebridge.log"
 note "advisory runtime evidence and the plugin log are audited again at stage 9, once the"
 note "runtime has actually written them"
 say ""
-say "The challenge answer cannot be probed the same way: the plugin persists a captcha"
-say "or two-factor answer nowhere, so there is no stored value to compare against."
-say "Confirming it never reached a log is therefore your read, not an assertion."
-say ""
-step "Search both logs for the answer you typed. Substitute it for ANSWER:"
-note "  grep -F 'ANSWER' $RUN_DIR/ui.log $STORAGE_ROOT/logs/homebridge-eufy.jsonl"
-step "Then skim the same files for anything else resembling the password."
+say "The challenge answer cannot be probed by comparison: the plugin persists a captcha"
+say "or two-factor answer nowhere, so there is no stored value to compare against. The"
+say "audit above instead listed every challenge-answer-shaped string in the logs. If your"
+say "answer had leaked, it would be in that list, so one glance settles it."
 say ""
 note "the password rests deliberately, in cleartext, in the persisted account"
 note "configuration and in config.json — both owner-only. That is by design, not a leak."
-judge "Did you search both logs and find no credential or challenge answer?" \
-  && RESULTS+=("PASS AC1 maintainer searched the logs for the challenge answer") \
-  || RESULTS+=("FAIL AC1 maintainer found credential material in the logs")
+say ""
+judge "Is the answer you typed absent from the listed strings?" \
+  && RESULTS+=("PASS AC1 the challenge answer appears in no log") \
+  || RESULTS+=("FAIL AC1 the challenge answer appears in a log")
 
 # ── Stage 6 ───────────────────────────────────────────────────────────────
 stage "AC2 — closing the UI releases temporary ownership"

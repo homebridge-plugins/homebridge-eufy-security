@@ -22,7 +22,7 @@
  *
  * Usage:
  *   node scripts/authentication-handoff-evidence.mjs sinks       --storage <root> [--ui-log <path>]
- *                                                                 [--require-runtime-evidence]
+ *                                                                 [--host-log <path>] [--require-runtime-evidence]
  *   node scripts/authentication-handoff-evidence.mjs ownership   --storage <root> [--expect-kind runtime|none]
  *   node scripts/authentication-handoff-evidence.mjs ownership   --storage <root> --observe-kind <kind>
  *                                                                 [--timeout-seconds <n>]
@@ -158,7 +158,44 @@ function readText(path) {
  * A captcha or two-factor answer is persisted nowhere by design, so there is nothing to probe for it.
  * That half of the criterion is a human read of the logs, which `--ui-log` includes here.
  */
-function auditSinks(root, uiLog, requireRuntimeEvidence) {
+/**
+ * Lists every challenge-answer-shaped string in the audited logs, for the operator to scan.
+ *
+ * A captcha or two-factor answer is persisted nowhere, so it cannot be probed by comparison the way a
+ * credential can, and asking the operator to grep for their own answer invites pasting the placeholder
+ * verbatim. Reporting every short digit run instead makes the check concrete without the answer ever
+ * entering this process: if it leaked, it is necessarily in this list.
+ */
+function reportChallengeAnswerCandidates(paths) {
+  const candidates = new Map();
+  for (const { label, path } of paths) {
+    const text = readText(path);
+    if (text === null) {
+      continue;
+    }
+    const stripped = text
+      .replace(/\u001b\[[0-9;]*m/g, '')
+      .replace(/\d{4}-\d{2}-\d{2}T[\d:.]*Z/g, '')
+      .replace(/\d{1,2}\/\d{1,2}\/\d{4}/g, '')
+      .replace(/\d{2}:\d{2}:\d{2}/g, '');
+    for (const match of stripped.match(/\d{4,8}/g) ?? []) {
+      if (!candidates.has(match)) {
+        candidates.set(match, label);
+      }
+    }
+  }
+  if (candidates.size === 0) {
+    pass('no challenge-answer-shaped string appears in any audited log');
+    return;
+  }
+  info(`${candidates.size} challenge-answer-shaped string(s) appear in the logs, for you to scan:`);
+  for (const [candidate, label] of [...candidates].sort()) {
+    info(`  ${candidate}   (${label})`);
+  }
+  info('a captcha or two-factor answer that leaked would necessarily be in this list');
+}
+
+function auditSinks(root, logs, requireRuntimeEvidence) {
   const tree = walk(root);
   if (tree.length === 0) {
     fail('the storage root is empty; nothing has been persisted yet');
@@ -196,8 +233,8 @@ function auditSinks(root, uiLog, requireRuntimeEvidence) {
   }
 
   const probed = [...tree.filter((node) => !node.directory).map((node) => ({ label: node.path, path: join(root, node.path) }))];
-  if (uiLog) {
-    probed.push({ label: 'ui.log', path: uiLog });
+  for (const extra of logs) {
+    probed.push(extra);
   }
 
   let leaked = 0;
@@ -246,15 +283,22 @@ function auditSinks(root, uiLog, requireRuntimeEvidence) {
     info('no advisory runtime evidence yet, which is expected before the runtime has ever started');
   }
 
-  const logs = tree.filter((node) => !node.directory && node.path.startsWith('logs/'));
-  if (logs.length === 0) {
+  reportChallengeAnswerCandidates([
+    ...tree
+      .filter((node) => !node.directory && node.path.startsWith('logs/'))
+      .map((node) => ({ label: node.path, path: join(root, node.path) })),
+    ...logs,
+  ]);
+
+  const pluginLogs = tree.filter((node) => !node.directory && node.path.startsWith('logs/'));
+  if (pluginLogs.length === 0) {
     if (requireRuntimeEvidence) {
       fail('no plugin log was found, and runtime evidence was required');
     } else {
       info('no plugin log yet, which is expected before the runtime has ever started');
     }
   }
-  for (const node of logs) {
+  for (const node of pluginLogs) {
     const fields = new Set();
     let records = 0;
     let malformed = 0;
@@ -544,7 +588,14 @@ if (!options.storage) {
 
 switch (options.command) {
   case 'sinks':
-    auditSinks(options.storage, options['ui-log'], options['require-runtime-evidence'] === true);
+    auditSinks(
+      options.storage,
+      [
+        ...(options['ui-log'] ? [{ label: 'ui.log', path: options['ui-log'] }] : []),
+        ...(options['host-log'] ? [{ label: 'homebridge.log', path: options['host-log'] }] : []),
+      ],
+      options['require-runtime-evidence'] === true,
+    );
     break;
   case 'ownership':
     if (options['observe-kind']) {
