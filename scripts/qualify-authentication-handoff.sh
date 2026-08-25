@@ -392,13 +392,16 @@ warn "This wizard never asks for your password. You type it only into the"
 warn "Homebridge UI in your browser. That absence is part of the AC1 evidence:"
 warn "no credential passes through this script, its environment, or its files."
 say ""
-warn "Use an account NO live service is using. Authenticating an account anywhere"
+warn "Prefer an account NO live service is using. Authenticating an account anywhere"
 warn "invalidates the session every other instance holds for it: the server rejects"
 warn "the older token, the SDK clears the persisted session, and that instance comes"
 warn "back as authentication-required needing a fresh interactive login. Stopping the"
 warn "other instance does not prevent it, because the invalidation is sequential."
 say ""
-confirm "Is this account free of any live service you care about?" || {
+say "Continuing with an account a service uses is a valid choice, as long as you know"
+say "you will have to log that service in again afterwards."
+say ""
+confirm "Understood — continue, accepting any service on this account needs a fresh login?" || {
   warn "use a second guest account, distinct from the one your service authenticated"
   exit 1
 }
