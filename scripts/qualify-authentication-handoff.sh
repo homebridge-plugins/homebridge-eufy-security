@@ -418,21 +418,41 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 open_url "http://127.0.0.1:$UI_PORT/"
+say ""
+say "Watching for the temporary ownership lease in the background, so stage 6 can judge"
+say "its release against having held it. Take as long as you need with the challenge."
+node "$REPO/scripts/authentication-handoff-evidence.mjs" ownership \
+  --observe-kind temporary-authentication --timeout-seconds 900 --storage "$STORAGE_ROOT" \
+  > "$RUN_DIR/observe.log" 2>&1 &
+OBSERVER_PID=$!
+say ""
 step "Open Plugins → Homebridge Eufy → Settings to reach the plugin's custom UI."
 step "Enter the GUEST account address, its password, and your country."
-step "Submit, and wait until the UI presents the captcha or two-factor challenge."
+step "Complete the captcha and/or two-factor challenge when the UI presents it."
+step "Wait until the UI reports that discovery finished and a restart is required."
 say ""
 note "if the UI reports the plugin is already running, something else holds the lease"
-pause "STOP at the challenge — do not answer it yet — then press Enter here."
-say ""
-say "Sampling ownership while the flow is mid-challenge. A temporary lease must exist"
-say "now, otherwise stage 6 would be proving its release from an absence."
-check "AC2" "temporary authentication holds the lease during the flow" \
-  ownership --expect-kind temporary-authentication
-say ""
-step "Now answer the captcha and/or two-factor challenge in the browser."
-step "Wait until the UI reports that discovery finished and a restart is required."
 pause "Press Enter once the UI reports the account was published."
+
+if kill -0 "$OBSERVER_PID" 2>/dev/null; then
+  kill "$OBSERVER_PID" 2>/dev/null || true
+  wait "$OBSERVER_PID" 2>/dev/null || true
+  OBSERVED=1
+else
+  wait "$OBSERVER_PID" 2>/dev/null && OBSERVED=0 || OBSERVED=1
+fi
+{
+  printf '\n## AC2 · temporary authentication holds the lease during the flow\n'
+  cat "$RUN_DIR/observe.log"
+} >> "$EVIDENCE"
+sed 's/^/    /' "$RUN_DIR/observe.log"
+if [[ "$OBSERVED" == "0" ]]; then
+  RESULTS+=("PASS AC2 temporary authentication held the lease during the flow")
+  printf '  %s✓ AC2 satisfied%s\n' "$GREEN" "$RESET"
+else
+  RESULTS+=("FAIL AC2 temporary authentication was never observed holding the lease")
+  warn "AC2 NOT satisfied — the temporary lease was never observed"
+fi
 
 # ── Stage 5 ───────────────────────────────────────────────────────────────
 stage "AC1 — audit every credential sink"
@@ -442,6 +462,8 @@ say "its digest nor its length is ever printed."
 say ""
 check "AC1" "no credential or account address escapes its declared sink" \
   sinks --ui-log "$RUN_DIR/ui.log"
+note "advisory runtime evidence and the plugin log are audited again at stage 9, once the"
+note "runtime has actually written them"
 say ""
 say "The challenge answer cannot be probed the same way: the plugin persists a captcha"
 say "or two-factor answer nowhere, so there is no stored value to compare against."
@@ -497,6 +519,11 @@ check "AC3" "second owner refused, live lease intact" conflict
 
 # ── Stage 9 ───────────────────────────────────────────────────────────────
 stage "AC4 — no real-device write was performed"
+say "Re-auditing every sink now that the runtime has published advisory evidence and"
+say "written its log, which did not exist when stage 5 ran."
+check "AC1" "no credential reaches runtime evidence or the plugin log" \
+  sinks --ui-log "$RUN_DIR/ui.log" --require-runtime-evidence
+say ""
 say "During stage 4 the plugin reached the SDK only through the narrowed authentication"
 say "client, which exposes login, captcha, two-factor, discovery, and disconnect and no"
 say "persistent write, momentary action, rename, reboot, or raw transport call."
@@ -518,11 +545,11 @@ say "  Homebridge stopped"
 REPORT="$RUN_DIR/report.md"
 {
   printf '# Live authentication handoff qualification (#1024)\n\n'
-  printf '- build: `%s` on `%s`\n' "$BUILD_SHA" "$BUILD_BRANCH"
-  printf '- node: `%s`\n' "$(node --version)"
-  printf '- account: dedicated guest account, alias `%s`\n' "$ACCOUNT_ALIAS"
-  printf '- instance: isolated, storage root `<run>/homebridge-eufy`, UI port %s\n' "$UI_PORT"
-  printf '- device writes: none attempted\n\n'
+  printf -- '- build: `%s` on `%s`\n' "$BUILD_SHA" "$BUILD_BRANCH"
+  printf -- '- node: `%s`\n' "$(node --version)"
+  printf -- '- account: dedicated guest account, alias `%s`\n' "$ACCOUNT_ALIAS"
+  printf -- '- instance: isolated, storage root `<run>/homebridge-eufy`, UI port %s\n' "$UI_PORT"
+  printf -- '- device writes: none attempted\n\n'
   printf '## Result\n\n'
   for entry in "${RESULTS[@]}"; do
     case "$entry" in

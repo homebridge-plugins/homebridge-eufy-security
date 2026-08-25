@@ -22,9 +22,16 @@
  *
  * Usage:
  *   node scripts/authentication-handoff-evidence.mjs sinks       --storage <root> [--ui-log <path>]
+ *                                                                 [--require-runtime-evidence]
  *   node scripts/authentication-handoff-evidence.mjs ownership   --storage <root> [--expect-kind runtime|none]
+ *   node scripts/authentication-handoff-evidence.mjs ownership   --storage <root> --observe-kind <kind>
+ *                                                                 [--timeout-seconds <n>]
  *   node scripts/authentication-handoff-evidence.mjs acquisition --storage <root> --since <iso>
  *   node scripts/authentication-handoff-evidence.mjs conflict    --storage <root>
+ *
+ * `sinks` audits advisory runtime evidence and the plugin log only when `--require-runtime-evidence` is
+ * given, because neither exists before the runtime has ever started. Run it once after the login and
+ * again after the restart.
  *
  * Every subcommand exits non-zero when its acceptance criterion is not met, so the wizard can gate on
  * it, and every check fails closed when the evidence it needs is absent. `conflict` is the only
@@ -66,8 +73,13 @@ function parseArguments(argv) {
     if (!flag.startsWith('--')) {
       usage(`unexpected argument ${flag}`);
     }
-    options[flag.slice(2)] = argv[index + 1];
-    index += 1;
+    const next = argv[index + 1];
+    if (next === undefined || next.startsWith('--')) {
+      options[flag.slice(2)] = true;
+    } else {
+      options[flag.slice(2)] = next;
+      index += 1;
+    }
   }
   return options;
 }
@@ -146,7 +158,7 @@ function readText(path) {
  * A captcha or two-factor answer is persisted nowhere by design, so there is nothing to probe for it.
  * That half of the criterion is a human read of the logs, which `--ui-log` includes here.
  */
-function auditSinks(root, uiLog) {
+function auditSinks(root, uiLog, requireRuntimeEvidence) {
   const tree = walk(root);
   if (tree.length === 0) {
     fail('the storage root is empty; nothing has been persisted yet');
@@ -219,9 +231,7 @@ function auditSinks(root, uiLog) {
   }
 
   const tracker = readJson(join(root, 'tracker.json'));
-  if (!tracker) {
-    fail('tracker.json is missing or unreadable; start the runtime first');
-  } else {
+  if (tracker) {
     const offending = [...collectFieldNames(tracker)].filter(
       (name) => FORBIDDEN_FIELD.test(name) && !ALLOWED_FIELD_EXCEPTIONS.has(name),
     );
@@ -230,11 +240,19 @@ function auditSinks(root, uiLog) {
     } else {
       fail(`tracker.json declares credential-bearing field(s): ${offending.join(',')}`);
     }
+  } else if (requireRuntimeEvidence) {
+    fail('tracker.json is missing or unreadable, and runtime evidence was required');
+  } else {
+    info('no advisory runtime evidence yet, which is expected before the runtime has ever started');
   }
 
   const logs = tree.filter((node) => !node.directory && node.path.startsWith('logs/'));
   if (logs.length === 0) {
-    fail('no plugin log was found; the runtime has not written its JSONL log yet');
+    if (requireRuntimeEvidence) {
+      fail('no plugin log was found, and runtime evidence was required');
+    } else {
+      info('no plugin log yet, which is expected before the runtime has ever started');
+    }
   }
   for (const node of logs) {
     const fields = new Set();
@@ -335,8 +353,15 @@ function reportOwnership(root, expectedKind) {
  * Acceptance criterion 2: a restart acquires the persisted session exactly once and publishes a
  * complete observation-only snapshot without another interactive login.
  *
- * "Exactly once" is counted from the SDK's own `session-restored` event, which the plugin emits when it
- * rebuilds its client from persisted state rather than authenticating again.
+ * "Exactly once" is counted from the runtime's own `ready` transition, which is logged unconditionally.
+ * The SDK's `session-restored` event would corroborate it directly, but SDK-scoped records are verbose
+ * and only written while an explicitly initiated diagnostics session authorizes them, so gating on it
+ * would make this check depend on the operator having opened a support session first. It is reported
+ * when present and never required.
+ *
+ * The runtime cannot authenticate interactively at all and refuses to start without a persisted session,
+ * so reaching `ready` without an authentication-required condition is what establishes that the
+ * persisted session was accepted rather than replaced.
  */
 function auditAcquisition(root, since) {
   const boundary = Date.parse(since ?? '');
@@ -374,19 +399,19 @@ function auditAcquisition(root, since) {
     .map((record) => record.event);
   info(`runtime states: ${states.join(' -> ') || 'none logged'}`);
 
-  const restored = records.filter((record) => record.scope === 'sdk' && record.event === 'session-restored').length;
-  if (restored === 1) {
-    pass('the persisted session was restored exactly once');
-  } else {
-    fail(`the persisted session was restored ${restored} time(s); expected exactly once`);
-  }
-
   const ready = states.filter((state) => state === 'ready').length;
   if (ready === 1) {
-    pass('the runtime reached ready exactly once');
+    pass('the runtime reached ready exactly once, so it accepted the persisted session once');
   } else {
     fail(`the runtime reached ready ${ready} time(s); expected exactly once`);
   }
+
+  const restored = records.filter((record) => record.scope === 'sdk' && record.event === 'session-restored').length;
+  info(
+    restored > 0
+      ? `the SDK corroborated ${restored} session restore(s)`
+      : 'no SDK session-restored record, which is expected without an authorized diagnostics session',
+  );
 
   const active = (code) =>
     records.filter((record) => record.scope === 'diagnostic-condition' && record.code === code && record.active === true);
@@ -480,6 +505,38 @@ async function probeConflict(root) {
   }
 }
 
+/**
+ * Waits for a lease of one kind to appear, so its later release can be judged against having held it.
+ *
+ * A temporary authentication lease exists only while the interactive flow runs, which is too narrow a
+ * window for an operator to sample by hand between typing a challenge answer and returning to a
+ * terminal. Polling from the moment the UI starts removes that timing dependency: whether the answer
+ * takes five seconds or five minutes, the lease is observed if it was ever taken.
+ */
+async function observeOwnership(root, kind, timeoutSeconds) {
+  const deadline = Date.now() + Number(timeoutSeconds ?? 600) * 1_000;
+  const ownership = join(root, 'ownership');
+
+  while (Date.now() < deadline) {
+    let scopes;
+    try {
+      scopes = readdirSync(ownership, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    } catch {
+      scopes = [];
+    }
+    for (const scope of scopes) {
+      const record = readJson(join(ownership, scope.name, 'owner.json'));
+      if (record?.kind === kind && isOwnerProcessAlive(record)) {
+        pass(`observed a live ${kind} lease while the flow was running`);
+        info(`scope=${scope.name.slice(0, 12)} pid=${record.pid} acquiredAt=${record.acquiredAt}`);
+        return;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  fail(`never observed a live ${kind} lease before the observation window closed`);
+}
+
 const options = parseArguments(process.argv.slice(2));
 if (!options.storage) {
   usage('--storage <root> is required');
@@ -487,10 +544,14 @@ if (!options.storage) {
 
 switch (options.command) {
   case 'sinks':
-    auditSinks(options.storage, options['ui-log']);
+    auditSinks(options.storage, options['ui-log'], options['require-runtime-evidence'] === true);
     break;
   case 'ownership':
-    reportOwnership(options.storage, options['expect-kind']);
+    if (options['observe-kind']) {
+      await observeOwnership(options.storage, options['observe-kind'], options['timeout-seconds']);
+    } else {
+      reportOwnership(options.storage, options['expect-kind']);
+    }
     break;
   case 'acquisition':
     auditAcquisition(options.storage, options.since);
