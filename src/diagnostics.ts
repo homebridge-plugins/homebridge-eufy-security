@@ -1297,12 +1297,15 @@ const MEMBERS = new Set([
   'open',
   'power',
   'snapshot',
+  'snapshotLive',
+  'snapshotStored',
   'stop',
   'talkback',
   'test',
 ]);
 const REASONS = new Set([
   'adaptation-failed',
+  'adapter-missing',
   'capability-not-supported',
   'disabled',
   'disabled-mid-session',
@@ -1310,6 +1313,7 @@ const REASONS = new Set([
   'hot',
   'malformed',
   'missing',
+  'missing-evidence',
   'no-acquisition',
   'no-primary-purpose-member',
   'no-video-within-backstop',
@@ -1519,6 +1523,14 @@ const HOMEKIT_CONDITIONS = {
   'camera-snapshot-unavailable': {
     summaryKey: 'log.homekit.cameraSnapshotUnavailable',
     actionKey: 'log.action.checkCameraSnapshot',
+  },
+  'camera-snapshot-capability-unavailable': {
+    summaryKey: 'log.homekit.cameraSnapshotCapabilityUnavailable',
+    actionKey: 'log.action.waitCameraSnapshot',
+  },
+  'camera-streaming-capability-unavailable': {
+    summaryKey: 'log.homekit.cameraStreamingCapabilityUnavailable',
+    actionKey: 'log.action.waitCameraLive',
   },
   'camera-talkback-failed': {
     summaryKey: 'log.homekit.cameraTalkbackFailed',

@@ -557,6 +557,104 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
   });
 
+  it('allowlists a withdrawn camera snapshot acquisition per acquisition member', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    const serial = 'T8000P0000000000';
+
+    for (const [member, reason] of [
+      ['snapshotStored', 'missing-evidence'],
+      ['snapshotLive', 'adapter-missing'],
+    ] as const) {
+      conditions.reportHomeKit(
+        { code: 'camera-snapshot-capability-unavailable', capability: 'camera', member, active: true, reason },
+        [serial],
+      );
+    }
+    conditions.reportHomeKit(
+      {
+        code: 'camera-snapshot-capability-unavailable',
+        capability: 'camera',
+        member: 'snapshotStored',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[camera-snapshot-capability-unavailable] Camera snapshot acquisition is unavailable',
+    );
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      expect.objectContaining({
+        scope: 'diagnostic-condition',
+        level: 'warn',
+        code: 'camera-snapshot-capability-unavailable',
+        capability: 'camera',
+        member: 'snapshotStored',
+        active: true,
+        reason: 'missing-evidence',
+        summaryKey: 'log.homekit.cameraSnapshotCapabilityUnavailable',
+        actionKey: 'log.action.waitCameraSnapshot',
+        affectedAccessoryCount: 1,
+      }),
+      expect.objectContaining({ member: 'snapshotLive', active: true, reason: 'adapter-missing' }),
+      expect.objectContaining({ member: 'snapshotStored', active: false, reason: 'recovered' }),
+    ]);
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
+  it('allowlists withdrawn camera live media without device material', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    const serial = 'T8000P0000000000';
+
+    conditions.reportHomeKit(
+      {
+        code: 'camera-streaming-capability-unavailable',
+        capability: 'camera',
+        member: 'live',
+        active: true,
+        reason: 'sdk-fault',
+      },
+      [serial],
+    );
+    conditions.reportHomeKit(
+      {
+        code: 'camera-streaming-capability-unavailable',
+        capability: 'camera',
+        member: 'live',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[camera-streaming-capability-unavailable] Camera live media is unavailable',
+    );
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-streaming-capability-unavailable',
+      capability: 'camera',
+      member: 'live',
+      active: true,
+      reason: 'sdk-fault',
+      summaryKey: 'log.homekit.cameraStreamingCapabilityUnavailable',
+      actionKey: 'log.action.waitCameraLive',
+      affectedAccessoryCount: 1,
+    });
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
   it('emits only allowlisted bounded HomeKit event traces in debug output', () => {
     const debug = vi.fn();
 
