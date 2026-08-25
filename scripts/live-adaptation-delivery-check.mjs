@@ -23,21 +23,24 @@
  * a reported latency is an upper bound quantised to that period rather than an exact one. That is enough for
  * the rule being judged: the defect this replaced grew the figure by seconds as the GOP grew.
  *
+ * What this check does not judge: the coded parameter set. Whether the stream carries the negotiated profile,
+ * level, geometry, frame rate, and bit-rate ceiling is measured on the wire by
+ * `scripts/live-hap-stream-check.mjs`, and every run of this check says so rather than leaving it implied.
+ *
  * Usage:
  *   npm run build
- *   node scripts/live-adaptation-delivery-check.mjs --paced [--codec h264|h265] [--gop 15,30,60,120,250] \
+ *   node scripts/live-adaptation-delivery-check.mjs --paced [--codec h264,h265] [--gop 15,30,60,120,250] \
  *     [--fps 30] [--seconds 10]
  *   node scripts/live-adaptation-delivery-check.mjs --storage /tmp/hb-check/homebridge-eufy \
  *     --serial T8XXXXXXXXXXXXXX [--seconds 20] [--fps 15] [--prebuffer 0]
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createSocket } from 'node:dgram';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 
-import { observations, options, required } from './hap-live-harness.mjs';
+import { boundSocket, observations, options, receiverReport, required } from './hap-live-harness.mjs';
 import { openCameraSession, shortSerial } from './eufy-camera-session.mjs';
 
 /** How long the session is observed after its source stops, before the input is closed to drain the tail. */
@@ -46,6 +49,17 @@ const SETTLE_MS = 1_000;
 const DRAIN_MS = 10_000;
 /** How long a first coded frame may take before the analysis window is judged to be unbounded again. */
 const FIRST_OUTPUT_BUDGET_MS = 1_000;
+/**
+ * How far apart two keyframe intervals' first outputs may be before first output is judged to scale with the
+ * interval. One `-progress` period, because that is the resolution the figure is read at, so anything within
+ * it is indistinguishable from no difference at all.
+ */
+const FIRST_OUTPUT_SPREAD_MS = 500;
+/**
+ * The share of the negotiated rate a window must actually code. A constant-rate output owes the negotiated
+ * rate over the window it was fed, less the frames its own conversion legitimately thins at the boundaries.
+ */
+const CODED_FLOOR_SHARE = 0.9;
 const PROGRESS_FIELD = /^[a-z_0-9]+=/;
 const REFERENCE_ERROR = /co located POCs unavailable|Could not find ref|non-existing PPS|no frame|Invalid NAL/i;
 
@@ -71,13 +85,13 @@ function adaptationRecorder(executable) {
   const factory = (_executable, args) => {
     const child = spawn(executable, args, { stdio: ['pipe', 'ignore', 'pipe'] });
     const record = {
-      args: [...args],
       child,
       fed: 0,
       coded: 0,
       duplicated: 0,
       thinned: 0,
       firstFedAt: undefined,
+      lastFedAt: undefined,
       firstCodedAfterMs: undefined,
       diagnostics: [],
     };
@@ -116,6 +130,7 @@ function adaptationRecorder(executable) {
           return (...written) => {
             record.fed += 1;
             record.firstFedAt ??= performance.now();
+            record.lastFedAt = performance.now();
             return target.write(...written);
           };
         }
@@ -133,21 +148,29 @@ function adaptationRecorder(executable) {
   return { adaptations, factory };
 }
 
-/** Closes every measured input and waits, bounded, for its final counts. */
+/**
+ * Closes every measured input and waits, bounded, for the counts that follow it.
+ *
+ * `close` rather than `exit`, because the final progress block is read from stderr and a process can exit
+ * before that stream has been drained. A process the session has already replaced has exited and will emit
+ * neither event again, so its counts are already final and it is not waited for.
+ */
 async function drainAll(adaptations) {
   await Promise.all(
-    adaptations.map(
-      ({ child }) =>
-        new Promise((resolve) => {
-          const deadline = setTimeout(resolve, DRAIN_MS);
-          deadline.unref?.();
-          child.once('exit', () => {
-            clearTimeout(deadline);
-            resolve();
-          });
-          child.stdin.end();
-        }),
-    ),
+    adaptations.map(({ child }) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return undefined;
+      }
+      return new Promise((resolve) => {
+        const deadline = setTimeout(resolve, DRAIN_MS);
+        deadline.unref?.();
+        child.once('close', () => {
+          clearTimeout(deadline);
+          resolve();
+        });
+        child.stdin.end();
+      });
+    }),
   );
 }
 
@@ -155,23 +178,28 @@ async function drainAll(adaptations) {
  * Holds the negotiated HomeKit endpoint a session sends to, and keeps the session inside its RTCP bound.
  *
  * A real controller reports reception on the port it was answered with, and a session that never hears one
- * ends itself, so the measurement window cannot be observed without playing that part.
+ * ends itself, so the measurement window cannot be observed without playing that part. Datagrams arriving
+ * here are the adapted output on the wire, which is this run's only evidence that coded frames left the
+ * process rather than merely being counted inside it.
  */
 async function homeKitEndpoint() {
-  const socket = createSocket('udp4');
-  await new Promise((resolve) => socket.bind(0, '127.0.0.1', resolve));
+  const { socket, port } = await boundSocket();
+  const ssrc = 1234;
   let packets = 0;
   socket.on('message', () => (packets += 1));
   let reports;
   return {
     target: {
-      port: socket.address().port,
+      port,
       srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80',
       srtpKey: randomBytes(16),
       srtpSalt: randomBytes(14),
     },
-    reportReceptionTo(port) {
-      reports = setInterval(() => socket.send(Buffer.alloc(8), port, '127.0.0.1'), 500);
+    reportReceptionTo(sessionPort) {
+      reports = setInterval(
+        () => socket.send(receiverReport(ssrc + 1, ssrc, packets, packets), sessionPort, '127.0.0.1'),
+        500,
+      );
     },
     get packets() {
       return packets;
@@ -340,6 +368,73 @@ class PacedLiveStream extends EventEmitter {
 }
 
 /**
+ * Observes the access units a session was actually handed, and how many of them no adaptation could code.
+ *
+ * The handle is wrapped rather than listened to, because a listener attached before the session's own would
+ * count units delivered while the session was still being wired up and then charge them to it as loss. Every
+ * unit counted here passed through the listener the session registered.
+ *
+ * A session may legitimately withhold two kinds of unit, and only these: those before the first keyframe,
+ * which no process can be started from, and those between a source codec or geometry change and the keyframe
+ * a replacement process can start from, which the running process cannot code. Anything else missing from
+ * the adaptation is unexplained loss, which is the whole point of counting.
+ */
+function sourceObservation() {
+  let delivered = 0;
+  let keyframes = 0;
+  let uncodeable = 0;
+  let firstKeyframeAfterMs;
+  let adapted;
+  const inputs = [];
+  const startedAt = performance.now();
+  const sameAs = (input, frame) =>
+    input !== undefined && input.codec === frame.codec && input.width === frame.width && input.height === frame.height;
+  const count = (frame) => {
+    delivered += 1;
+    if (!sameAs(inputs.at(-1), frame)) {
+      inputs.push({ codec: frame.codec, width: frame.width, height: frame.height, frames: 0 });
+    }
+    inputs.at(-1).frames += 1;
+    if (frame.keyframe) {
+      keyframes += 1;
+      firstKeyframeAfterMs ??= performance.now() - startedAt;
+      adapted = { codec: frame.codec, width: frame.width, height: frame.height };
+      return;
+    }
+    if (keyframes === 0 || !sameAs(adapted, frame)) {
+      uncodeable += 1;
+    }
+  };
+  return {
+    observe(handle) {
+      return {
+        on(event, listener) {
+          return handle.on(
+            event,
+            event === 'video'
+              ? (frame) => {
+                  count(frame);
+                  listener(frame);
+                }
+              : listener,
+          );
+        },
+        stop: () => handle.stop(),
+      };
+    },
+    result() {
+      return {
+        delivered,
+        keyframes,
+        uncodeable,
+        inputs,
+        firstKeyframeAfterMs: firstKeyframeAfterMs === undefined ? undefined : Math.round(firstKeyframeAfterMs),
+      };
+    },
+  };
+}
+
+/**
  * Runs one measured session and reports what the adaptation did with what it was given.
  *
  * The source is whatever `open` returns, so the real SDK source and the paced one are judged by identical
@@ -349,60 +444,37 @@ async function measure({ executable, open, feed, fps, results, label }) {
   const { FfmpegLiveMedia } = await import('../dist/media/live-stream.js').catch(() => {
     throw new Error('dist/ is missing; run npm run build before this check');
   });
-  const endpoint = await homeKitEndpoint();
   const { adaptations, factory } = adaptationRecorder(executable);
   const outcomes = [];
+  const source = sourceObservation();
   let reported = [];
-  const prepared = await new FfmpegLiveMedia(executable, factory).prepare({
-    addressVersion: 'ipv4',
-    targetAddress: '127.0.0.1',
-    video: endpoint.target,
-    onSessionOutcome: (outcome) => outcomes.push(outcome),
-  });
-  endpoint.reportReceptionTo(prepared.videoPort);
-  let delivered = 0;
-  let keyframes = 0;
-  let beforeFirstKeyframe = 0;
-  let firstKeyframeAfterMs;
-  const inputs = [];
-  const startedAt = performance.now();
+  const endpoint = await homeKitEndpoint();
   try {
-    await prepared.start(
-      {
-        live: async () => {
-          const handle = await open();
-          handle.on('video', (frame) => {
-            delivered += 1;
-            const current = inputs.at(-1);
-            if (current?.codec !== frame.codec || current.width !== frame.width || current.height !== frame.height) {
-              inputs.push({ codec: frame.codec, width: frame.width, height: frame.height, frames: 0 });
-            }
-            inputs.at(-1).frames += 1;
-            if (frame.keyframe) {
-              keyframes += 1;
-              firstKeyframeAfterMs ??= performance.now() - startedAt;
-            } else if (keyframes === 0) {
-              beforeFirstKeyframe += 1;
-            }
-          });
-          return handle;
-        },
-      },
-      negotiated(fps),
-    );
-    await feed();
-    await delay(SETTLE_MS);
-    reported = [...outcomes];
-    await drainAll(adaptations);
+    const prepared = await new FfmpegLiveMedia(executable, factory).prepare({
+      addressVersion: 'ipv4',
+      targetAddress: '127.0.0.1',
+      video: endpoint.target,
+      onSessionOutcome: (outcome) => outcomes.push(outcome),
+    });
+    endpoint.reportReceptionTo(prepared.videoPort);
+    try {
+      await prepared.start({ live: async () => source.observe(await open()) }, negotiated(fps));
+      await feed();
+      await delay(SETTLE_MS);
+      reported = [...outcomes];
+      await drainAll(adaptations);
+    } finally {
+      prepared.stop();
+    }
   } finally {
-    prepared.stop();
     await endpoint.close();
   }
 
+  const observed = source.result();
   if (adaptations.length === 0) {
     console.log(
-      `  ${label}: delivered=${delivered} keyframes=${keyframes} preKeyframe=${beforeFirstKeyframe}` +
-        ` outcomes=${JSON.stringify(reported)}`,
+      `  ${label}: delivered=${observed.delivered} keyframes=${observed.keyframes}` +
+        ` uncodeable=${observed.uncodeable} outcomes=${JSON.stringify(reported)}`,
     );
     results.check(false, `${label} started an adaptation process`);
     return undefined;
@@ -410,71 +482,102 @@ async function measure({ executable, open, feed, fps, results, label }) {
   const total = (field) => adaptations.reduce((sum, record) => sum + record[field], 0);
   const fed = total('fed');
   const coded = total('coded');
-  const duplicated = total('duplicated');
-  const thinned = total('thinned');
   const first = adaptations.find(({ firstCodedAfterMs }) => firstCodedAfterMs !== undefined);
-  const diagnostics = adaptations.flatMap(({ diagnostics: lines }) => lines);
+  const fedFrom = Math.min(...adaptations.map(({ firstFedAt }) => firstFedAt ?? Infinity));
+  const fedUntil = Math.max(...adaptations.map(({ lastFedAt }) => lastFedAt ?? -Infinity));
+  const fedSeconds = Number.isFinite(fedFrom) && fedUntil > fedFrom ? (fedUntil - fedFrom) / 1_000 : 0;
   const report = {
     label,
-    delivered,
-    keyframes,
-    beforeFirstKeyframe,
-    firstKeyframeAfterMs: firstKeyframeAfterMs === undefined ? undefined : Math.round(firstKeyframeAfterMs),
+    ...observed,
     fed,
     coded,
-    duplicated,
-    thinned,
-    accounted: coded - duplicated + thinned,
-    withheld: delivered - fed,
+    duplicated: total('duplicated'),
+    thinned: total('thinned'),
+    accounted: coded - total('duplicated') + total('thinned'),
+    withheld: observed.delivered - fed,
+    fedSeconds,
+    codedFloor: Math.floor(CODED_FLOOR_SHARE * Math.min(fed, fps * fedSeconds)),
     firstCodedAfterMs: first === undefined ? undefined : Math.round(first.firstCodedAfterMs),
     processes: adaptations.length,
-    rtcpPackets: endpoint.packets,
-    diagnostics,
+    endpointPackets: endpoint.packets,
+    diagnostics: adaptations.flatMap(({ diagnostics: lines }) => lines),
     outcomes: reported,
   };
   console.log(
-    `  ${label}: delivered=${delivered} keyframes=${keyframes} firstKeyframe=${report.firstKeyframeAfterMs ?? 'never'}ms` +
-      ` preKeyframe=${beforeFirstKeyframe} processes=${report.processes} fed=${fed} withheld=${report.withheld}` +
-      ` coded=${coded} dup=${duplicated} thinned=${thinned} accounted=${report.accounted}` +
+    `  ${label}: delivered=${report.delivered} keyframes=${report.keyframes}` +
+      ` firstKeyframe=${report.firstKeyframeAfterMs ?? 'never'}ms uncodeable=${report.uncodeable}` +
+      ` processes=${report.processes} fed=${fed} withheld=${report.withheld} coded=${coded}` +
+      ` dup=${report.duplicated} thinned=${report.thinned} accounted=${report.accounted}` +
+      ` floor=${report.codedFloor} window=${fedSeconds.toFixed(1)}s packets=${report.endpointPackets}` +
       ` firstCoded=${report.firstCodedAfterMs ?? 'never'}ms`,
   );
-  for (const diagnostic of diagnostics) {
+  for (const diagnostic of report.diagnostics) {
     console.log(`    ffmpeg: ${diagnostic}`);
   }
   console.log(
-    `    source inputs: ${inputs.map(({ codec, width, height, frames }) => `${codec} ${width}x${height} frames=${frames}`).join(' -> ')}`,
+    `    source inputs: ${observed.inputs.map(({ codec, width, height, frames }) => `${codec} ${width}x${height} frames=${frames}`).join(' -> ')}`,
   );
   return report;
 }
 
-/** Judges one measured window against the two rules this check exists for. */
+/**
+ * Judges one measured window.
+ *
+ * The accounting identity alone does not bound how much a window may lose, because a rate conversion is
+ * entitled to thin frames and reports the thinning honestly. The floor bounds it: over the window it was
+ * actually fed, a constant-rate output owes roughly the negotiated rate, capped by what it was given, so a
+ * session that thinned away most of a group of pictures fails the floor even though its arithmetic balances.
+ *
+ * A decoder reference error is reported and fails the run when present, but its absence proves nothing: the
+ * defect this check was written for emitted none.
+ */
 function judge(results, report) {
   if (!report) {
     return;
   }
   results.check(report.fed > 0, `${report.label} fed the adaptation at least one access unit`);
-  results.check(report.coded > 0, `${report.label} coded at least one frame`);
   results.check(
     report.accounted === report.fed,
     `${report.label} accounted for every fed access unit (${report.accounted} of ${report.fed})`,
   );
   results.check(
-    report.withheld === report.beforeFirstKeyframe,
-    `${report.label} withheld only the access units that arrived before its first keyframe` +
-      ` (${report.withheld} withheld of ${report.delivered} delivered, ${report.beforeFirstKeyframe} before the first keyframe)`,
+    report.codedFloor > 0 && report.coded >= report.codedFloor,
+    `${report.label} coded at the negotiated rate over its window (${report.coded} frames, floor ${report.codedFloor})`,
+  );
+  results.check(
+    report.withheld === report.uncodeable,
+    `${report.label} withheld only the access units no adaptation could code` +
+      ` (${report.withheld} withheld of ${report.delivered} delivered, ${report.uncodeable} uncodeable)`,
   );
   results.check(
     report.firstCodedAfterMs !== undefined && report.firstCodedAfterMs <= FIRST_OUTPUT_BUDGET_MS,
     `${report.label} coded its first frame within ${FIRST_OUTPUT_BUDGET_MS}ms of the first fed access unit`,
   );
   results.check(
+    report.endpointPackets > 0,
+    `${report.label} put adapted output on the negotiated endpoint (${report.endpointPackets} datagrams)`,
+  );
+  results.check(
     !report.diagnostics.some((line) => REFERENCE_ERROR.test(line)),
-    `${report.label} produced no decoder reference error`,
+    `${report.label} emitted no decoder reference error`,
   );
   results.check(
     !report.outcomes.some(({ outcome }) => outcome === 'failed'),
     `${report.label} reported no session failure`,
   );
+}
+
+/** A numeric option, refused rather than silently turned into `NaN` arguments. */
+function count(parsed, name, fallback) {
+  const raw = parsed.get(name);
+  if (raw === undefined) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`--${name} must be a positive number, not ${JSON.stringify(raw)}`);
+  }
+  return value;
 }
 
 const parsed = options(process.argv.slice(2));
@@ -483,50 +586,61 @@ const executable = parsed.get('ffmpeg') ?? require('ffmpeg-for-homebridge');
 const results = observations('live adaptation delivery');
 
 if (parsed.get('paced') !== undefined) {
-  const codec = parsed.get('codec') ?? 'h264';
-  const fps = Number(parsed.get('fps') ?? 30);
-  const seconds = Number(parsed.get('seconds') ?? 10);
-  const intervals = (parsed.get('gop') ?? '15,30,60,120,250').split(',').map(Number);
-  const latencies = [];
-  for (const gop of intervals) {
-    const accessUnits = await pacedAccessUnits(executable, { codec, gop, fps, seconds, width: 1280, height: 720 });
-    const stream = new PacedLiveStream(accessUnits, fps);
-    const report = await measure({
-      executable,
-      open: async () => stream,
-      feed: () => stream.play(),
-      fps,
-      results,
-      label: `${codec} gop=${gop}`,
-    });
-    judge(results, report);
-    if (report?.firstCodedAfterMs !== undefined) {
-      latencies.push({ gop, firstCodedAfterMs: report.firstCodedAfterMs });
+  const codecs = (parsed.get('codec') ?? 'h264,h265').split(',');
+  for (const codec of codecs) {
+    if (codec !== 'h264' && codec !== 'h265') {
+      throw new Error(`--codec takes h264 or h265, not ${JSON.stringify(codec)}`);
     }
   }
-  const measured = latencies.map(({ firstCodedAfterMs }) => firstCodedAfterMs);
-  console.log(`first output by keyframe interval: ${JSON.stringify(latencies)}`);
-  results.check(
-    latencies.length === intervals.length,
-    `every requested keyframe interval produced a first coded frame (${latencies.length} of ${intervals.length})`,
-  );
-  if (measured.length < 2) {
-    results.unverified(
-      'one keyframe interval cannot show whether first output scales with it; pass at least two --gop values',
-    );
-  } else {
-    const spread = Math.max(...measured) - Math.min(...measured);
+  const fps = count(parsed, 'fps', 30);
+  const seconds = count(parsed, 'seconds', 10);
+  const intervals = (parsed.get('gop') ?? '15,30,60,120,250').split(',').map((value) => {
+    const gop = Number(value);
+    if (!Number.isFinite(gop) || gop <= 0) {
+      throw new Error(`--gop takes positive keyframe intervals, not ${JSON.stringify(value)}`);
+    }
+    return gop;
+  });
+  if (intervals.length < 2) {
+    throw new Error('--gop needs at least two keyframe intervals; one cannot show whether first output scales');
+  }
+  for (const codec of codecs) {
+    const latencies = [];
+    for (const gop of intervals) {
+      const accessUnits = await pacedAccessUnits(executable, { codec, gop, fps, seconds, width: 1280, height: 720 });
+      const stream = new PacedLiveStream(accessUnits, fps);
+      const report = await measure({
+        executable,
+        open: async () => stream,
+        feed: () => stream.play(),
+        fps,
+        results,
+        label: `${codec} gop=${gop}`,
+      });
+      judge(results, report);
+      if (report?.firstCodedAfterMs !== undefined) {
+        latencies.push({ gop, firstCodedAfterMs: report.firstCodedAfterMs });
+      }
+    }
+    const measured = latencies.map(({ firstCodedAfterMs }) => firstCodedAfterMs);
+    console.log(`${codec} first output by keyframe interval: ${JSON.stringify(latencies)}`);
     results.check(
-      spread <= FIRST_OUTPUT_BUDGET_MS,
-      `time to first output did not scale with the source keyframe interval (spread ${spread}ms)`,
+      latencies.length === intervals.length,
+      `every requested ${codec} keyframe interval produced a first coded frame (${latencies.length} of ${intervals.length})`,
+    );
+    const spread = measured.length > 1 ? Math.max(...measured) - Math.min(...measured) : undefined;
+    results.check(
+      spread !== undefined && spread <= FIRST_OUTPUT_SPREAD_MS,
+      `${codec} time to first output did not scale with the source keyframe interval` +
+        ` (spread ${spread ?? 'unmeasured'}ms of ${FIRST_OUTPUT_SPREAD_MS}ms)`,
     );
   }
 } else {
   const serial = required(parsed, 'serial');
   const storage = required(parsed, 'storage');
-  const fps = Number(parsed.get('fps') ?? 15);
-  const seconds = Number(parsed.get('seconds') ?? 20);
-  const prebuffer = Number(parsed.get('prebuffer') ?? 0);
+  const fps = count(parsed, 'fps', 15);
+  const seconds = count(parsed, 'seconds', 20);
+  const prebuffer = parsed.get('prebuffer') === undefined ? 0 : count(parsed, 'prebuffer', 0);
   const session = await openCameraSession(storage);
   try {
     const { actions } = await session.camera(serial);
@@ -551,4 +665,8 @@ if (parsed.get('paced') !== undefined) {
   }
 }
 
+results.unverified(
+  'this check measures delivery and latency only; that the coded stream carries the negotiated profile, level,' +
+    ' geometry, frame rate and bit-rate ceiling is judged by scripts/live-hap-stream-check.mjs',
+);
 results.summarize();

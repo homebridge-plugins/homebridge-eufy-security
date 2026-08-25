@@ -396,10 +396,10 @@ describe('live media adaptation', () => {
   });
 
   /**
-   * Measured live: an input option that discards analysed packets threw away the leading keyframe and made
-   * time to first coded frame scale with the source keyframe interval, from 0.5s to 8.7s across a 15-to-250
-   * frame GOP, while coding 50 of 300 fed access units. One option on one input caused all of it, so the
-   * rule is stated over every adapted input rather than pinned as one argument list.
+   * Measured at this seam with a discarding input option reinstated: time to first coded frame grew from
+   * 0.5s to 8.7s as the source keyframe interval grew from 15 to 250 frames, while 50 of 300 fed access units
+   * reached the coded output. One option on one input caused all of it, so the rule is stated over every
+   * adapted input rather than pinned as one argument list.
    */
   it('never asks any adapted input to discard what it analysed or to invent a timeline', async () => {
     const video = await liveSession();
@@ -431,25 +431,30 @@ describe('live media adaptation', () => {
    * The count is the only thing that catches a whole group of pictures being lost silently: a session that
    * drops frames still starts, still reports progress, and still produces a coded stream.
    */
-  it('writes every access unit it accepts to the adaptation, in order and unaltered', async () => {
-    const session = await liveSession();
-    await session.start();
-    const gop = [
-      KEYFRAME,
-      ...Array.from({ length: 249 }, (_, index) => ({
-        ...KEYFRAME,
-        keyframe: false,
-        data: Buffer.from([0, 0, 0, 1, 0x41, index >> 8, index & 0xff]),
-      })),
-    ];
-    for (const frame of gop) {
-      session.stream.video(frame);
-    }
+  it.each(['h264', 'h265'] as const)(
+    'writes every %s access unit it accepts to the adaptation, in order and unaltered',
+    async (codec) => {
+      const session = await liveSession();
+      await session.start();
+      const gop = [
+        { ...KEYFRAME, codec, data: Buffer.from([0, 0, 0, 1, codec === 'h265' ? 0x26 : 0x65]) },
+        ...Array.from({ length: 249 }, (_, index) => ({
+          ...KEYFRAME,
+          codec,
+          keyframe: false,
+          data: Buffer.from([0, 0, 0, 1, codec === 'h265' ? 0x02 : 0x41, index >> 8, index & 0xff]),
+        })),
+      ];
+      for (const frame of gop) {
+        session.stream.video(frame);
+      }
 
-    expect(session.children).toHaveLength(1);
-    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(gop.map(({ data }) => data)));
-    session.prepared.stop();
-  });
+      expect(session.children).toHaveLength(1);
+      expect(session.spawned[0]![session.spawned[0]!.indexOf('-f') + 1]).toBe(codec === 'h265' ? 'hevc' : 'h264');
+      expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(gop.map(({ data }) => data)));
+      session.prepared.stop();
+    },
+  );
 
   /**
    * A source that changes geometry cannot be coded by the running process, so the access units between the
