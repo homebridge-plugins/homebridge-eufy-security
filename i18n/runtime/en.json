@@ -47,6 +47,7 @@
   "log.homekit.cameraStreamingCapabilityUnavailable": "Camera live media is unavailable",
   "log.homekit.cameraTalkbackFailed": "Camera talkback stopped unexpectedly",
   "log.homekit.cameraTalkbackUnavailable": "Camera talkback is unavailable",
+  "log.homekit.cameraRecordingRefused": "Recording is unavailable because the camera is turned off",
   "log.homekit.cameraLiveSessionRefused": "Live view is unavailable because the camera is turned off",
   "log.homekit.contactCapabilityUnavailable": "Contact sensor information is unavailable",
   "log.homekit.invalidBatteryObservation": "A battery observation is invalid",

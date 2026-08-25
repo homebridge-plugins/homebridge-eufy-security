@@ -513,6 +513,92 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
   });
 
+  it('allowlists a live session a disabled camera answered without video, apart from a transport failure', () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info: vi.fn(), warn });
+    const serial = 'T8000P0000000000';
+
+    conditions.reportHomeKit(
+      {
+        code: 'camera-live-session-refused',
+        capability: 'camera',
+        member: 'live',
+        active: true,
+        reason: 'disabled-no-video',
+      },
+      [serial],
+    );
+    conditions.reportHomeKit(
+      {
+        code: 'camera-live-session-failed',
+        capability: 'camera',
+        member: 'live',
+        active: true,
+        reason: 'source-audio-only',
+      },
+      [serial],
+    );
+
+    expect(warn.mock.calls.map(([message]) => String(message).split('.')[0])).toEqual([
+      '[camera-live-session-refused] Live view is unavailable because the camera is turned off',
+      '[camera-live-session-failed] A live camera session ended without video',
+    ]);
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message)).map(({ code, reason }) => [code, reason])).toEqual([
+      ['camera-live-session-refused', 'disabled-no-video'],
+      ['camera-live-session-failed', 'source-audio-only'],
+    ]);
+    expect(JSON.stringify([warn.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
+  it('allowlists a recording refused for a disabled camera without device material', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    const serial = 'T8000P0000000000';
+
+    conditions.reportHomeKit(
+      {
+        code: 'camera-recording-refused',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: true,
+        reason: 'disabled',
+      },
+      [serial],
+    );
+    conditions.reportHomeKit(
+      {
+        code: 'camera-recording-refused',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[camera-recording-refused] Recording is unavailable because the camera is turned off',
+    );
+    expect(warn.mock.calls[0]![0]).toContain('Turn the camera on in the Eufy app');
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-recording-refused',
+      capability: 'camera',
+      member: 'recordFragments',
+      active: true,
+      reason: 'disabled',
+      summaryKey: 'log.homekit.cameraRecordingRefused',
+      actionKey: 'log.action.enableCamera',
+      affectedAccessoryCount: 1,
+    });
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
   it('allowlists a substituted camera image without device material', () => {
     const warn = vi.fn();
     const info = vi.fn();
@@ -722,6 +808,14 @@ describe('diagnostic conditions', () => {
       { debug },
       { adapter: 'arming.security-system', event: 'security-system-alarm', observation: 'valid' },
     );
+    reportHomeKitEvent(
+      { debug },
+      { adapter: 'camera.streaming', event: 'camera-enabled-changed', observation: 'valid' },
+    );
+    reportHomeKitEvent(
+      { debug },
+      { adapter: 'camera.streaming', event: 'camera-enabled-invented', observation: 'valid' },
+    );
 
     expect(debug).toHaveBeenNthCalledWith(
       1,
@@ -743,6 +837,17 @@ describe('diagnostic conditions', () => {
         observation: 'valid',
       }),
     );
+    expect(debug).toHaveBeenNthCalledWith(
+      3,
+      JSON.stringify({
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+      }),
+    );
+    expect(debug).toHaveBeenCalledTimes(3);
   });
 
   it('emits only allowlisted live video selections in debug output', () => {

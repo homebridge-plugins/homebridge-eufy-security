@@ -1296,6 +1296,7 @@ const MEMBERS = new Set([
   'mode',
   'open',
   'power',
+  'recordFragments',
   'snapshot',
   'snapshotLive',
   'snapshotStored',
@@ -1309,6 +1310,7 @@ const REASONS = new Set([
   'capability-not-supported',
   'disabled',
   'disabled-mid-session',
+  'disabled-no-video',
   'expired',
   'hot',
   'live-decoder-unavailable',
@@ -1330,6 +1332,7 @@ const REASONS = new Set([
   'rtcp-timeout',
   'sdk-fault',
   'source-acquisition-timeout',
+  'source-audio-only',
   'source-error',
   'source-stopped',
   'source-unavailable',
@@ -1364,6 +1367,7 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'motion.sensor': new Set(['motion-detection']),
   'arming.security-system': new Set(['arming-mode-changed', 'security-system-alarm']),
   'smart-light.lightbulb': new Set(['smart-light-state']),
+  'camera.streaming': new Set(['camera-enabled-changed']),
 };
 const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
 const HOMEKIT_LIVE_VIDEO_OPERATIONS = new Set(['start', 'reconfigure']);
@@ -1531,6 +1535,10 @@ const HOMEKIT_CONDITIONS = {
   },
   'camera-live-session-refused': {
     summaryKey: 'log.homekit.cameraLiveSessionRefused',
+    actionKey: 'log.action.enableCamera',
+  },
+  'camera-recording-refused': {
+    summaryKey: 'log.homekit.cameraRecordingRefused',
     actionKey: 'log.action.enableCamera',
   },
   'camera-snapshot-unavailable': {
