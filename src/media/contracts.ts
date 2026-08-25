@@ -175,14 +175,46 @@ export interface SnapshotAcquisitionScope {
   readonly serial: string;
 }
 
+/**
+ * Which acquisition left a camera with no image to present, in a bounded plugin-owned vocabulary.
+ *
+ * `no-acquisition` is the camera offering neither acquisition at all, so nothing can ever answer; it is
+ * also what an outcome this domain could not classify reports, because that is the only claim left that
+ * stays true. `no-retained-image` is a `Refresh` camera whose only acquisition is the live refresh it just
+ * started, so it has nothing yet rather than nothing ever. Every other reason names one acquisition and
+ * then either that the camera declines to offer it, the reason the SDK gave for refusing it, or that it
+ * failed without a reason of its own. Naming the acquisition and its cause together is what distinguishes
+ * an intermittently failing camera from a permanently unequipped one.
+ */
+export type SnapshotFailure =
+  | 'no-acquisition'
+  | 'no-retained-image'
+  | 'stored-unavailable'
+  | 'stored-failed'
+  | 'stored-not-observed'
+  | 'stored-pending'
+  | 'stored-download-failed'
+  | 'stored-invalid-image'
+  | 'live-unavailable'
+  | 'live-failed'
+  | 'live-no-keyframe'
+  | 'live-source-failed'
+  | 'live-undecodable-burst'
+  | 'live-decoder-unavailable';
+
 /** What HomeKit knows about a camera that changes how its snapshot must be presented. */
 export interface SnapshotPresentation {
   /** Whether the camera is enabled, when an admitted observation reports it, and nothing otherwise. */
   readonly enabled?: boolean;
   /** The latest explicit SDK availability state, and nothing when no authoritative observation exists. */
   readonly availability?: 'available' | 'unavailable';
-  /** Called when the packaged unavailable image was served in place of a camera image. */
-  onPlaceholder?(): void;
+  /**
+   * Called with the acquisition that left this camera without an image of its own, both when the packaged
+   * unavailable image was served in place of one and when no presentation could be served at all. A live
+   * refresh that fails later while the camera still has nothing retained reports through the same seam,
+   * because it explains the placeholder the camera is still showing.
+   */
+  onUnavailable?(failure: SnapshotFailure): void;
 }
 
 /** Snapshot acquisition requested without exposing its concrete media policy implementation. */

@@ -5,6 +5,7 @@ import { gunzipSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import type { SnapshotFailure } from '../../src/media/contracts.js';
 import {
   createDiagnosticLogger,
   createSdkLogger,
@@ -554,6 +555,54 @@ describe('diagnostic conditions', () => {
       actionKey: 'log.action.checkCameraSnapshot',
       affectedAccessoryCount: 1,
     });
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
+  it('attributes every bounded unanswered snapshot reason to one acquisition', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    /** Exhaustive by type, so a widened media vocabulary cannot reach the log unallowlisted and untested. */
+    const attributions = {
+      'no-acquisition': true,
+      'no-retained-image': true,
+      'stored-unavailable': true,
+      'stored-failed': true,
+      'stored-not-observed': true,
+      'stored-pending': true,
+      'stored-download-failed': true,
+      'stored-invalid-image': true,
+      'live-unavailable': true,
+      'live-failed': true,
+      'live-no-keyframe': true,
+      'live-source-failed': true,
+      'live-undecodable-burst': true,
+      'live-decoder-unavailable': true,
+    } satisfies Record<SnapshotFailure, true>;
+    const reasons = [...Object.keys(attributions), 'adapter-missing'];
+    const serial = 'T8000P0000000000';
+
+    for (const reason of reasons) {
+      conditions.reportHomeKit(
+        { code: 'camera-snapshot-unavailable', capability: 'camera', member: 'snapshot', active: true, reason },
+        [serial],
+      );
+    }
+    conditions.reportHomeKit(
+      {
+        code: 'camera-snapshot-unavailable',
+        capability: 'camera',
+        member: 'snapshot',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledTimes(reasons.length);
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual([...reasons, 'recovered']);
     expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
   });
 

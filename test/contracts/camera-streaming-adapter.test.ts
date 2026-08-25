@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 
 import type { AvailabilityObservation, CameraActions } from '@mega-yfue/eufy-sdk';
+import { LiveSnapshotUnavailableError, StoredSnapshotUnavailableError } from '@mega-yfue/eufy-sdk';
 import {
   Accessory,
   AudioBitrate,
@@ -730,7 +731,7 @@ describe('camera streaming bundle adapter', () => {
       capability: 'camera',
       member: 'snapshot',
       active: true,
-      reason: 'no-acquisition',
+      reason: 'no-retained-image',
     });
     expect(diagnose).toHaveBeenCalledWith({
       code: 'camera-snapshot-capability-unavailable',
@@ -776,7 +777,15 @@ describe('camera streaming bundle adapter', () => {
           .map(([condition]) => condition)
           .filter(({ code }) => code === 'camera-snapshot-unavailable'),
         label,
-      ).toEqual([]);
+      ).toEqual([
+        {
+          code: 'camera-snapshot-unavailable',
+          capability: 'camera',
+          member: 'snapshot',
+          active: true,
+          reason: 'no-acquisition',
+        },
+      ]);
     }
   });
 
@@ -987,6 +996,13 @@ describe('camera streaming bundle adapter', () => {
       active: true,
       reason: 'missing-evidence',
     });
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'camera-snapshot-unavailable',
+      capability: 'camera',
+      member: 'snapshot',
+      active: true,
+      reason: 'stored-unavailable',
+    });
   });
 
   it('diagnoses a selected snapshot policy without media adaptation', () => {
@@ -1106,13 +1122,283 @@ describe('camera streaming bundle adapter', () => {
       capability: 'camera',
       member: 'snapshot',
       active: true,
-      reason: 'no-acquisition',
+      reason: 'live-failed',
     });
     expect(observed).not.toHaveBeenCalledWith('camera-snapshot-unavailable');
 
     await expect(callSnapshot(controller.delegate)).resolves.toEqual(acquired);
     expect(observed).toHaveBeenCalledWith('camera-snapshot-unavailable');
     expect(snapshotStored).not.toHaveBeenCalled();
+  });
+
+  it('attributes an unanswered snapshot to the acquisition its selected mode requires', async () => {
+    for (const [mode, reason] of [
+      ['Cloud', 'stored-unavailable'],
+      ['Live', 'live-unavailable'],
+    ] as const) {
+      const target = new Accessory(
+        `Synthetic ${mode} unacquirable camera`,
+        uuid.generate(`synthetic-${mode}-unacquirable-camera`),
+      ) as unknown as PlatformAccessory;
+      const configureController = vi.spyOn(target, 'configureController');
+      const diagnose = vi.fn();
+
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn() }) } as never,
+        evidence: snapshotEvidence(),
+        accessory: target,
+        hap: HAP,
+        liveMedia: { prepare: vi.fn() },
+        snapshotMedia: new SnapshotAcquisition(retainedImages()),
+        snapshotMode: mode,
+        audioEnabled: false,
+        diagnose,
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+      const controller = configureController.mock.calls[0][0] as CameraController & {
+        delegate: CameraStreamingDelegate;
+      };
+
+      await expect(callSnapshot(controller.delegate), mode).resolves.toEqual(PACKAGED_PLACEHOLDER);
+      expect(
+        diagnose.mock.calls
+          .map(([condition]) => condition)
+          .filter(({ code }) => code === 'camera-snapshot-unavailable'),
+        mode,
+      ).toEqual([
+        { code: 'camera-snapshot-unavailable', capability: 'camera', member: 'snapshot', active: true, reason },
+      ]);
+    }
+  });
+
+  it('attributes a refused snapshot request to the snapshot adaptation it never had', async () => {
+    const target = new Accessory(
+      'Synthetic unadapted refresh camera',
+      uuid.generate('synthetic-unadapted-refresh-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ snapshotStored: vi.fn(), snapshotLive: vi.fn(), live: vi.fn() }),
+      } as never,
+      evidence: snapshotEvidence('snapshotStored', 'snapshotLive'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMode: 'Refresh',
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).rejects.toThrow('camera snapshot adaptation is unavailable');
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-snapshot-unavailable'),
+    ).toEqual([
+      {
+        code: 'camera-snapshot-unavailable',
+        capability: 'camera',
+        member: 'snapshot',
+        active: true,
+        reason: 'adapter-missing',
+      },
+    ]);
+  });
+
+  it('attributes an unanswered snapshot to the typed reason the SDK acquisition reports', async () => {
+    const cases = [
+      ...(['not-observed', 'pending', 'download-failed', 'invalid-image'] as const).map((reason) => ({
+        mode: 'Cloud' as const,
+        member: 'snapshotStored' as const,
+        rejection: new StoredSnapshotUnavailableError(reason, 'synthetic stored refusal'),
+        expected: `stored-${reason}`,
+      })),
+      ...(['no-keyframe', 'source-failed', 'undecodable-burst', 'decoder-unavailable'] as const).map((reason) => ({
+        mode: 'Live' as const,
+        member: 'snapshotLive' as const,
+        rejection: new LiveSnapshotUnavailableError(reason, 'synthetic live refusal'),
+        expected: `live-${reason}`,
+      })),
+    ];
+
+    for (const { mode, member, rejection, expected } of cases) {
+      const target = new Accessory(
+        `Synthetic ${expected} camera`,
+        uuid.generate(`synthetic-${expected}-camera`),
+      ) as unknown as PlatformAccessory;
+      const configureController = vi.spyOn(target, 'configureController');
+      const acquisition = vi.fn().mockRejectedValue(rejection);
+      const diagnose = vi.fn();
+
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: { sn: SNAPSHOT_SERIAL, camera: () => ({ [member]: acquisition, live: vi.fn() }) } as never,
+        evidence: snapshotEvidence(member),
+        accessory: target,
+        hap: HAP,
+        liveMedia: { prepare: vi.fn() },
+        snapshotMedia: new SnapshotAcquisition(retainedImages()),
+        snapshotMode: mode,
+        audioEnabled: false,
+        diagnose,
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+      const controller = configureController.mock.calls[0][0] as CameraController & {
+        delegate: CameraStreamingDelegate;
+      };
+
+      await expect(callSnapshot(controller.delegate), expected).resolves.toEqual(PACKAGED_PLACEHOLDER);
+      expect(acquisition, expected).toHaveBeenCalledOnce();
+      expect(
+        diagnose.mock.calls
+          .map(([condition]) => condition)
+          .filter(({ code }) => code === 'camera-snapshot-unavailable'),
+        expected,
+      ).toEqual([
+        {
+          code: 'camera-snapshot-unavailable',
+          capability: 'camera',
+          member: 'snapshot',
+          active: true,
+          reason: expected,
+        },
+      ]);
+    }
+  });
+
+  it('attributes an unanswered Refresh snapshot to the stored acquisition that failed', async () => {
+    const target = new Accessory(
+      'Synthetic failed stored refresh camera',
+      uuid.generate('synthetic-failed-stored-refresh-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const snapshotStored = vi.fn<() => Promise<Buffer>>().mockRejectedValue(new Error('synthetic stored failure'));
+    const images = retainedImages();
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ snapshotStored, live: vi.fn() }) } as never,
+      evidence: snapshotEvidence('snapshotStored'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(images),
+      snapshotMode: 'Refresh',
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
+    expect(snapshotStored).toHaveBeenCalledOnce();
+    expect(images.write).not.toHaveBeenCalled();
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-snapshot-unavailable'),
+    ).toEqual([
+      {
+        code: 'camera-snapshot-unavailable',
+        capability: 'camera',
+        member: 'snapshot',
+        active: true,
+        reason: 'stored-failed',
+      },
+    ]);
+  });
+
+  it('attributes an intermittent Refresh camera to the live refresh that failed while nothing is retained', async () => {
+    const target = new Accessory(
+      'Synthetic intermittent refresh camera',
+      uuid.generate('synthetic-intermittent-refresh-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const snapshotLive = vi
+      .fn<() => Promise<{ jpeg: Buffer; width: number; height: number }>>()
+      .mockRejectedValue(new Error('synthetic live refresh failure'));
+    const images = retainedImages();
+    const diagnose = vi.fn();
+    const reported = () =>
+      diagnose.mock.calls
+        .map(([condition]) => condition)
+        .filter(({ code }) => code === 'camera-snapshot-unavailable')
+        .map(({ reason }) => reason);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ snapshotLive, live: vi.fn() }) } as never,
+      evidence: snapshotEvidence('snapshotLive'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(images),
+      snapshotMode: 'Refresh',
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(reported()).toContain('live-failed'));
+    expect(reported().at(-1)).toBe('live-failed');
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
+    expect(snapshotLive).toHaveBeenCalledOnce();
+    expect(reported().at(-1)).toBe('live-failed');
+    expect(images.write).not.toHaveBeenCalled();
+  });
+
+  it('keeps a retained image authoritative when a background live refresh fails', async () => {
+    const target = new Accessory(
+      'Synthetic retained refresh camera',
+      uuid.generate('synthetic-retained-refresh-camera'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const retained = jpeg('synthetic retained refresh image');
+    const snapshotLive = vi
+      .fn<() => Promise<{ jpeg: Buffer; width: number; height: number }>>()
+      .mockRejectedValue(new Error('synthetic live refresh failure'));
+    const images = retainedImages([[SNAPSHOT_SERIAL, retained]]);
+    const diagnose = vi.fn();
+    const observed = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ snapshotLive, live: vi.fn() }) } as never,
+      evidence: snapshotEvidence('snapshotLive'),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      snapshotMedia: new SnapshotAcquisition(images),
+      snapshotMode: 'Refresh',
+      audioEnabled: false,
+      diagnose,
+      observed,
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await expect(callSnapshot(controller.delegate)).resolves.toEqual(retained);
+    await vi.waitFor(() => expect(snapshotLive).toHaveBeenCalledOnce());
+    expect(observed).toHaveBeenCalledWith('camera-snapshot-unavailable');
+    expect(
+      diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-snapshot-unavailable'),
+    ).toEqual([]);
   });
 
   it('advertises exactly the profile, level, and resolution matrix a live run may select', () => {

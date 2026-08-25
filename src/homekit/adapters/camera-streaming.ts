@@ -26,6 +26,7 @@ import type {
   RecordingMediaSource,
   RecordingOutcome,
   SnapshotAcquisitionScope,
+  SnapshotFailure,
   SnapshotMediaAdapter,
   SnapshotMediaSource,
   SnapshotMode,
@@ -324,7 +325,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image, and consume nothing at all while an admitted observation reports the camera disabled',
       identityEffect: 'Stored snapshots use the stable camera controller without creating another service',
       diagnostics:
-        'Cloud never calls live acquisition; retained real imagery precedes typed offline presentation, while a request with neither serves the packaged unavailable image and latches one bounded reason until a later real or intentional presentation withdraws it',
+        "Cloud never calls live acquisition; retained real imagery precedes typed offline presentation, while a request with neither serves the packaged unavailable image and latches one bounded reason naming the acquisition that left it unanswered, and the SDK's own refusal reason where it gave one, until a later real or intentional presentation withdraws it",
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -337,6 +338,22 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves the packaged unavailable placeholder when no admitted acquisition can answer',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'attributes an unanswered snapshot to the acquisition its selected mode requires',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'attributes an unanswered snapshot to the typed reason the SDK acquisition reports',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'attributes a refused snapshot request to the snapshot adaptation it never had',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'attributes an unanswered Refresh snapshot to the stored acquisition that failed',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -366,7 +383,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         'Official camera snapshot requests consume a fresh SDK live still in Live mode and one rate-limited refresh in Refresh mode',
       identityEffect: 'Live snapshots use the stable camera controller without creating another service',
       diagnostics:
-        'Live never calls stored acquisition and Refresh reports missing live acquisition only when stored acquisition is also unavailable; failed acquisition preserves the last successful real image before selecting a typed placeholder',
+        "Live never calls stored acquisition and Refresh reports missing live acquisition only when stored acquisition is also unavailable; failed acquisition preserves the last successful real image before selecting a typed placeholder, and a live refresh that fails while nothing is retained is reported with the SDK's own reason as the acquisition that left the camera without an image",
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -379,6 +396,19 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'serves the placeholder for a failed Live acquisition without falling back to stored imagery',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'attributes an unanswered snapshot to the typed reason the SDK acquisition reports',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior:
+            'attributes an intermittent Refresh camera to the live refresh that failed while nothing is retained',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'keeps a retained image authoritative when a background live refresh fails',
         },
         {
           file: 'test/contracts/last-successful-image.test.ts',
@@ -1032,8 +1062,11 @@ interface CameraMediaSource extends LiveMediaSource, SnapshotMediaSource, Record
 /** Why live view is unavailable for a camera an admitted observation reports as disabled. */
 type LiveAdmissionRefusal = 'disabled' | 'disabled-mid-session';
 
-/** Why a packaged image was served in place of a camera image. */
-type SnapshotSubstitution = 'no-acquisition';
+/**
+ * Why a snapshot request went unanswered: the acquisition the media policy names, or the snapshot
+ * adaptation this plugin never composed, which no acquisition could report because none was reached.
+ */
+type SnapshotUnavailability = SnapshotFailure | 'adapter-missing';
 
 /** Everything one attachment supplies to the stable camera delegate, rebound on each reconciliation. */
 interface LiveCameraBinding {
@@ -1048,7 +1081,7 @@ interface LiveCameraBinding {
   readonly reportRelease: () => void;
   readonly reportTalkback: (outcome: TalkbackOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
-  readonly reportSnapshot: (substitution?: SnapshotSubstitution) => void;
+  readonly reportSnapshot: (failure?: SnapshotUnavailability) => void;
   readonly reportSelection?: AdapterAttachmentContext['trace'];
 }
 
@@ -1077,33 +1110,41 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
 
   /**
    * Answers a snapshot request from the camera's own acquisition policy, passing it the admitted enablement
-   * observation because a camera that is off is presented rather than photographed. When the policy produces
-   * nothing, the packaged unavailable image is served and one bounded reason is latched until a later real
-   * image withdraws it, so a camera that only ever shows a placeholder is visible in the log rather than only
-   * in the Home app. A disabled camera latches nothing: its image is the intended presentation, and live view
-   * already reports why it cannot be watched.
+   * observation because a camera that is off is presented rather than photographed.
+   *
+   * A request no camera image could answer latches exactly one bounded reason naming the acquisition that
+   * left it unanswered, and keeps it until a later real image withdraws it, so an intermittently failing
+   * camera is distinguishable in the log from one that is permanently unequipped: the intermittent one
+   * latches and clears repeatedly, while the unequipped one latches once. The reason is latched whether a
+   * placeholder was substituted or the request failed outright, and a live refresh that fails afterwards
+   * supersedes it while the camera still has nothing to show.
+   *
+   * A disabled camera latches nothing: its image is the intended presentation, and live view already reports
+   * why it cannot be watched. A camera with no snapshot adaptation at all latches the missing adaptation
+   * itself, because no acquisition was reached to report anything about.
    */
   handleSnapshotRequest(_request: never, callback: (error?: Error, buffer?: Buffer) => void): void {
     const snapshotMedia = this.binding.snapshotMedia;
     if (!snapshotMedia) {
+      this.binding.reportSnapshot('adapter-missing');
       callback(new Error('camera snapshot adaptation is unavailable'));
       return;
     }
-    let substituted = false;
+    let unanswered = false;
     const enabled = this.binding.enablement();
     const availability = this.binding.availability();
     void snapshotMedia
       .acquire(this.snapshotScope, this.binding.source, this.binding.snapshotMode, {
         ...(enabled === undefined ? {} : { enabled }),
         ...(availability === undefined ? {} : { availability }),
-        onPlaceholder: () => {
-          substituted = true;
-          this.binding.reportSnapshot('no-acquisition');
+        onUnavailable: (failure) => {
+          unanswered = true;
+          this.binding.reportSnapshot(failure);
         },
       })
       .then(
         (buffer) => {
-          if (!substituted) {
+          if (!unanswered) {
             this.binding.reportSnapshot();
           }
           callback(undefined, buffer);

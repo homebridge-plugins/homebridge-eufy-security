@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 
+import type { LiveSnapshotUnavailableReason, StoredSnapshotUnavailableReason } from '@mega-yfue/eufy-sdk';
+import { LiveSnapshotUnavailableError, StoredSnapshotUnavailableError } from '@mega-yfue/eufy-sdk';
+
 import type {
   SnapshotAcquisitionScope,
+  SnapshotFailure,
   SnapshotMediaAdapter,
   SnapshotMediaSource,
   SnapshotMode,
@@ -60,6 +64,66 @@ function packagedImage(name: PackagedImage): Buffer | undefined {
 /** Which acquisition produced a retained image, which decides whether a later image may replace it. */
 export type SnapshotProvenance = 'stored-only' | 'live';
 
+/**
+ * One acquisition outcome that left a request unanswered, carrying which acquisition it was rather than a
+ * message a consumer would have to parse. The cause stays as the message, because a bounded vocabulary is
+ * the only thing that may leave this domain.
+ */
+class UnansweredSnapshot extends Error {
+  constructor(readonly failure: SnapshotFailure, message: string) {
+    super(message);
+  }
+}
+
+/**
+ * The plugin reason for each reason the SDK's stored acquisition reports.
+ *
+ * The SDK owns why its own acquisition could not answer, so these are its words under a prefix naming the
+ * acquisition rather than a plugin re-interpretation of them. The tables are exhaustive by type, so an SDK
+ * that declares a new reason fails this build; one that reports a reason outside its declared union at
+ * runtime is treated as the acquisition having failed without saying more.
+ */
+const STORED_FAILURES = {
+  'not-observed': 'stored-not-observed',
+  pending: 'stored-pending',
+  'download-failed': 'stored-download-failed',
+  'invalid-image': 'stored-invalid-image',
+} as const satisfies Record<StoredSnapshotUnavailableReason, SnapshotFailure>;
+
+/** The plugin reason for each reason the SDK's live still acquisition reports. */
+const LIVE_FAILURES = {
+  'no-keyframe': 'live-no-keyframe',
+  'source-failed': 'live-source-failed',
+  'undecodable-burst': 'live-undecodable-burst',
+  'decoder-unavailable': 'live-decoder-unavailable',
+} as const satisfies Record<LiveSnapshotUnavailableReason, SnapshotFailure>;
+
+/**
+ * Why the stored acquisition produced no usable image. An SDK refusal carries its own bounded reason; any
+ * other outcome, including bytes this plugin refused to accept as an image, is the acquisition having
+ * failed without saying more than that.
+ */
+function storedFailure(error: unknown): SnapshotFailure {
+  return error instanceof StoredSnapshotUnavailableError && Object.hasOwn(STORED_FAILURES, error.reason)
+    ? STORED_FAILURES[error.reason]
+    : 'stored-failed';
+}
+
+/** Why the live still acquisition produced no usable image, under the same rule as the stored one. */
+function liveFailure(error: unknown): SnapshotFailure {
+  return error instanceof LiveSnapshotUnavailableError && Object.hasOwn(LIVE_FAILURES, error.reason)
+    ? LIVE_FAILURES[error.reason]
+    : 'live-failed';
+}
+
+/**
+ * Which acquisition left a request unanswered. An outcome this domain did not classify is reported as no
+ * acquisition having answered, because that is the only claim it can still make truthfully.
+ */
+function unansweredBy(error: unknown): SnapshotFailure {
+  return error instanceof UnansweredSnapshot ? error.failure : 'no-acquisition';
+}
+
 /** The plugin-owned last successful image required by every snapshot acquisition policy. */
 export interface LastSuccessfulImages {
   read(serial: string): Buffer | undefined;
@@ -74,6 +138,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
   private readonly pendingLive = new WeakMap<object, Promise<Buffer>>();
   private readonly liveRefreshedAtMs = new Map<string, number>();
   private readonly retentionGenerations = new Map<string, number>();
+  private readonly failedLive = new Map<string, SnapshotFailure>();
 
   constructor(
     private readonly images?: LastSuccessfulImages,
@@ -90,9 +155,14 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
    *
    * After a permitted acquisition fails, a last successful real image wins over an explicit offline
    * presentation. Offline is shown only from a typed unavailable observation with no retained image; all
-   * other empty states use the packaged unavailable image and announce that substitution through
-   * `onPlaceholder`. A missing or malformed packaged image falls through to the next permitted presentation
-   * or leaves the request failing rather than serving bytes HomeKit cannot decode.
+   * other empty states use the packaged unavailable image. A missing or malformed packaged image leaves the
+   * request failing rather than serving bytes HomeKit cannot decode.
+   *
+   * Every request no camera image could answer names the acquisition that left it unanswered through
+   * `onUnavailable`, whether a placeholder was substituted or nothing could be served at all. An intended
+   * disabled or offline presentation names nothing, because that image is the answer rather than a
+   * substitution for a missing one; a disabled camera whose packaged image this package does not carry
+   * therefore fails silently here, because the fault is the installation rather than the camera.
    */
   acquire(
     scope: SnapshotAcquisitionScope,
@@ -118,11 +188,11 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
           return offline;
         }
       }
+      presentation.onUnavailable?.(unansweredBy(error));
       const unavailable = this.presentable('unavailable');
       if (!unavailable) {
         throw error;
       }
-      presentation.onPlaceholder?.();
       return unavailable;
     });
   }
@@ -137,6 +207,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
 
   discard(serial: string): void {
     this.retentionGenerations.set(serial, this.retentionGeneration(serial) + 1);
+    this.failedLive.delete(serial);
     this.images?.discard?.(serial);
   }
 
@@ -147,6 +218,11 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
         this.retentionGenerations.set(serial, this.retentionGeneration(serial) + 1);
       }
     }
+    for (const serial of this.failedLive.keys()) {
+      if (!current.has(serial)) {
+        this.failedLive.delete(serial);
+      }
+    }
     this.images?.reconcile?.(current);
   }
 
@@ -154,6 +230,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     for (const serial of this.retentionGenerations.keys()) {
       this.retentionGenerations.set(serial, this.retentionGeneration(serial) + 1);
     }
+    this.failedLive.clear();
     this.images?.discardAll?.();
   }
 
@@ -163,6 +240,13 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     return image && isBoundedJpeg(image) ? image : undefined;
   }
 
+  /**
+   * The acquisition each mode is entitled to, rejecting with the one that left the request unanswered.
+   *
+   * A `Refresh` camera with nothing retained and no stored acquisition is answered by the live refresh it
+   * just started, so it has no retained image yet; once that refresh has failed, the failure it reported is
+   * the honest reason for every later request until one succeeds.
+   */
   private acquired(
     scope: SnapshotAcquisitionScope,
     source: SnapshotMediaSource,
@@ -170,22 +254,49 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     presentation: SnapshotPresentation,
   ): Promise<Buffer> {
     if (mode === 'Cloud') {
-      return this.stored(scope, source) ?? Promise.reject(new Error('stored camera snapshot is unavailable'));
+      return (
+        this.stored(scope, source) ??
+        Promise.reject(new UnansweredSnapshot('stored-unavailable', 'stored camera snapshot is unavailable'))
+      );
     }
     if (mode === 'Live') {
-      return this.live(scope, source) ?? Promise.reject(new Error('live camera snapshot is unavailable'));
+      return (
+        this.live(scope, source) ??
+        Promise.reject(new UnansweredSnapshot('live-unavailable', 'live camera snapshot is unavailable'))
+      );
     }
     if (mode === 'Refresh') {
       if (presentation.availability !== 'unavailable') {
-        this.refreshLiveWhenDue(scope, source);
+        this.refreshLiveWhenDue(scope, source, presentation);
       }
       const retained = this.images?.read(scope.serial);
       if (retained) {
         return Promise.resolve(retained);
       }
-      return this.stored(scope, source) ?? Promise.reject(new Error('no camera snapshot image is available'));
+      return (
+        this.stored(scope, source) ??
+        Promise.reject(
+          new UnansweredSnapshot(
+            this.pendingRefreshFailure(scope, source),
+            'no camera snapshot image is available',
+          ),
+        )
+      );
     }
     throw new TypeError(`unsupported snapshot acquisition mode: ${mode satisfies never}`);
+  }
+
+  /**
+   * Whether a `Refresh` camera has nothing yet, nothing since its live still acquisition failed, or
+   * nothing ever. The remembered failure is the acquisition's own, whichever call made it: a still a warm
+   * live session was asked for is the same acquisition a refresh performs, so its failure explains a later
+   * unanswered request just as well.
+   */
+  private pendingRefreshFailure(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): SnapshotFailure {
+    if (!source.snapshotLive) {
+      return 'no-acquisition';
+    }
+    return this.failedLive.get(scope.serial) ?? 'no-retained-image';
   }
 
   private stored(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<Buffer> | undefined {
@@ -198,6 +309,9 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       .then(snapshotStored)
       .then((jpeg) => {
         return this.retain(scope, jpeg, 'stored-only', generation);
+      })
+      .catch((error: unknown) => {
+        throw new UnansweredSnapshot(storedFailure(error), errorMessage(error));
       });
   }
 
@@ -214,7 +328,14 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     const pending = Promise.resolve()
       .then(snapshotLive)
       .then(({ jpeg }) => {
-        return this.retain(scope, jpeg, 'live', generation);
+        const retained = this.retain(scope, jpeg, 'live', generation);
+        this.failedLive.delete(scope.serial);
+        return retained;
+      })
+      .catch((error: unknown) => {
+        const failure = liveFailure(error);
+        this.failedLive.set(scope.serial, failure);
+        throw new UnansweredSnapshot(failure, errorMessage(error));
       })
       .finally(() => {
         if (this.pendingLive.get(scope.identity) === pending) {
@@ -245,8 +366,18 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     return this.retentionGenerations.get(serial) ?? 0;
   }
 
-  /** Refresh acquires live imagery only on request, at most once every two minutes, and never polls. */
-  private refreshLiveWhenDue(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): void {
+  /**
+   * Refresh acquires live imagery only on request, at most once every two minutes, and never polls.
+   *
+   * A refresh that fails while the camera still has nothing retained explains the placeholder that camera
+   * is showing, so it is reported through the request that started it. A camera whose retained image
+   * already answers its requests reports nothing, because a stale real image is still a camera image.
+   */
+  private refreshLiveWhenDue(
+    scope: SnapshotAcquisitionScope,
+    source: SnapshotMediaSource,
+    presentation: SnapshotPresentation,
+  ): void {
     const previous = this.liveRefreshedAtMs.get(scope.serial);
     if (previous !== undefined && Date.now() - previous < LIVE_REFRESH_INTERVAL_MS) {
       return;
@@ -259,6 +390,15 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       return;
     }
     this.liveRefreshedAtMs.set(scope.serial, Date.now());
-    refresh.catch(() => undefined);
+    refresh.catch((error: unknown) => {
+      if (!this.images?.read(scope.serial)) {
+        presentation.onUnavailable?.(unansweredBy(error));
+      }
+    });
   }
+}
+
+/** The cause of one failed acquisition, kept inside this domain as a message rather than a claim. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
