@@ -13,6 +13,7 @@ Start with one reproducible failure and the smallest relevant evidence.
 - [Node.js compatibility](/troubleshooting/node-compatibility)
 - [Collecting diagnostics safely](/troubleshooting/collecting-diagnostics)
 - [Validating a local plugin build](/troubleshooting/live-plugin-validation)
+- [Qualifying the live authentication handoff](/troubleshooting/live-authentication-handoff)
 
 Legacy debug buttons, separate plugin/library logs, camera presets, and reset screenshots do not
 describe V5.

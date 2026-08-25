@@ -151,6 +151,10 @@ AES-256-GCM encrypted envelope; it has no plaintext evidence export or upload ro
   the persisted storage root so it cannot rotate or stage the records a running plugin owns. That is a
   qualification path, never a runtime one: nothing in `src/` may take that shortcut, and the one tool that
   writes to a device is excluded from the published package.
+- Qualifying the refusal of a second owner is the one case that must target the live storage root, because a
+  copy holds no live lease and so cannot demonstrate refusal at all. Such a tool may attempt an ownership
+  lease and nothing else: it constructs no SDK client, and it writes only the bakery-guard record its own
+  attempt requires. Opening a second SDK owner still requires a copy.
 
 ## Media boundary
 

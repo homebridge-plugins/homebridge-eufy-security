@@ -642,12 +642,14 @@ describe('packed plugin', () => {
       });
       expect(
         result.files.map((file) => file.path).filter((path) => path.startsWith('scripts/')),
-        'maintainer tooling that writes to a real device must not reach an installed plugin',
+        'maintainer tooling that writes to a real device or a live storage root must not reach an installed plugin',
       ).not.toEqual(
         expect.arrayContaining([
           'scripts/eufy-camera-power.mjs',
           'scripts/live-hap-disabled-camera-check.mjs',
           'scripts/live-talkback-check.mjs',
+          'scripts/authentication-handoff-evidence.mjs',
+          'scripts/qualify-authentication-handoff.sh',
         ]),
       );
       expect(Object.keys(runtimeMessages).every((key) => key.startsWith('log.'))).toBe(true);

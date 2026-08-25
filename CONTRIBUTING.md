@@ -91,6 +91,9 @@ archives.
 Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
 a camera, so every script uses wired cameras unless `--battery` is passed.
 
+[scripts/README.md](./scripts/README.md) indexes every maintainer script, says which ones write and
+which are observation-only, and points at the procedure for each.
+
 ## Pull requests
 
 Keep the body concise and developer-focused:
