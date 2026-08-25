@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -147,6 +147,39 @@ describe('account SDK ownership', () => {
 
     if (acquired.state === 'owner') {
       await acquired.lease.release();
+    }
+  });
+
+  it('reaps the temporary files a hard-killed writer left behind without disturbing the guard', async () => {
+    const root = await temporaryRoot();
+    const ownership = new AccountOwnership(root);
+    const first = await ownership.acquire('synthetic-account', 'runtime');
+    expect(first.state).toBe('owner');
+    if (first.state === 'owner') {
+      await first.lease.release();
+    }
+
+    const [scope] = await readdir(root);
+    const operations = join(root, scope, 'operations');
+    const abandoned = join(operations, 'abandoned-guard.json.4242.synthetic.tmp');
+    const abandonedLease = join(root, scope, 'owner.json.4243.synthetic.tmp');
+    const inFlight = join(operations, 'in-flight.json.4244.synthetic.tmp');
+    await writeFile(abandoned, '');
+    await writeFile(abandonedLease, '{"partial":');
+    await writeFile(inFlight, '');
+    const stale = new Date(Date.now() - 7 * 86_400_000);
+    await utimes(abandoned, stale, stale);
+    await utimes(abandonedLease, stale, stale);
+
+    const second = await ownership.acquire('synthetic-account', 'runtime');
+    expect(second.state).toBe('owner');
+
+    expect(await readdir(operations)).toEqual(['in-flight.json.4244.synthetic.tmp']);
+    expect(await readdir(join(root, scope))).toEqual(expect.arrayContaining(['operations', 'owner.json']));
+    expect(await readdir(join(root, scope))).not.toContain('owner.json.4243.synthetic.tmp');
+
+    if (second.state === 'owner') {
+      await expect(second.lease.release()).resolves.toEqual({ state: 'stopped' });
     }
   });
 });

@@ -1,5 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
@@ -10,6 +21,57 @@ import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../dev
 
 const DEFAULT_MAX_RECORD_BYTES = 1024 * 1024;
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
+
+/**
+ * How long a temporary file may exist before it is certainly abandoned.
+ *
+ * One atomic write creates its temporary file and renames it within the same turn, so a surviving
+ * temporary file is orders of magnitude older than any write in progress.
+ */
+const ABANDONED_TEMPORARY_FILE_MS = 60_000;
+
+/** The suffix every atomic write in this package gives its temporary file. */
+const TEMPORARY_SUFFIX = '.tmp';
+
+/**
+ * Removes the temporary files interrupted atomic writes left behind, returning how many were removed.
+ *
+ * An atomic write deletes its own temporary file when the write fails, but a process killed between
+ * creating and renaming it never runs that cleanup, so the file would otherwise remain forever and
+ * every later directory scan would pay for it. Age alone decides: a temporary file belonging to a live
+ * write is milliseconds old, so anything past the staleness window belongs to a process that is gone.
+ * Deciding by embedded process id instead would have to trust a name and survive process-id reuse.
+ */
+export function reapAbandonedTemporaryFiles(
+  directory: string,
+  now: () => number = Date.now,
+  olderThanMs: number = ABANDONED_TEMPORARY_FILE_MS,
+): number {
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith(TEMPORARY_SUFFIX)) {
+      continue;
+    }
+    const path = join(directory, entry);
+    try {
+      if (now() - statSync(path).mtimeMs <= olderThanMs) {
+        continue;
+      }
+      rmSync(path, { force: true });
+      removed += 1;
+    } catch {
+      continue;
+    }
+  }
+  return removed;
+}
 
 interface ActiveGenerationRecord {
   account: string;
@@ -308,6 +370,7 @@ export class AccountSessionPersistence {
   private async prepareRoot(): Promise<void> {
     await mkdir(this.root, { mode: 0o700, recursive: true });
     await chmod(this.root, 0o700);
+    reapAbandonedTemporaryFiles(this.root);
   }
 
   private async readActiveGeneration(): Promise<ActiveGenerationRecord | null> {

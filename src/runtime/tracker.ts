@@ -2,6 +2,7 @@ import { chmodSync, closeSync, mkdirSync, openSync, readSync, renameSync, rmSync
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
+import { reapAbandonedTemporaryFiles } from '../account/persistence.js';
 import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 import type { RuntimeState } from '../diagnostics.js';
 
@@ -160,6 +161,7 @@ export class RuntimeTracker {
   }
 
   start(state: RuntimeState = 'starting', update: RuntimeTrackerUpdate = {}): boolean {
+    reapAbandonedTemporaryFiles(dirname(this.path), this.now);
     if (!this.update(state, update)) {
       return false;
     }

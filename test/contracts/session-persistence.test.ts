@@ -1,11 +1,11 @@
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { PersistedPush, PersistedSession } from '@mega-yfue/eufy-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AccountSessionPersistence } from '../../src/account/persistence.js';
+import { AccountSessionPersistence, reapAbandonedTemporaryFiles } from '../../src/account/persistence.js';
 
 const roots: string[] = [];
 
@@ -148,5 +148,39 @@ describe('account session persistence', () => {
       const mode = (await stat(join(entry.parentPath, entry.name))).mode & 0o777;
       expect(mode).toBe(entry.isDirectory() ? 0o700 : 0o600);
     }
+  });
+});
+
+describe('abandoned atomic-write residue', () => {
+  it('removes only temporary files old enough to have outlived their writer', async () => {
+    const root = await temporaryRoot();
+    const now = Date.parse('2026-08-25T12:00:00.000Z');
+
+    await writeFile(join(root, 'owner.json'), '{}');
+    await writeFile(join(root, 'owner.json.4242.abandoned.tmp'), '');
+    await writeFile(join(root, 'tracker.json.4243.also-abandoned.tmp'), '{"partial":');
+    await writeFile(join(root, 'owner.json.4244.in-flight.tmp'), '');
+    await utimes(
+      join(root, 'owner.json.4242.abandoned.tmp'),
+      new Date(now - 7 * 86_400_000),
+      new Date(now - 7 * 86_400_000),
+    );
+    await utimes(join(root, 'tracker.json.4243.also-abandoned.tmp'), new Date(now - 120_000), new Date(now - 120_000));
+    await utimes(join(root, 'owner.json.4244.in-flight.tmp'), new Date(now - 500), new Date(now - 500));
+
+    expect(reapAbandonedTemporaryFiles(root, () => now)).toBe(2);
+    expect((await readdir(root)).sort()).toEqual(['owner.json', 'owner.json.4244.in-flight.tmp']);
+
+    expect(reapAbandonedTemporaryFiles(root, () => now)).toBe(0);
+  });
+
+  it('never removes a published record and tolerates a missing directory', async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, 'owner.json'), '{}');
+    await writeFile(join(root, 'guard.json'), '{}');
+
+    expect(reapAbandonedTemporaryFiles(root, () => Date.parse('2030-01-01T00:00:00.000Z'))).toBe(0);
+    expect((await readdir(root)).sort()).toEqual(['guard.json', 'owner.json']);
+    expect(reapAbandonedTemporaryFiles(join(root, 'absent'))).toBe(0);
   });
 });
