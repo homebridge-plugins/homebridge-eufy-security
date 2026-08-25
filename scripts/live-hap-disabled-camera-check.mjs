@@ -1,38 +1,31 @@
 /**
  * Live HomeKit qualification of a disabled camera.
  *
- * A camera that is turned off has no video to give. The plugin therefore refuses a live session for it at
- * `SetupEndpoints`, which is the only refusal point HAP offers, and ends an active session when its
- * admitted enablement observation later reads disabled, instead of letting a viewer watch nothing. This
- * script proves both on the wire, in one pairing, against a real camera:
+ * A camera that is turned off has no video to give. The plugin therefore presents it to HomeKit as
+ * disabled, refuses a live session for it at `SetupEndpoints`, which is the only refusal point HAP offers,
+ * and ends an active session when its admitted enablement observation later reads disabled, instead of
+ * letting a viewer watch nothing. This script proves all three on the wire, in one pairing, against a real
+ * camera:
  *
- *   1. a session streams while the camera is enabled;
+ *   1. a session streams while the camera is enabled, and the accessory presents it as not disabled;
  *   2. turning the camera off ends that session, releases its adaptation, and returns the accessory to an
  *      available streaming status, with the plugin recording the bounded refusal reason and NO media
  *      failure reason — which is what distinguishes the gate firing from the source dying;
- *   3. a new session is refused while the camera stays off, opening no transport at all. Only HAP's `ERROR`
+ *   3. the accessory then presents the camera as disabled on its Camera Operating Mode service, which is
+ *      what stops Apple Home offering a tile whose stream would only be refused. What Apple Home renders
+ *      from that state is not observable here and stays a human check;
+ *   4. a new session is refused while the camera stays off, opening no transport at all. Only HAP's `ERROR`
  *      status proves the gate: a `BUSY` answer means a session was still holding that stream management
  *      service and proves nothing, so it is reported as unverified rather than as a pass;
- *   4. snapshots stay reachable while the camera is off, because presentation for a disabled camera lives
+ *   5. snapshots stay reachable while the camera is off, because presentation for a disabled camera lives
  *      on the snapshot path rather than behind the stream management `Active` characteristic;
- *   5. turning the camera back on admits a session again, and the delay before it does is measured rather
- *      than assumed.
+ *   6. turning the camera back on admits a session again and presents it as not disabled again, and the
+ *      delay before each is measured rather than assumed.
  *
- * The detection delay in step 2 is a property of the SDK's observation freshness, not of the plugin: the
- * SDK reports no event when a camera is switched off, so the plugin re-reads the observation while a
- * session is active and can only act once that read changes. This script measures that delay; it does not
- * assert a bound on it, because the bound belongs to whatever the measurement shows.
- *
- * Measured on a wired camera, steps 2 to 5 do not pass today, and the reason is upstream: a long-lived SDK
- * client's read-through refresh never updates the enablement observation
- * ([eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47)), so the value this plugin re-reads never
- * moves inside a session. The qualification those steps belong to is tracked as issue #1043, gated on that
- * upstream fix; a failing run here is that gate, not a defect in this script.
- *
- * The same switch-off IS observed after a plugin restart, which is how the refusal
- * half is qualified today: turn the camera off, restart, then run `live-hap-stream-check.mjs` against it and
- * expect an `ERROR` answer plus one `camera-live-session-refused` condition. Keep running this script as
- * the regression that will start passing when the upstream observation moves.
+ * The detection delay is a property of how the change reaches the plugin, not of the gate: this run's write
+ * is issued by a second SDK client, so the plugin learns it from its own cloud poll or from the supervision
+ * read rather than from the change event a write of its own would announce. The delay is measured; no bound
+ * is asserted, because the bound belongs to whatever the measurement shows.
  *
  * DEVICE WRITE. Unlike every other live script here, this one turns a real camera off and on again
  * through the typed SDK, so it needs explicit maintainer approval and a camera named by serial. It always
@@ -66,6 +59,7 @@ import {
   STREAMING_IN_USE,
   accessoryModel,
   adaptationProcesses,
+  adaptationProcessRoles,
   advertisedVideo,
   appendedLines,
   conditionCodes,
@@ -74,6 +68,7 @@ import {
   logMark,
   measuredWindow,
   observations,
+  presentedDisabled,
   options,
   refuseUnadvertised,
   reportAdvertisedVideo,
@@ -107,15 +102,27 @@ const { HttpClient } = await import(controllerModule).catch(() => {
 const results = observations('live disabled-camera qualification');
 const check = results.check;
 
-/** Adaptation processes the plugin owns, never printing their arguments, which carry SRTP key material. */
-function observeAdaptation(label, expectedCount) {
+/**
+ * Adaptation processes the plugin owns, judged by role rather than by a raw count, because a session that
+ * negotiates audio legitimately runs a second process for it. Arguments are never printed: they carry SRTP
+ * key material.
+ */
+function observeAdaptation(label, { video, audio }) {
   const processes = adaptationProcesses(homebridgePid);
   if (processes === undefined) {
     results.unverified(`${label} adaptation processes=not-observed (pass --homebridge-pid to verify them)`);
     return;
   }
-  console.log(`${label} adaptation processes=${processes.length}`);
-  check(processes.length === expectedCount, `${label} ran exactly ${expectedCount} adaptation process(es)`);
+  const roles = adaptationProcessRoles(processes);
+  console.log(
+    `${label} adaptation processes=${processes.length}` +
+      ` video=${roles.video.length} audio=${roles.audio.length} return-audio=${roles.returnAudio.length}` +
+      ` other=${roles.other.length}`,
+  );
+  check(
+    roles.video.length === video && roles.audio.length === audio && roles.other.length === 0,
+    `${label} ran exactly ${video} outbound video and ${audio} outbound audio adaptation(s)`,
+  );
 }
 
 /**
@@ -189,6 +196,10 @@ try {
   await streaming.start(selection);
   const firstPacket = await waitFor(() => streaming.measured.report.packets > 0, FIRST_PACKET_TIMEOUT_MS);
   check(firstPacket !== undefined, 'the enabled camera streamed before the camera was turned off');
+  check(
+    (await presentedDisabled(client, accessory)) === false,
+    'the enabled camera presented itself to HomeKit as not disabled',
+  );
   const enabledSnapshot = await snapshot(accessory, 'while enabled');
   const early = streaming.measured.report;
   const observedFrom = Date.now();
@@ -201,7 +212,7 @@ try {
     expected: selection,
     session: established,
   });
-  observeAdaptation('enabled', 1);
+  observeAdaptation('enabled', { video: 1, audio: 1 });
 
   console.log(`${shortSerial(serial)} accepting power off`);
   const disabledAt = Date.now();
@@ -223,7 +234,17 @@ try {
       streaming.measured.report.packets === stopped.packets,
       'no further video arrived once the session had been ended',
     );
-    observeAdaptation('after-disable', 0);
+    observeAdaptation('after-disable', { video: 0, audio: 0 });
+  }
+
+  const presented = await waitFor(
+    async () => (await presentedDisabled(client, accessory)) === true,
+    detectTimeoutMs,
+    STATUS_POLL_INTERVAL_MS,
+  );
+  check(presented !== undefined, 'the accessory presented the switched-off camera to HomeKit as disabled');
+  if (presented !== undefined) {
+    console.log(`presented as disabled ${Date.now() - disabledAt}ms after the power-off command was acknowledged`);
   }
 
   const refused = new LiveSession(client, accessory, address);
@@ -243,7 +264,7 @@ try {
     (await refused.streamingStatus()) === STREAMING_AVAILABLE,
     'a refused setup left the stream management available rather than reserved',
   );
-  observeAdaptation('refused', 0);
+  observeAdaptation('refused', { video: 0, audio: 0 });
 
   const disabledSnapshot = await snapshot(accessory, 'while disabled');
   if (enabledSnapshot === undefined) {
@@ -274,6 +295,10 @@ try {
     ADMISSION_POLL_INTERVAL_MS,
   );
   check(readmitted !== undefined, `the plugin admitted a session again within ${admitTimeoutMs / 1_000}s`);
+  check(
+    (await presentedDisabled(client, accessory)) === false,
+    'the re-enabled camera presented itself to HomeKit as not disabled again',
+  );
   if (admitted) {
     console.log(`session admitted again ${Date.now() - enabledAt}ms after the power-on command`);
     await admitted.start(selection);
@@ -282,7 +307,7 @@ try {
     check((await admitted.streamingStatus()) === STREAMING_IN_USE, 'the re-admitted session reported an in-use status');
     await admitted.end();
     await delay(TEARDOWN_GRACE_MS);
-    observeAdaptation('after-end', 0);
+    observeAdaptation('after-end', { video: 0, audio: 0 });
   }
 
   judgeConditions(instanceLog);

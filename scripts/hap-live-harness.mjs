@@ -25,6 +25,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 
 export const CAMERA_RTP_STREAM_MANAGEMENT = '00000110-0000-1000-8000-0026BB765291';
+export const CAMERA_OPERATING_MODE = '0000021A-0000-1000-8000-0026BB765291';
+export const MANUALLY_DISABLED = '00000227';
 export const BATTERY = '00000096-0000-1000-8000-0026BB765291';
 export const ACCESSORY_INFORMATION = '0000003E';
 export const MODEL = '00000021';
@@ -330,6 +332,30 @@ export function selectCameras(accessories, { battery = false, aid, serial } = {}
     return cameras.filter((accessory) => accessory.aid === Number(aid));
   }
   return battery ? cameras : cameras.filter((accessory) => !hasBattery(accessory));
+}
+
+/**
+ * What one camera presents to HomeKit as its manually disabled state, read from the accessory's own Camera
+ * Operating Mode service. `undefined` distinguishes an accessory that publishes no such state at all — no
+ * operating mode service, or one without the optional characteristic — from one that publishes `false`.
+ *
+ * An accessory carrying more than one operating mode service is refused rather than answered: HomeKit
+ * presents one camera state, so a second service is a defect a caller comparing against a boolean would
+ * record as a plain disagreement.
+ */
+export async function presentedDisabled(client, accessory) {
+  const services = accessory.services.filter((service) => service.type.toUpperCase() === CAMERA_OPERATING_MODE);
+  if (services.length > 1) {
+    throw new Error(`accessory ${accessory.aid} carries ${services.length} camera operating mode services`);
+  }
+  const characteristic = services[0]?.characteristics.find((entry) =>
+    entry.type.toUpperCase().startsWith(MANUALLY_DISABLED),
+  );
+  if (!characteristic) {
+    return undefined;
+  }
+  const response = await client.getCharacteristics([`${accessory.aid}.${characteristic.iid}`]);
+  return Boolean(response.characteristics[0].value);
 }
 
 /** Camera RTP stream management services of one accessory, one per concurrent session it accepts. */

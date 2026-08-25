@@ -67,7 +67,11 @@ still reports the session as set up, that the answered port stays bound, and tha
 exists, then proves a start written after that whole window still streams. It also abandons a prepared
 session and closes the controller connection, which must release the reservation and refuse a later start.
 
-`scripts/live-hap-disabled-camera-check.mjs` qualifies a camera that has no video to give, and
+`scripts/live-hap-disabled-camera-check.mjs` qualifies a camera that has no video to give: it proves the
+accessory presents the camera as disabled once it is switched off, refuses a session for it, ends one that
+was already running, and reverses both when the camera comes back on. What Apple Home renders from that
+presented state is not observable from a controller and remains a human check.
+
 `scripts/live-hksv-check.mjs` qualifies negotiated HomeKit Secure Video output measured on the adapted
 fragments. `scripts/live-talkback-check.mjs` qualifies the controller-to-camera return-audio path.
 

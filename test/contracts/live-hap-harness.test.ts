@@ -20,6 +20,7 @@ const {
   isStructuralJpeg,
   judgeWindow,
   logMark,
+  presentedDisabled,
   refuseUnadvertised,
   retainedSnapshotName,
   selectedVideoConfiguration,
@@ -254,6 +255,36 @@ describe('observed live conditions', () => {
     expect(appendedLines(mark)).toHaveLength(2);
     expect(conditionCodes(appendedLines(mark))).toEqual(new Set(['camera-live-session-refused']));
     expect(logMark(undefined)).toBeUndefined();
+  });
+
+  it('reads the presented disabled state from the accessory, distinguishing published from unpublished', async () => {
+    const operatingMode = (characteristics: unknown[]) => ({
+      type: '0000021a-0000-1000-8000-0026bb765291',
+      characteristics,
+    });
+    const client = {
+      getCharacteristics: vi.fn(async (addresses: string[]) => ({
+        characteristics: [{ value: addresses[0] === '7.11' ? 1 : 0 }],
+      })),
+    };
+
+    await expect(
+      presentedDisabled(client, { aid: 7, services: [operatingMode([{ type: '00000227', iid: 11 }])] }),
+    ).resolves.toBe(true);
+    await expect(
+      presentedDisabled(client, { aid: 7, services: [operatingMode([{ type: '00000227', iid: 12 }])] }),
+    ).resolves.toBe(false);
+    await expect(
+      presentedDisabled(client, { aid: 7, services: [operatingMode([{ type: '0000021b', iid: 13 }])] }),
+    ).resolves.toBeUndefined();
+    await expect(presentedDisabled(client, { aid: 7, services: [] })).resolves.toBeUndefined();
+    await expect(
+      presentedDisabled(client, {
+        aid: 7,
+        services: [operatingMode([{ type: '00000227', iid: 11 }]), operatingMode([])],
+      }),
+    ).rejects.toThrow('2 camera operating mode services');
+    expect(client.getCharacteristics).toHaveBeenCalledTimes(2);
   });
 
   it('separates outbound video, outbound audio, and return-audio adaptation', () => {
