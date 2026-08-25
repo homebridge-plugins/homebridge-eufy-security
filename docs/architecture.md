@@ -260,34 +260,83 @@ consulted; setting it false would make presentation for a disabled camera unreac
 path is deliberately not gated for the same reason.
 
 Enablement is the only observation available for this. The SDK exposes privacy mode as a write with no
-readback — nothing reports it back — and on the camera families whose power rides the privacy envelope the
-privacy wire is not aliased into enablement either, so a camera in privacy mode is not distinguishable here,
-and on those families a camera that has been switched off may not be either. That gap is
-[eufy-sdk#48](https://github.com/mega-yfue/eufy-sdk/issues/48).
+readback — nothing reports it back — and the privacy wire is not aliased into enablement, so a camera in
+privacy mode is not distinguishable here. That gap is
+[eufy-sdk#48](https://github.com/mega-yfue/eufy-sdk/issues/48). Enablement itself is a value the SDK now
+states it stands behind on every family it supports, because it writes the param it reads on all of them
+rather than diverting some to the privacy envelope
+([eufy-sdk#79](https://github.com/mega-yfue/eufy-sdk/pull/79)); this plugin consumes that statement rather
+than restating it, and declines any member the SDK withdraws it for.
 
 A camera whose manifest omits the observation, reports it as something other than a boolean read, or
 faults while reading it is treated as unobserved and streams exactly as it would without the gate:
 refusing on an absent observation would withdraw live view from a working camera, which is the worse
-failure of the two.
+failure of the two. A member the SDK names in its unreflected-members statement is declined for the same
+reason: there the value is readable but does not track the write it accepts, and a reading that can silently
+disagree with the device must neither refuse live view nor publish a camera as switched off. Declining means
+the same thing everywhere — the gate does not refuse and nothing is published — because a value too
+untrustworthy to publish is also too untrustworthy to withdraw a camera on. No capability module in the
+pinned SDK declares the flag that produces that statement, so nothing is declined today, and a family whose
+read stopped tracking its write would be declined the moment the SDK said so.
 
-Mid-session the plugin re-reads that observation while a session is active, rather than waiting for an
-event, because no event exists: the camera capability declares none, the property-change list the SDK
-computes when it applies params is discarded by every caller, and the registry republishes only when a
-device is added, removed, or gains a capability. Re-reading is cheap — the read is served from memory and
-its own freshness policy, not the tick, bounds how often it reaches the network — and it is armed only
-while a session exists, so an idle camera is never polled. When the observation says disabled, HomeKit is
-told the session ended, because a force-stop does not reach the delegate, and the same single release path
-stops adaptation and the SDK consumer.
+HomeKit is also told, and not only refused. Without that, Apple Home offers a tile for a camera with no
+video to give, a tap starts a request the plugin then refuses, and a user sees a camera that fails rather
+than one that is off. The disabled state is published on the Camera Operating Mode service, and exactly one
+such service may exist on an accessory: a camera configured for HomeKit Secure Video already carries one
+that the HAP recording controller owns, and HAP documents attaching an optional characteristic to it rather
+than adding a second service, while a camera with no recording carries none and this plugin adds it under
+its own stable key. The two cannot coexist, because HAP identifies a service by type and subtype and the
+controller's own carries an empty subtype: a plugin-owned service surviving from a run without recording
+makes the controller's own service throw on attach, so it is withdrawn before the controller is configured.
+The presented state is presentation and the refusal is policy; neither replaces the other, and both read the
+same observation.
 
-What that mechanism cannot do is invent the observation's freshness. Measured on a wired camera: turning
-it off is visible to a newly constructed SDK client about thirty seconds later and to a restarted plugin
-immediately, but a long-lived client's read-through refresh never updated the value at all — the plugin
-still read the camera as enabled after four minutes and many reads. So a session already streaming when
-the camera is switched off ends today only if the device volunteers the parameter over its realtime wire.
-The refusal path, which reads the observation as it stood when the registry was built, is unaffected and is
-proven on the wire. The remaining half is an SDK observation gap rather than a policy question, tracked
-upstream as [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) and qualified here by
-[#1043](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1043), which is gated on it.
+`ManuallyDisabled` is read-only, notify-capable, and persisted by nothing, so it is both pushed and
+answered: pushed on attachment, on every announced enablement change, and from every read the live gate
+already makes, and answered from the observation whenever HomeKit reads it. Both halves are load-bearing,
+because an announcement is not guaranteed. The SDK now announces a change — a push once a write it issued
+has been read back off the device, and a poll event where a cloud poll saw the value move — but measured
+live, a camera switched off by another client produced no event for this one at all, and only this plugin's
+own re-read saw it. Nothing else on this accessory drives that service: the two states HomeKit requires it
+to carry are seeded active, because this camera does stream and does answer snapshots, and neither is this
+bundle's to own.
+
+Mid-session the plugin still re-reads the observation while a session is active, as the backstop for a
+change no announcement reached. Re-reading is cheap — the read is served from memory and its own freshness
+policy, not the tick, bounds how often it reaches the network — and it is armed only while a session exists,
+so an idle camera is never polled. When the observation says disabled, HomeKit is told the session ended,
+because a force-stop does not reach the delegate, and the same single release path stops adaptation and the
+SDK consumer.
+
+A session the camera did accept and then answered with audio and never a video frame is reported as that
+camera being off rather than as a transport failure, when its observation says it is off. That is the case
+where a reading taken before the session could have been stale, and the SDK's own `audio-only` start stage
+is the corroboration: measured directly against a switched-off camera, the source accepted the start,
+delivered 313 audio frames and no video frame across the whole warm-up window, and reported
+`warm-timeout` at `audio-only` after ten attempts. The attribution is held by contract rather than by a live
+run, because the plugin observes the camera as disabled within about five seconds of the change while the
+SDK's warm-up deadline is twenty, so the race that produces it is not reachable on demand.
+
+The freshness this rests on is now measured rather than assumed, and it changed: a write is acknowledged
+before it converges, the reading follows within about half a second, and the SDK emits its change event once
+per landed write ([eufy-sdk#79](https://github.com/mega-yfue/eufy-sdk/pull/79)). End to end on a wired
+camera, with the switch thrown by a second SDK client so nothing was announced to the plugin: the streaming
+session ended 12.6 s after the power-off was acknowledged, the accessory presented the camera as disabled
+17.7 s after it, a later setup was refused with HAP's `ERROR` status while snapshots stayed reachable, and a
+session was admitted again 11.6 s after power-on with the presented state following. The mid-session half was
+formerly gated on [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) and its qualification,
+[#1043](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1043), now passes end to end.
+What no controller can observe is what Apple Home renders from the presented state, which stays a human
+check.
+
+One reading is still acted on directly, deliberately. The upstream advice is not to treat a single stale
+reading as authority for withdrawing a camera, and the reading can lag: a write made elsewhere is confirmed
+through a cloud read measured at up to about six seconds behind. No second read or debounce is required
+before acting, because what acting costs is bounded — the camera is presented as off and a session is
+refused, both reversed by the next reading, and no accessory, service, or capability evidence is withdrawn —
+while requiring corroboration would delay every real switch-off by a whole supervision period. The
+corroboration the SDK does offer, its `audio-only` start stage, is used where it exists: to name the reason,
+after a session the camera answered without video.
 
 ### Live adaptation input timeline
 
