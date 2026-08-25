@@ -35,18 +35,28 @@ second remote login, and that a real fleet discovers completely.
 - A **throwaway Homebridge instance**. This procedure replaces the active Eufy account of whatever
   instance it runs against, so it must not run against a production service. The wizard refuses a
   production storage root outright.
+- A **guest account that no live service is using.** This is the prerequisite most easily got wrong, and
+  the wizard cannot enforce it.
+
+  Authenticating an account anywhere invalidates the session every other instance holds for it. The
+  server rejects the older token, the SDK clears the persisted session, and that instance comes back as
+  `authentication-required` with `session.json` gone. Stopping the other instance does not prevent this:
+  the invalidation is sequential, not concurrent.
+
+  So qualifying with the same account your service uses costs you a fresh interactive login on that
+  service afterwards. Use a **second** guest account, distinct from the one your service authenticated,
+  and the qualification leaves it untouched.
 - **Every other Homebridge instance stopped.** An ownership lease lives inside one storage root, so two
   instances with different roots cannot refuse each other the account even when they share one Eufy
   account. Authenticating while another instance holds that account's session creates two realtime
-  owners, and the session the other instance restored can be invalidated underneath it. The wizard
-  checks this before provisioning and again before the login, and refuses rather than warns.
+  owners. The wizard checks this before provisioning and again before the login, and refuses rather than
+  warns.
 
   ```bash
   sudo systemctl stop homebridge     # or: hb-service stop
   ```
 
-  Start it again when the qualification finishes. If you would rather leave your service running, use a
-  second guest account instead, distinct from the one your service authenticated.
+  Start it again when the qualification finishes.
 - A built checkout. The evidence harness imports the shipped ownership implementation from `dist/`,
   because a reimplementation would not qualify the lease the plugin actually takes.
 
