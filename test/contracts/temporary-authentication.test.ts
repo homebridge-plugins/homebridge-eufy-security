@@ -7,7 +7,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseConfig } from '../../src/configuration.js';
 import type { CompleteDeviceSnapshot } from '../../src/device/snapshot.js';
 import {
+  observationOnlyAuthenticationClient,
   TemporaryAuthentication,
+  type AuthenticatingSdkClient,
   type TemporaryAuthenticationClient,
   type TemporaryAuthenticationClientOptions,
 } from '../../src/account/temporary-authentication.js';
@@ -585,5 +587,140 @@ describe('temporary authentication', () => {
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
+  });
+});
+
+/**
+ * SDK operations the interactive authentication flow must never reach. `setProperty`, `renameDevice`,
+ * `reboot`, and `routeControlRaw` change device state; the rest reach account or transport surfaces the
+ * handoff has no business touching.
+ */
+const FORBIDDEN_SDK_OPERATIONS = [
+  'setProperty',
+  'renameDevice',
+  'reboot',
+  'routeControlRaw',
+  'p2pQuery',
+  'megaRequest',
+  'setPollInterval',
+  'logout',
+  'clearSession',
+  'getProductDataPoint',
+  'getDeviceParamList',
+] as const;
+
+const PERMITTED_SDK_MEMBERS = [
+  'disconnect',
+  'getDevice',
+  'getDevices',
+  'login',
+  'off',
+  'on',
+  'solveCaptcha',
+  'submitVerifyCode',
+] as const;
+
+function recordingSdkClient() {
+  const accessed = new Set<string>();
+  const forbidden = Object.fromEntries(FORBIDDEN_SDK_OPERATIONS.map((name) => [name, vi.fn(async () => undefined)]));
+  const surface = {
+    ...forbidden,
+    login: vi.fn(async () => ({ status: 'captcha', image: 'data:image/png;base64,c3ludGhldGlj', retry: false })),
+    solveCaptcha: vi.fn(async () => ({
+      status: 'ok',
+      session: { userId: 'synthetic-user', authToken: 'synthetic-token', raw: {} },
+    })),
+    submitVerifyCode: vi.fn(async () => ({
+      status: 'ok',
+      session: { userId: 'synthetic-user', authToken: 'synthetic-token', raw: {} },
+    })),
+    disconnect: vi.fn(async () => undefined),
+    on: vi.fn(),
+    off: vi.fn(),
+    getDevices: vi.fn(async () => [{ sn: 'synthetic-serial' }]),
+    getDevice: vi.fn(async () => ({
+      describe: () => ({
+        sn: 'synthetic-serial',
+        name: 'Synthetic Sensor',
+        model: 'T8910',
+        modelName: 'Synthetic Sensor',
+        codec: 'sensor',
+        source: 'inferred',
+        bound: true,
+        capabilities: ['contact'],
+        details: [],
+      }),
+    })),
+  };
+  const client = new Proxy(surface, {
+    get(target, property, receiver) {
+      if (typeof property === 'string') {
+        accessed.add(property);
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  }) as unknown as AuthenticatingSdkClient;
+  return { accessed, client, forbidden, surface };
+}
+
+describe('observation-only authentication client', () => {
+  it('exposes only the authentication and discovery operations of a full SDK client', async () => {
+    const { accessed, client, forbidden } = recordingSdkClient();
+
+    const narrowed = observationOnlyAuthenticationClient(client);
+    expect(Object.keys(narrowed).sort()).toEqual([
+      'disconnect',
+      'discover',
+      'login',
+      'solveCaptcha',
+      'submitVerifyCode',
+    ]);
+
+    await narrowed.login();
+    await narrowed.solveCaptcha('1234');
+    await narrowed.submitVerifyCode('654321');
+    await expect(narrowed.discover()).resolves.toMatchObject({ version: 1, complete: true });
+    await narrowed.disconnect();
+
+    expect([...accessed].sort()).toEqual([...PERMITTED_SDK_MEMBERS]);
+    for (const [name, operation] of Object.entries(forbidden)) {
+      expect(operation, name).not.toHaveBeenCalled();
+    }
+  });
+
+  it('performs no device write across a complete captcha authentication and discovery flow', async () => {
+    const { accessed, client, forbidden, surface } = recordingSdkClient();
+    const stores = {
+      account: 'guest@example.invalid',
+      session: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      push: { load: () => null, save: vi.fn(), clear: vi.fn() },
+      configuration: { save: vi.fn() },
+      snapshot: { save: vi.fn() },
+      commit: vi.fn(async () => undefined),
+      discard: vi.fn(async () => undefined),
+    };
+    const authentication = new TemporaryAuthentication(
+      {
+        acquire: vi.fn(async () => ({
+          state: 'owner' as const,
+          lease: { release: vi.fn(async () => ({ state: 'stopped' as const })) },
+          recovered: false,
+        })),
+      },
+      { stage: vi.fn(async () => stores) },
+      () => observationOnlyAuthenticationClient(client),
+      { flowTimeoutMs: 1_000, cleanupTimeoutMs: 100 },
+    );
+
+    await expect(authentication.start(authenticationInput())).resolves.toMatchObject({ status: 'captcha' });
+    await expect(authentication.submitCaptcha('1234')).resolves.toEqual({ status: 'restart-required' });
+
+    expect(surface.getDevices).toHaveBeenCalledOnce();
+    expect(stores.snapshot.save).toHaveBeenCalledOnce();
+    for (const operation of FORBIDDEN_SDK_OPERATIONS) {
+      expect(accessed.has(operation), operation).toBe(false);
+      expect(forbidden[operation], operation).not.toHaveBeenCalled();
+    }
+    expect([...accessed].every((member) => (PERMITTED_SDK_MEMBERS as readonly string[]).includes(member))).toBe(true);
   });
 });

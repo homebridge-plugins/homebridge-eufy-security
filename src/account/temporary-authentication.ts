@@ -1,7 +1,11 @@
 import type { FcmStore, LoginResult, SessionStore } from '@mega-yfue/eufy-sdk';
 
 import type { EufyConfig } from '../configuration.js';
-import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
+import {
+  discoverCompleteDeviceSnapshot,
+  type CompleteDeviceSnapshot,
+  type DiscoveryClient,
+} from '../device/snapshot.js';
 import type { AccountOwnerEvidence, AccountReleaseResult } from './ownership.js';
 
 const FLOW_TIMEOUT = Symbol('flow-timeout');
@@ -30,6 +34,30 @@ export interface TemporaryAuthenticationClient {
 export type TemporaryAuthenticationClientFactory = (
   options: TemporaryAuthenticationClientOptions,
 ) => TemporaryAuthenticationClient;
+
+/** The complete SDK surface an interactive authentication flow is permitted to reach. */
+export interface AuthenticatingSdkClient extends DiscoveryClient {
+  login(): Promise<LoginResult>;
+  solveCaptcha(answer: string): Promise<LoginResult>;
+  submitVerifyCode(code: string): Promise<LoginResult>;
+  disconnect(): Promise<void>;
+}
+
+/**
+ * Narrows a full SDK client to the observation-only surface of an interactive authentication flow.
+ *
+ * The returned client exposes no persistent write, momentary action, rename, reboot, or raw transport
+ * operation, so authenticating and discovering an account cannot change device state.
+ */
+export function observationOnlyAuthenticationClient(client: AuthenticatingSdkClient): TemporaryAuthenticationClient {
+  return {
+    login: () => client.login(),
+    solveCaptcha: (answer) => client.solveCaptcha(answer),
+    submitVerifyCode: (code) => client.submitVerifyCode(code),
+    discover: () => discoverCompleteDeviceSnapshot(client),
+    disconnect: () => client.disconnect(),
+  };
+}
 
 interface TemporaryLease {
   release(): Promise<AccountReleaseResult>;

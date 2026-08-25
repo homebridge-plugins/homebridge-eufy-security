@@ -10,7 +10,8 @@ export interface DiscoveryDevice {
   describe(): DeviceManifest;
 }
 
-interface DiscoveryClient<T extends DiscoveryDevice = DiscoveryDevice> {
+/** The observation-only SDK surface a complete inventory pass is permitted to reach. */
+export interface DiscoveryClient<T extends DiscoveryDevice = DiscoveryDevice> {
   on(event: 'error', listener: (error: Error) => void): unknown;
   off(event: 'error', listener: (error: Error) => void): unknown;
   getDevices(): Promise<readonly { sn: string }[]>;

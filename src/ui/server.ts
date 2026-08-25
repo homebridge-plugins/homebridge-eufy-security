@@ -6,6 +6,7 @@ import { EufyMega } from '@mega-yfue/eufy-sdk';
 import { AccountOwnership } from '../account/ownership.js';
 import { AccountSessionPersistence } from '../account/persistence.js';
 import {
+  observationOnlyAuthenticationClient,
   TemporaryAuthentication,
   type TemporaryAuthenticationClientFactory,
   type TemporaryAuthenticationResult,
@@ -21,7 +22,6 @@ import {
   type DiagnosticsReproductionMode,
   type DiagnosticsUiEvent,
 } from '../diagnostics.js';
-import { discoverCompleteDeviceSnapshot } from '../device/snapshot.js';
 import { PersistedLastSuccessfulImages } from '../media/last-successful-image.js';
 import { RuntimeTracker } from '../runtime/tracker.js';
 import { resolveStorageRoot } from '../storage.js';
@@ -54,7 +54,13 @@ function requiredString(value: unknown, maximumLength: number): string | undefin
   return typeof value === 'string' && value.length > 0 && value.length <= maximumLength ? value : undefined;
 }
 
-function parseStartPayload(value: unknown): TemporaryAuthenticationInput {
+/**
+ * Validates a browser-submitted authentication start payload inside the custom-UI process.
+ *
+ * Every rejection raises the same generic message so no submitted credential is echoed back to the
+ * browser or into an error path that a diagnostic could record.
+ */
+export function parseAuthenticationStart(value: unknown): TemporaryAuthenticationInput {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RequestError('Invalid authentication request', { status: 400 });
   }
@@ -89,7 +95,12 @@ function parseStartPayload(value: unknown): TemporaryAuthenticationInput {
   }
 }
 
-function parseAnswer(value: unknown, key: 'answer' | 'code'): string {
+/**
+ * Validates one browser-submitted captcha answer or two-factor code inside the custom-UI process.
+ *
+ * Every rejection raises the same generic message so no submitted challenge answer is echoed back.
+ */
+export function parseAuthenticationAnswer(value: unknown, key: 'answer' | 'code'): string {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RequestError('Invalid authentication continuation', { status: 400 });
   }
@@ -168,7 +179,7 @@ export function parseDiagnosticsUiEvent(value: unknown): DiagnosticsUiEvent {
 
 /** Creates the production SDK client without enabling realtime ownership. */
 export const createTemporaryAuthenticationClient: TemporaryAuthenticationClientFactory = (options) =>
-  temporaryClient(
+  observationOnlyAuthenticationClient(
     new EufyMega({
       email: options.account,
       password: options.password,
@@ -180,16 +191,6 @@ export const createTemporaryAuthenticationClient: TemporaryAuthenticationClientF
       storedSnapshotCache: false,
     }),
   );
-
-function temporaryClient(client: EufyMega): ReturnType<TemporaryAuthenticationClientFactory> {
-  return {
-    login: () => client.login(),
-    solveCaptcha: (answer) => client.solveCaptcha(answer),
-    submitVerifyCode: (code) => client.submitVerifyCode(code),
-    discover: () => discoverCompleteDeviceSnapshot(client),
-    disconnect: () => client.disconnect(),
-  };
-}
 
 /** Homebridge custom-UI child process that exclusively owns interactive authentication. */
 export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
@@ -263,18 +264,24 @@ export class EufyAuthenticationUiServer extends HomebridgePluginUiServer {
         },
         this.runtimeTracker,
       );
-      return await this.authentication.start(parseStartPayload(payload));
+      return await this.authentication.start(parseAuthenticationStart(payload));
     } finally {
       this.startPending = false;
     }
   }
 
   private continueCaptcha(payload: unknown): Promise<TemporaryAuthenticationResult> {
-    return this.authentication?.submitCaptcha(parseAnswer(payload, 'answer')) ?? Promise.resolve({ status: 'failed' });
+    return (
+      this.authentication?.submitCaptcha(parseAuthenticationAnswer(payload, 'answer')) ??
+      Promise.resolve({ status: 'failed' })
+    );
   }
 
   private continueTwoFactor(payload: unknown): Promise<TemporaryAuthenticationResult> {
-    return this.authentication?.submitTwoFactor(parseAnswer(payload, 'code')) ?? Promise.resolve({ status: 'failed' });
+    return (
+      this.authentication?.submitTwoFactor(parseAuthenticationAnswer(payload, 'code')) ??
+      Promise.resolve({ status: 'failed' })
+    );
   }
 
   private async closeAuthentication(): Promise<TemporaryAuthenticationResult> {
