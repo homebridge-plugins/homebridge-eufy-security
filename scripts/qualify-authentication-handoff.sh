@@ -309,6 +309,23 @@ check() {
   fi
 }
 
+# judge "question" — an explicit yes/no gate for an acceptance criterion.
+#
+# Unlike confirm, this has no default. A criterion must never be recorded as failed because someone
+# pressed Enter on a prompt whose default answer happened to mean failure.
+judge() {
+  local reply=""
+  while true; do
+    printf '  %s? %s%s [yes/no] ' "$YELLOW" "$1" "$RESET"
+    read -r reply || true
+    case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+      y | yes) return 0 ;;
+      n | no) return 1 ;;
+      *) note "answer yes or no — this decides an acceptance criterion" ;;
+    esac
+  done
+}
+
 banner "Qualify the live authentication handoff (issue #1024)"
 
 # ── Stage 1 ───────────────────────────────────────────────────────────────
@@ -489,7 +506,7 @@ step "Then skim the same files for anything else resembling the password."
 say ""
 note "the password rests deliberately, in cleartext, in the persisted account"
 note "configuration and in config.json — both owner-only. That is by design, not a leak."
-confirm "Did you search both logs and find no credential or challenge answer?" \
+judge "Did you search both logs and find no credential or challenge answer?" \
   && RESULTS+=("PASS AC1 maintainer searched the logs for the challenge answer") \
   || RESULTS+=("FAIL AC1 maintainer found credential material in the logs")
 
@@ -547,7 +564,7 @@ say ""
 say "Stages 7 and 8 ran the full runtime rather than that narrowed client, so this last"
 say "confirmation covers the whole run, not just the handoff."
 step "Check the guest account's home in the Home app or Eufy app for changed state."
-confirm "Did every device remain unchanged throughout this qualification?" \
+judge "Did every device remain unchanged throughout this qualification?" \
   && RESULTS+=("PASS AC4 no device changed state") \
   || RESULTS+=("FAIL AC4 a device changed state")
 
