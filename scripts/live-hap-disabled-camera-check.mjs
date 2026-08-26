@@ -68,7 +68,7 @@ import {
   logMark,
   measuredWindow,
   observations,
-  presentedDisabled,
+  cameraEnabled,
   options,
   refuseUnadvertised,
   reportAdvertisedVideo,
@@ -196,10 +196,7 @@ try {
   await streaming.start(selection);
   const firstPacket = await waitFor(() => streaming.measured.report.packets > 0, FIRST_PACKET_TIMEOUT_MS);
   check(firstPacket !== undefined, 'the enabled camera streamed before the camera was turned off');
-  check(
-    (await presentedDisabled(client, accessory)) === false,
-    'the enabled camera presented itself to HomeKit as not disabled',
-  );
+  check((await cameraEnabled(client, accessory)) === true, 'the enabled camera reported its power on to HomeKit');
   const enabledSnapshot = await snapshot(accessory, 'while enabled');
   const early = streaming.measured.report;
   const observedFrom = Date.now();
@@ -238,13 +235,13 @@ try {
   }
 
   const presented = await waitFor(
-    async () => (await presentedDisabled(client, accessory)) === true,
+    async () => (await cameraEnabled(client, accessory)) === false,
     detectTimeoutMs,
     STATUS_POLL_INTERVAL_MS,
   );
-  check(presented !== undefined, 'the accessory presented the switched-off camera to HomeKit as disabled');
+  check(presented !== undefined, 'the accessory reported the switched-off camera as powered off to HomeKit');
   if (presented !== undefined) {
-    console.log(`presented as disabled ${Date.now() - disabledAt}ms after the power-off command was acknowledged`);
+    console.log(`reported power off ${Date.now() - disabledAt}ms after the power-off command was acknowledged`);
   }
 
   const refused = new LiveSession(client, accessory, address);
@@ -296,8 +293,8 @@ try {
   );
   check(readmitted !== undefined, `the plugin admitted a session again within ${admitTimeoutMs / 1_000}s`);
   check(
-    (await presentedDisabled(client, accessory)) === false,
-    'the re-enabled camera presented itself to HomeKit as not disabled again',
+    (await cameraEnabled(client, accessory)) === true,
+    'the re-enabled camera reported its power on to HomeKit again',
   );
   if (admitted) {
     console.log(`session admitted again ${Date.now() - enabledAt}ms after the power-on command`);

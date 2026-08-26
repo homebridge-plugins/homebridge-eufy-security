@@ -36,6 +36,8 @@
  */
 import {
   accessoryModel,
+  cameraEnabled,
+  cameraOperatingMode,
   hasBattery,
   observations,
   operatingModeAddress,
@@ -106,8 +108,12 @@ try {
     );
     check(published.includes('homeKitCameraActive'), `aid=${accessory.aid} published the HomeKit camera-active state`);
     check(
-      published.includes('manuallyDisabled') || published.includes('indicator') || published.includes('nightVision'),
+      published.includes('indicator') || published.includes('nightVision'),
       `aid=${accessory.aid} published at least one state read from the camera itself`,
+    );
+    check(
+      !cameraOperatingMode(accessory)?.characteristics.some((entry) => entry.type.toUpperCase().startsWith('00000227')),
+      `aid=${accessory.aid} publishes no disabled state, which Apple Home would answer by refusing to write this service`,
     );
   }
 
@@ -123,18 +129,18 @@ try {
     );
     originalActive = await read(target, 'homeKitCameraActive');
     check(originalActive === true, 'this check starts from a camera HomeKit is allowed to use');
-    check((await read(target, 'manuallyDisabled')) === false, 'the camera presented itself as not disabled first');
+    check((await cameraEnabled(client, target)) === true, 'this check starts from a camera that is powered on');
 
     const offFrom = Date.now();
     await write(target, 'homeKitCameraActive', false);
     const disabled = await waitFor(
-      async () => (await read(target, 'manuallyDisabled')) === true,
+      async () => (await cameraEnabled(client, target)) === false,
       convergeTimeoutMs,
       CONVERGENCE_POLL_INTERVAL_MS,
     );
-    check(disabled !== undefined, `the camera presented itself as disabled within ${convergeTimeoutMs / 1_000}s`);
+    check(disabled !== undefined, `the camera reported its power off within ${convergeTimeoutMs / 1_000}s`);
     if (disabled !== undefined) {
-      console.log(`presented as disabled ${Date.now() - offFrom}ms after HomeKit wrote camera-active off`);
+      console.log(`reported power off ${Date.now() - offFrom}ms after HomeKit wrote camera-active off`);
     }
     check(
       (await read(target, 'homeKitCameraActive')) === false,
@@ -145,13 +151,13 @@ try {
     await write(target, 'homeKitCameraActive', true);
     originalActive = undefined;
     const enabled = await waitFor(
-      async () => (await read(target, 'manuallyDisabled')) === false,
+      async () => (await cameraEnabled(client, target)) === true,
       convergeTimeoutMs,
       CONVERGENCE_POLL_INTERVAL_MS,
     );
-    check(enabled !== undefined, `the camera presented itself as enabled again within ${convergeTimeoutMs / 1_000}s`);
+    check(enabled !== undefined, `the camera reported its power on again within ${convergeTimeoutMs / 1_000}s`);
     if (enabled !== undefined) {
-      console.log(`presented as enabled again ${Date.now() - onFrom}ms after HomeKit wrote camera-active on`);
+      console.log(`reported power on again ${Date.now() - onFrom}ms after HomeKit wrote camera-active on`);
     }
   }
 } finally {

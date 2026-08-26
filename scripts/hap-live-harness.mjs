@@ -26,14 +26,14 @@ import { readFileSync, statSync } from 'node:fs';
 
 export const CAMERA_RTP_STREAM_MANAGEMENT = '00000110-0000-1000-8000-0026BB765291';
 export const CAMERA_OPERATING_MODE = '0000021A-0000-1000-8000-0026BB765291';
-export const MANUALLY_DISABLED = '00000227';
+export const SWITCH = '00000049-0000-1000-8000-0026BB765291';
+const SWITCH_ON = '00000025';
 /**
  * The operating mode states a camera may publish, by characteristic UUID prefix. Read from the accessory
  * rather than assumed: HomeKit's own snapshot and camera-active states are always there, while the disabled
  * state, the indicator LED and night vision are published only where the SDK evidences them.
  */
 export const OPERATING_MODE_STATES = {
-  manuallyDisabled: '00000227',
   indicator: '0000021D',
   nightVision: '0000011B',
   homeKitCameraActive: '0000021B',
@@ -388,26 +388,29 @@ export async function operatingModeState(client, accessory) {
 }
 
 /**
- * What one camera presents to HomeKit as its manually disabled state, read from the accessory's own Camera
- * Operating Mode service. `undefined` distinguishes an accessory that publishes no such state at all — no
- * operating mode service, or one without the optional characteristic — from one that publishes `false`.
+ * The address of the Camera Enabled switch on one accessory, which reports the camera's own power.
  *
- * An accessory carrying more than one operating mode service is refused rather than answered: HomeKit
- * presents one camera state, so a second service is a defect a caller comparing against a boolean would
- * record as a plain disagreement.
+ * This is what the camera's power is read and written through now: the operating mode service publishes no
+ * disabled state, because Apple Home stops writing the operating mode of a camera that reports one. An
+ * accessory carrying more than one switch is refused rather than answered, since a caller comparing against a
+ * boolean would record the ambiguity as a plain disagreement.
  */
-export async function presentedDisabled(client, accessory) {
-  const services = accessory.services.filter((service) => service.type.toUpperCase() === CAMERA_OPERATING_MODE);
+export function cameraEnabledAddress(accessory) {
+  const services = accessory.services.filter((service) => service.type.toUpperCase() === SWITCH);
   if (services.length > 1) {
-    throw new Error(`accessory ${accessory.aid} carries ${services.length} camera operating mode services`);
+    throw new Error(`accessory ${accessory.aid} carries ${services.length} switch services`);
   }
-  const characteristic = services[0]?.characteristics.find((entry) =>
-    entry.type.toUpperCase().startsWith(MANUALLY_DISABLED),
-  );
-  if (!characteristic) {
+  const characteristic = services[0]?.characteristics.find((entry) => entry.type.toUpperCase().startsWith(SWITCH_ON));
+  return characteristic ? `${accessory.aid}.${characteristic.iid}` : undefined;
+}
+
+/** Whether one camera reports its own power as on, or nothing where it publishes no such switch. */
+export async function cameraEnabled(client, accessory) {
+  const address = cameraEnabledAddress(accessory);
+  if (!address) {
     return undefined;
   }
-  const response = await client.getCharacteristics([`${accessory.aid}.${characteristic.iid}`]);
+  const response = await client.getCharacteristics([address]);
   return Boolean(response.characteristics[0].value);
 }
 

@@ -1,11 +1,14 @@
 import {
   CapabilityNotSupportedError,
+  unreflectedMembers,
   type AudioActions,
   type CameraActions,
   type LightActions,
 } from '@mega-yfue/eufy-sdk';
 import { Accessory, Characteristic, HAPStatus, HapStatusError, Service, uuid } from '@homebridge/hap-nodejs';
 import type { PlatformAccessory } from 'homebridge';
+import { setTimeout as delay } from 'node:timers/promises';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AdapterDiagnostic } from '../../src/homekit/adapter.js';
@@ -261,6 +264,60 @@ describe('camera controls capability adapter', () => {
     await on.handleSetRequest(true);
     expect(setEnabled).toHaveBeenLastCalledWith(true);
     await expect(on.handleGetRequest()).resolves.toBe(true);
+  });
+
+  it('refuses an enabled write for a member the SDK declines to stand behind', async () => {
+    const target = accessory();
+    const setEnabled = vi.fn(async () => undefined);
+    const diagnose = vi.fn();
+    /**
+     * `unreflectedMembers` reads a symbol-keyed statement only the SDK's own binding attaches, and no camera
+     * family reports one today, so a proxy answering every symbol read is the only way to exercise a member
+     * the SDK declines to stand behind.
+     */
+    const camera = new Proxy({ enabled: true, setEnabled } as Partial<CameraActions>, {
+      get(inner, property, receiver) {
+        return typeof property === 'symbol' ? Object.freeze(['enabled']) : Reflect.get(inner, property, receiver);
+      },
+    });
+    expect(unreflectedMembers(camera as CameraActions)).toContain('enabled');
+
+    attach(target, { camera: () => camera as CameraActions }, writableEnablement(), diagnose);
+    const on = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
+
+    await expect(on.handleSetRequest(false)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    expect(
+      setEnabled,
+      'a reading that does not track its own setter leaves HomeKit unable to tell whether the write landed',
+    ).not.toHaveBeenCalled();
+  });
+
+  it('announces no stale reading for an accepted enabled state the camera has not converged on', async () => {
+    const target = accessory();
+    const state = { enabled: true };
+    const setEnabled = vi.fn(async () => undefined);
+    attach(
+      target,
+      device({
+        get enabled(): boolean {
+          return state.enabled;
+        },
+        setEnabled,
+      } as Partial<CameraActions>),
+      writableEnablement(),
+    );
+    const on = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
+    const announced: unknown[] = [];
+    on.on('change', ({ newValue }) => announced.push(newValue));
+
+    await on.handleSetRequest(false);
+    await delay(0);
+
+    expect(
+      announced,
+      'an acknowledgement is delivery and not convergence, so re-reading the camera then announces the value the user just replaced',
+    ).toEqual([false]);
+    expect(on.value).toBe(false);
   });
 
   it('refuses an enabled write it has no evidence or bound operation for, and reports each refusal', async () => {

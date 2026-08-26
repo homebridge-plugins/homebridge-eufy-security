@@ -379,22 +379,6 @@ function operatingModes(accessory: PlatformAccessory) {
 }
 
 /**
- * The presented disabled state, or nothing at all when the accessory publishes none. An accessory carrying
- * more than one operating mode service is a HAP invariant this plugin must not reach, so it is refused here
- * rather than answered: a caller comparing against a boolean would read it as a plain disagreement.
- */
-function presentedDisabled(accessory: PlatformAccessory): boolean | undefined {
-  const services = operatingModes(accessory);
-  if (services.length > 1) {
-    throw new Error('accessory carries more than one camera operating mode service');
-  }
-  const [service] = services;
-  return service?.testCharacteristic(Characteristic.ManuallyDisabled)
-    ? Boolean(service.getCharacteristic(Characteristic.ManuallyDisabled).value)
-    : undefined;
-}
-
-/**
  * A camera surface that answers the SDK's out-of-band trust statement with its enablement member.
  *
  * `unreflectedMembers` reads a symbol-keyed statement that only the SDK's own binding attaches, and no
@@ -2575,7 +2559,7 @@ describe('camera streaming bundle adapter', () => {
     await expect(
       active.handleGetRequest(),
       'HAP throws a status a failed write latched on a characteristic that answers no read, so HomeKit would call the camera unresponsive for good',
-    ).resolves.toBeDefined();
+    ).resolves.toBe(Characteristic.HomeKitCameraActive.ON);
   });
 
   it('keeps the HomeKit camera-active state a camera has accepted but not yet converged on', async () => {
@@ -2730,6 +2714,7 @@ describe('camera streaming bundle adapter', () => {
     restored.addOptionalCharacteristic(Characteristic.ManuallyDisabled);
     restored.getCharacteristic(Characteristic.ManuallyDisabled).updateValue(true);
     target.context = { homebridgeEufyCameraHomeKitActive: { version: 1, causedOff: true } };
+    const persist = vi.fn();
 
     CAMERA_STREAMING_ADAPTER.attach({
       device: {
@@ -2743,7 +2728,7 @@ describe('camera streaming bundle adapter', () => {
       audioEnabled: false,
       diagnose: vi.fn(),
       observed: vi.fn(),
-      persist: vi.fn(),
+      persist,
     } satisfies AdapterAttachmentContext);
 
     expect(
@@ -2751,6 +2736,7 @@ describe('camera streaming bundle adapter', () => {
       'a camera left reporting it would stay unwritable from HomeKit for good',
     ).toBe(false);
     expect(target.context).toEqual({});
+    expect(persist, 'an unpersisted deletion would return on the next restart').toHaveBeenCalled();
   });
 
   it('carries a camera-active state HomeKit re-asserts to a camera that disagrees with it', async () => {
@@ -2851,35 +2837,6 @@ describe('camera streaming bundle adapter', () => {
     await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
 
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
-  });
-
-  it('ignores a camera-active write that only re-asserts the state HomeKit already held', async () => {
-    const target = new Accessory(
-      'Synthetic reasserted active camera',
-      uuid.generate('synthetic-reasserted-active-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const setEnabled = vi.fn(async () => undefined);
-    const context = {
-      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
-      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext;
-
-    CAMERA_STREAMING_ADAPTER.attach(context);
-    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
-
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never);
-
-    expect(
-      setEnabled,
-      'a controller re-asserting the state it already holds is not a new decision',
-    ).not.toHaveBeenCalled();
   });
 
   it('ignores a camera-active write the camera already agrees with', async () => {

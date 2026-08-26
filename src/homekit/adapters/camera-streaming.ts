@@ -784,7 +784,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         "HomeKit's own camera-active state is carried through to the camera's power, so a camera the user set to off for this mode is off rather than merely unwatched, and the camera controls bundle writes the same member from its Camera Enabled switch, which stays reachable when Apple Home declines to write a disabled camera's operating mode",
       identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
       diagnostics:
-        'The camera is written only where a controller wrote the state, the value moved, and the camera disagrees with it, so neither a restored state nor the re-assertion a controller sends when the bridge reappears can power a camera down; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
+        'The camera is written only where a controller wrote the state and the camera disagrees with it, so a state HAP restored cannot reach the device while a value HomeKit re-asserts does, which is what reconciles a camera after a restart; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
       verification: [
         {
           file: 'test/contracts/camera-controls-adapter.test.ts',
@@ -812,7 +812,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'ignores a camera-active write that only re-asserts the state HomeKit already held',
+          behavior: 'carries a camera-active state HomeKit re-asserts to a camera that disagrees with it',
         },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -1394,14 +1394,12 @@ function untrusted(camera: CameraActions, member: string): boolean {
  * carries an empty subtype: a plugin-owned service surviving from a run without recording would make the
  * controller's own service fail to attach.
  *
- * Nothing here publishes the camera's own power as HomeKit's `ManuallyDisabled`, and an accessory restored
- * from a version that did has it withdrawn. That state cost far more than it told anyone: Apple Home responds
- * to it by silently declining to write that camera's operating mode at all, measured on a real home, so a
- * camera reporting it can no longer be switched on from HomeKit — and the case it was published for is a write
- * that failed, which is exactly when HomeKit needs to keep retrying. Publishing it made a recoverable failure
- * permanent. The camera's power is instead offered as the Camera Enabled switch, which Home does keep writing
- * and which the user can act on, and a session a disabled camera cannot serve is still refused by its own
- * gate with a named reason.
+ * The camera's own power is deliberately not published here as HomeKit's `ManuallyDisabled`, and an accessory
+ * restored from a version that published it has that state withdrawn along with the record kept for it. Apple
+ * Home answers a camera reporting it by declining to write that camera's operating mode at all, so publishing
+ * it costs the ability to switch the camera on from HomeKit — see `docs/architecture.md`. The power is offered
+ * as the Camera Enabled switch instead, and a session a disabled camera cannot serve is still refused by its
+ * own gate under a named reason.
  */
 function operatingModePresentation(
   context: AdapterAttachmentContext,
@@ -1411,30 +1409,33 @@ function operatingModePresentation(
   const { hap } = context;
   const indicated = indicatesStatusLed(context, camera);
   const nightVisible = presentsNightVision(context, camera);
-  /** Whether HomeKit's own camera-active state is worth hooking, which needs a reading to compare against. */
-  const carried = observed && satisfiesMemberRequirements(context.evidence, [CAMERA_ENABLED_WRITE]);
+  /** Whether HomeKit's camera-active state is carried to the device, which needs a reading to compare against. */
+  const carriesCameraActive = observed && satisfiesMemberRequirements(context.evidence, [CAMERA_ENABLED_WRITE]);
   let service: ReturnType<typeof operatingModeService> | undefined;
   let hooked = false;
   const resolve = () => {
     service ??= operatingModeService(context, controller);
     if (!hooked) {
       hooked = true;
-      if (carried) {
+      if (carriesCameraActive) {
         homeKitActiveOperation(context, service, { camera, enablement, issue });
       }
     }
     return service;
   };
   withdrawCharacteristic(context, controller, 'ManuallyDisabled');
-  delete (context.accessory.context as { homebridgeEufyCameraHomeKitActive?: unknown } | undefined)
-    ?.homebridgeEufyCameraHomeKitActive;
+  const retained = context.accessory.context as { homebridgeEufyCameraHomeKitActive?: unknown } | undefined;
+  if (retained?.homebridgeEufyCameraHomeKitActive !== undefined) {
+    delete retained.homebridgeEufyCameraHomeKitActive;
+    context.persist();
+  }
   if (!indicated) {
     withdrawCharacteristic(context, controller, 'CameraOperatingModeIndicator');
   }
   if (!nightVisible) {
     withdrawCharacteristic(context, controller, 'NightVision');
   }
-  if (!carried && !indicated && !nightVisible) {
+  if (!carriesCameraActive && !indicated && !nightVisible) {
     removeOperatingMode(context);
     return { trace: enablementTrace(enablement), remove: () => undefined };
   }
@@ -1493,23 +1494,23 @@ function enablementTrace(enablement: () => boolean | undefined): () => AdapterEv
  * told HomeKit not to use is a camera they have asked not to be watched by, and leaving it powered means it
  * keeps recording to the vendor's cloud.
  *
- * Three things must all be true before the camera is written, because only their conjunction means the user
- * just decided something:
+ * Two things must be true before the camera is written:
  *
  * - **A controller wrote it.** An internal write carries no connection, so seeding a required state or
  *   restoring one cannot reach the device.
- * - **The value moved.** A controller may write the state it already holds, and one does: measured on a real
- *   home, iOS re-asserts a camera's per-mode setting when the bridge reappears, which would otherwise power a
- *   camera down every time Homebridge restarted — the very failure that not reconciling at startup was meant
- *   to avoid, arriving as a write instead.
- * - **The camera disagrees.** A camera already off is not told to turn off. Beyond sparing a pointless
- *   command, this is what stops a write that cannot succeed from being retried on every reconnection.
+ * - **The camera disagrees.** A camera already off is not told to turn off, which also stops a command that
+ *   cannot succeed from being reissued on every reconnection.
+ *
+ * A value a controller merely re-asserts is deliberately not rejected. HomeKit decides whether this camera is
+ * on, so the state it holds is applied to a camera that disagrees with it however that state arrived — which
+ * is also what reconciles the device after a restart, since the home hub re-asserts its per-mode setting when
+ * the bridge reappears. Requiring the value to have moved instead left a divergence no action in the Home app
+ * could resolve, because the only value a user can write is the one HomeKit already holds.
  *
  * A camera whose power this plugin cannot write still accepts the state, because refusing it would leave the
  * user unable to turn the camera off in HomeKit at all; the write is simply HomeKit's own then. A camera that
  * refuses the change has it reverted to what the camera reports, so HomeKit never keeps a claim the device did
- * not reach. Nothing moves this state the other way: a camera switched back on in the vendor app is presented
- * as enabled again, but the HomeKit setting the user chose is theirs to change, not this plugin's to overrule.
+ * not reach.
  */
 function homeKitActiveOperation(
   context: AdapterAttachmentContext,

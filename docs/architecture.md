@@ -420,13 +420,14 @@ to be watched by, and leaving it powered means it keeps recording to the vendor'
 
 Three rules bound that, because it is the only place where HomeKit writes a physical device state here:
 
-- **The device is written only where a controller wrote the state, the value moved, and the camera disagrees
-  with it.** Only the three together mean the user just decided something. HAP restores its own persisted copy
-  with an update rather than a write, so that path never reaches a set handler at all — but a controller does
-  write the state it already holds: measured on a real home, iOS re-asserted a camera's per-mode setting when
-  the bridge reappeared, which powered that camera down again after the owner had turned it back on. Requiring
-  the value to move rejects a re-assertion, and requiring the camera to disagree stops a command that cannot
-  succeed from being retried on every reconnection. The vendor app stays a co-equal owner of that switch.
+- **The device is written only where a controller wrote the state and the camera disagrees with it.** HAP
+  restores its own persisted copy with an update rather than a write, so that path never reaches a set handler
+  at all. A value a controller merely re-asserts is deliberately applied, though: HomeKit decides whether the
+  camera is on, and the home hub re-asserting its per-mode setting when the bridge reappears is what reconciles
+  the device after a restart. Requiring the value to have moved was tried and withdrawn, because it left a
+  divergence no action in the Home app could resolve — the only value a user can write is the one HomeKit
+  already holds, so a camera that was on while HomeKit held off stayed on for good. Requiring the camera to
+  disagree still stops a command that cannot succeed from being reissued on every reconnection.
 - **A camera whose power cannot be written still accepts the state.** Refusing the write would leave the user
   unable to turn the camera off in HomeKit at all; where the operation is unevidenced or unbound, the state is
   simply HomeKit's own.

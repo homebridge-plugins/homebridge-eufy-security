@@ -22,7 +22,7 @@ const {
   logMark,
   operatingModeAddress,
   operatingModeState,
-  presentedDisabled,
+  cameraEnabled,
   refuseUnadvertised,
   retainedSnapshotName,
   selectedVideoConfiguration,
@@ -270,22 +270,27 @@ describe('observed live conditions', () => {
       })),
     };
 
+    const switchService = (entries: { type: string; iid: number }[]) => ({
+      type: '00000049-0000-1000-8000-0026bb765291',
+      characteristics: entries,
+    });
+
     await expect(
-      presentedDisabled(client, { aid: 7, services: [operatingMode([{ type: '00000227', iid: 11 }])] }),
+      cameraEnabled(client, { aid: 7, services: [switchService([{ type: '00000025', iid: 11 }])] }),
     ).resolves.toBe(true);
     await expect(
-      presentedDisabled(client, { aid: 7, services: [operatingMode([{ type: '00000227', iid: 12 }])] }),
+      cameraEnabled(client, { aid: 7, services: [switchService([{ type: '00000025', iid: 12 }])] }),
     ).resolves.toBe(false);
     await expect(
-      presentedDisabled(client, { aid: 7, services: [operatingMode([{ type: '0000021b', iid: 13 }])] }),
+      cameraEnabled(client, { aid: 7, services: [switchService([{ type: '0000021b', iid: 13 }])] }),
     ).resolves.toBeUndefined();
-    await expect(presentedDisabled(client, { aid: 7, services: [] })).resolves.toBeUndefined();
+    await expect(cameraEnabled(client, { aid: 7, services: [] })).resolves.toBeUndefined();
     await expect(
-      presentedDisabled(client, {
+      cameraEnabled(client, {
         aid: 7,
-        services: [operatingMode([{ type: '00000227', iid: 11 }]), operatingMode([])],
+        services: [switchService([{ type: '00000025', iid: 11 }]), switchService([])],
       }),
-    ).rejects.toThrow('2 camera operating mode services');
+    ).rejects.toThrow('2 switch services');
     expect(client.getCharacteristics).toHaveBeenCalledTimes(2);
   });
 
@@ -296,7 +301,7 @@ describe('observed live conditions', () => {
         {
           type: '0000021a-0000-1000-8000-0026bb765291',
           characteristics: [
-            { type: '00000227', iid: 11 },
+            { type: '0000021d', iid: 11 },
             { type: '0000021b', iid: 12 },
             { type: '0000011b', iid: 13 },
           ],
@@ -311,11 +316,15 @@ describe('observed live conditions', () => {
     };
 
     await expect(operatingModeState(client, accessory)).resolves.toEqual({
-      manuallyDisabled: 1,
+      indicator: 1,
       homeKitCameraActive: 1,
       nightVision: 0,
     });
-    expect(operatingModeAddress(accessory, 'indicator')).toBeUndefined();
+    expect(operatingModeAddress(accessory, 'periodicSnapshotsActive')).toBeUndefined();
+    expect(
+      () => operatingModeAddress(accessory, 'manuallyDisabled'),
+      'the disabled state is no longer a state this plugin publishes, so naming it is a caller mistake',
+    ).toThrow('unknown operating mode state');
     expect(operatingModeAddress(accessory, 'nightVision')).toBe('9.13');
     expect(() => operatingModeAddress(accessory, 'invented')).toThrow('unknown operating mode state');
     expect(() =>

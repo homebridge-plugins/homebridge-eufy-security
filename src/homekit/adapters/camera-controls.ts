@@ -1,4 +1,4 @@
-import { type AudioActions, type CameraActions, type LightActions } from '@mega-yfue/eufy-sdk';
+import { unreflectedMembers, type AudioActions, type CameraActions, type LightActions } from '@mega-yfue/eufy-sdk';
 
 import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 import {
@@ -98,6 +98,21 @@ type CameraControlRequirement = (typeof CAMERA_CONTROL_REQUIREMENTS)[number];
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
 
 const CAMERA_CONTROL_STATES = new WeakMap<object, DeviceOperationState>();
+
+/**
+ * Whether the SDK declines to stand behind one of this camera's readings on this device family.
+ *
+ * A member named there reports a value that does not track its own setter, so writing it would leave HomeKit
+ * unable to tell whether the write landed. The statement is read off the bound capability surface itself, so a
+ * surface that answers that read by throwing has stated nothing this plugin may rely on and is declined too.
+ */
+function declined(camera: CameraActions, member: string): boolean {
+  try {
+    return unreflectedMembers(camera).includes(member);
+  } catch {
+    return true;
+  }
+}
 
 /** The typed SDK camera, physical-light, and audio accessors consumed by HomeKit. */
 export interface CameraControlsSdkDevice {
@@ -273,7 +288,10 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
    * state it reads. Where the camera's power cannot be written the switch still refuses, but now says so
    * instead of failing silently.
    */
-  const enablementWritable = evidenceState(CAMERA_ENABLED_WRITE) === 'valid' && typeof camera.setEnabled === 'function';
+  const enablementWritable =
+    evidenceState(CAMERA_ENABLED_WRITE) === 'valid' &&
+    typeof camera.setEnabled === 'function' &&
+    !declined(camera, 'enabled');
   if (enablementWritable) {
     unavailable('camera', 'enabled', false, 'recovered');
   }
@@ -289,12 +307,13 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
       'camera',
       'enabled',
       () => camera.setEnabled!(value),
-      () => {
-        try {
-          enabledPower.updateValue(readEnabled());
-        } catch {}
-      },
-    );
+      () => undefined,
+    ).catch((error: unknown) => {
+      try {
+        enabledPower.updateValue(readEnabled());
+      } catch {}
+      throw error;
+    });
   });
 
   /**
