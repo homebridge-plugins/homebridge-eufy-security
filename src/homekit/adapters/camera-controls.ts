@@ -87,6 +87,14 @@ const CAMERA_CONTROL_ROWS = [
   AUDIO_VOLUME_READ,
   AUDIO_VOLUME_WRITE,
 ] as const;
+/**
+ * Writing the camera's power, gated here without a coverage row of its own: the camera streaming bundle
+ * carries HomeKit's own camera-active state to this same member and declares the operation once, so a second
+ * row would claim one operation twice.
+ */
+const CAMERA_ENABLED_WRITE = { id: 'camera.enabled.persistent-operation', kind: 'persistent-operation' } as const;
+const CAMERA_CONTROL_REQUIREMENTS = [...CAMERA_CONTROL_ROWS, CAMERA_ENABLED_WRITE] as const;
+type CameraControlRequirement = (typeof CAMERA_CONTROL_REQUIREMENTS)[number];
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
 
 const CAMERA_CONTROL_STATES = new WeakMap<object, DeviceOperationState>();
@@ -193,12 +201,9 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
     accessory.getServiceById(hap.Service.Switch, CAMERA_ENABLED_SERVICE_KEY) ??
       accessory.addService(hap.Service.Switch, 'Camera Enabled', CAMERA_ENABLED_SERVICE_KEY),
   );
-  enabledService
-    .getCharacteristic(hap.Characteristic.On)
-    .onGet(() => readBoolean('camera', 'enabled', () => camera.enabled));
-  enabledService.getCharacteristic(hap.Characteristic.On).onSet(() => {
-    throw new hap.HapStatusError(hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-  });
+  const enabledPower = enabledService.getCharacteristic(hap.Characteristic.On);
+  const readEnabled = (): boolean => readBoolean('camera', 'enabled', () => camera.enabled);
+  enabledPower.onGet(readEnabled);
   const previousState = CAMERA_CONTROL_STATES.get(enabledService);
   const state: DeviceOperationState = {
     owner,
@@ -207,7 +212,7 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
   };
   CAMERA_CONTROL_STATES.set(enabledService, state);
 
-  const matches = (requirement: (typeof CAMERA_CONTROL_ROWS)[number]): boolean => {
+  const matches = (requirement: CameraControlRequirement): boolean => {
     const installed = context.evidence.get(requirement.id);
     return (
       installed?.kind === requirement.kind &&
@@ -253,10 +258,44 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
       accessory.removeService(service);
     }
   };
-  const evidenceState = (...requirements: (typeof CAMERA_CONTROL_ROWS)[number][]): 'absent' | 'malformed' | 'valid' => {
+  const evidenceState = (...requirements: CameraControlRequirement[]): 'absent' | 'malformed' | 'valid' => {
     const installed = requirements.some(({ id }) => context.evidence.has(id));
     return !installed ? 'absent' : requirements.every(matches) ? 'valid' : 'malformed';
   };
+
+  /**
+   * Switches the camera's power from HomeKit, which is the only control that stays reachable once the camera
+   * is off.
+   *
+   * A camera reporting itself disabled is one Apple Home declines to write the camera operating mode of at
+   * all — measured on a real home — so the operating mode service cannot be the way back on. A plain switch
+   * carries no such meaning and Home delivers writes to it, which is why this one must not merely report the
+   * state it reads. Where the camera's power cannot be written the switch still refuses, but now says so
+   * instead of failing silently.
+   */
+  const enablementWritable = evidenceState(CAMERA_ENABLED_WRITE) === 'valid' && typeof camera.setEnabled === 'function';
+  if (enablementWritable) {
+    unavailable('camera', 'enabled', false, 'recovered');
+  }
+  enabledPower.onSet((value) => {
+    if (!enablementWritable) {
+      unavailable('camera', 'enabled', true, 'missing');
+      throw new hap.HapStatusError(hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    }
+    if (typeof value !== 'boolean') {
+      throw new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+    }
+    return issue(
+      'camera',
+      'enabled',
+      () => camera.setEnabled!(value),
+      () => {
+        try {
+          enabledPower.updateValue(readEnabled());
+        } catch {}
+      },
+    );
+  });
 
   /**
    * The indicator LED moved to the camera operating mode service, where HomeKit calls it the camera

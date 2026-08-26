@@ -30,6 +30,17 @@ function requirement(id: string) {
     : { id, kind: 'persistent-operation' as const };
 }
 
+/**
+ * The evidence that admits writing the camera's power, which the bundle gates the switch on but does not
+ * carry a coverage row for: the operation is declared once, by the camera streaming bundle.
+ */
+function writableEnablement(): typeof EVIDENCE {
+  return new Map([
+    ...EVIDENCE,
+    ['camera.enabled.persistent-operation', requirement('camera.enabled.persistent-operation')],
+  ]);
+}
+
 function accessory(): PlatformAccessory {
   return new Accessory('Synthetic camera', uuid.generate('synthetic-camera-controls')) as unknown as PlatformAccessory;
 }
@@ -223,6 +234,64 @@ describe('camera controls capability adapter', () => {
     attach(target, device({ enabled: true }, { isOn: false, set }));
     await expect(on.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
     expect(set).toHaveBeenCalledOnce();
+  });
+
+  it('switches the camera off and on again when HomeKit writes the enabled state', async () => {
+    const target = accessory();
+    const state = { enabled: true };
+    const setEnabled = vi.fn(async (value: boolean) => {
+      state.enabled = value;
+    });
+    attach(
+      target,
+      device({
+        get enabled(): boolean {
+          return state.enabled;
+        },
+        setEnabled,
+      } as Partial<CameraActions>),
+      writableEnablement(),
+    );
+    const on = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
+
+    await on.handleSetRequest(false);
+    expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+    await expect(on.handleGetRequest()).resolves.toBe(false);
+
+    await on.handleSetRequest(true);
+    expect(setEnabled).toHaveBeenLastCalledWith(true);
+    await expect(on.handleGetRequest()).resolves.toBe(true);
+  });
+
+  it('refuses an enabled write it has no evidence or bound operation for, and reports each refusal', async () => {
+    const cases = [
+      { label: 'unevidenced', evidence: EVIDENCE, setEnabled: vi.fn(async () => undefined) },
+      { label: 'unbound', evidence: writableEnablement(), setEnabled: undefined },
+    ];
+
+    for (const { label, evidence, setEnabled } of cases) {
+      const target = accessory();
+      const diagnose = vi.fn();
+      attach(
+        target,
+        device({ enabled: true, ...(setEnabled ? { setEnabled } : {}) } as Partial<CameraActions>),
+        evidence,
+        diagnose,
+      );
+      const on = target
+        .getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!
+        .getCharacteristic(Characteristic.On);
+
+      await expect(on.handleSetRequest(false), label).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+      expect(setEnabled ?? vi.fn(), label).not.toHaveBeenCalled();
+      expect(diagnose, label).toHaveBeenCalledWith({
+        code: 'camera-controls-capability-unavailable',
+        capability: 'camera',
+        member: 'enabled',
+        active: true,
+        reason: 'missing',
+      });
+    }
   });
 
   it('removes cached optional services when complete evidence withdraws their members', () => {
