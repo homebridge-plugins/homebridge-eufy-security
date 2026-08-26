@@ -328,6 +328,13 @@ Home stops writing, so a failing recovery kept re-closing the trap it was escapi
 when the camera is next seen on, which is when the off-state HomeKit caused is genuinely over. That also keeps
 a later out-of-band switch-off honest, because the record no longer stands by then.
 
+A reading taken while a write is still being carried does not end the record, though, and that distinction was
+measured rather than reasoned. A command acknowledges delivery and the reading converges after it, so a read
+between the two still says the camera is on: on a real home that read erased the record, and the camera was
+republished as manually disabled the instant it did switch off, restoring the latch in full. The record ends
+only on a reading taken while nothing is in flight, or explicitly when a write fails and the camera is still
+on — the case where the off never happened at all.
+
 The characteristic answers reads for the same reason. HomeKit owns the value and this bundle only carries it,
 but HAP throws the status a failed write left on a characteristic registering no read handler, on every later
 read and for good — so one refused power write reported a camera as unresponsive until the bridge restarted,

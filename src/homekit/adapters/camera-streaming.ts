@@ -1438,6 +1438,18 @@ function operatingModePresentation(
   const stored = retained.homebridgeEufyCameraHomeKitActive;
   /** Whether this camera's current off-state is HomeKit's own doing, retained so it survives a restart. */
   let causedOff = stored?.version === 1 && stored.causedOff === true;
+  /** How many enablement writes this bundle is currently carrying to the camera. */
+  let carrying = 0;
+  const hold = (): (() => void) => {
+    carrying += 1;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        carrying -= 1;
+      }
+    };
+  };
   /**
    * Records that HomeKit itself switched this camera off.
    *
@@ -1445,6 +1457,11 @@ function operatingModePresentation(
    * the write is answered: the reflection a landed write announces arrives while the characteristic still
    * reads the value before it, and without the record already made that reflection is read as a switch-off
    * HomeKit knows nothing about.
+   *
+   * For the same reason the record is not ended by a reading taken while a write is still being carried. A
+   * command acknowledges delivery and the reading converges after it, so a read between the two still says
+   * the camera is on — and measured on a real home, that read erased the record and republished the camera as
+   * manually disabled the moment it did switch off, restoring the very latch this exists to prevent.
    */
   const record = (caused: boolean): void => {
     if (causedOff === caused) {
@@ -1468,7 +1485,7 @@ function operatingModePresentation(
     if (!hooked) {
       hooked = true;
       if (observed) {
-        homeKitActiveOperation(context, service, { camera, enablement, issue }, () => publish(), record);
+        homeKitActiveOperation(context, service, { camera, enablement, issue }, () => publish(), record, hold);
       }
     }
     return service;
@@ -1493,7 +1510,9 @@ function operatingModePresentation(
    */
   const disabledOutsideHomeKit = (enabled: boolean): boolean => {
     if (enabled) {
-      record(false);
+      if (carrying === 0) {
+        record(false);
+      }
       return false;
     }
     return !causedOff;
@@ -1599,6 +1618,7 @@ function homeKitActiveOperation(
   { camera, enablement, issue }: Pick<OperatingModeControls, 'camera' | 'enablement' | 'issue'>,
   republish: () => void,
   record: (caused: boolean) => void,
+  hold: () => () => void,
 ): void {
   const { hap } = context;
   const operable =
@@ -1627,9 +1647,12 @@ function homeKitActiveOperation(
     if (!enable) {
       record(true);
     }
+    const release = hold();
     try {
       await issue('camera', 'enabled', () => camera.setEnabled!(enable), republish);
+      release();
     } catch (error) {
+      release();
       const enabled = enablement();
       if (enabled === true) {
         record(false);

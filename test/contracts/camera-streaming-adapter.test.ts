@@ -2619,6 +2619,48 @@ describe('camera streaming bundle adapter', () => {
     expect(presentedDisabled(target)).toBe(false);
   });
 
+  it('withholds the disabled state for a camera whose reading converges after the write was answered', async () => {
+    const target = new Accessory(
+      'Synthetic late converging camera',
+      uuid.generate('synthetic-late-converging-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { enabled: true };
+    let attached: AttachedAdapter | undefined;
+    const camera = {
+      get enabled(): unknown {
+        return state.enabled;
+      },
+      /** Acknowledges delivery only, which is all a command does: the reading converges later. */
+      setEnabled: vi.fn(async () => undefined),
+      live: vi.fn(),
+    };
+
+    attached = CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
+    expect(camera.setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+    await delay(0);
+
+    state.enabled = false;
+    attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
+
+    expect(
+      presentedDisabled(target),
+      'a reading taken between the acknowledgement and the convergence still says on, and must not erase the record of who switched the camera off',
+    ).toBe(false);
+  });
+
   it('keeps withholding the disabled state for a camera HomeKit switched off before a restart', async () => {
     const target = new Accessory(
       'Synthetic restored disabled camera',
