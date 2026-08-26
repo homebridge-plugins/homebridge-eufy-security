@@ -2692,6 +2692,99 @@ describe('camera streaming bundle adapter', () => {
     expect(presentedDisabled(target)).toBe(true);
   });
 
+  it('answers a read of its own camera-active state, so a refused write cannot leave it unreadable', async () => {
+    const target = new Accessory(
+      'Synthetic unreadable active camera',
+      uuid.generate('synthetic-unreadable-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { readable: true };
+    const camera = {
+      get enabled(): unknown {
+        if (!state.readable) {
+          throw new Error('synthetic enablement read fault');
+        }
+        return true;
+      },
+      setEnabled: vi.fn(async () => {
+        state.readable = false;
+        throw new Error('synthetic refusal');
+      }),
+      live: vi.fn(),
+    };
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await expect(
+      active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never),
+    ).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+
+    await expect(
+      active.handleGetRequest(),
+      'HAP throws a status a failed write latched on a characteristic that answers no read, so HomeKit would call the camera unresponsive for good',
+    ).resolves.toBeDefined();
+  });
+
+  it('holds the withheld state while it switches a camera it switched off back on', async () => {
+    const target = new Accessory(
+      'Synthetic in flight presented camera',
+      uuid.generate('synthetic-in-flight-presented-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { enabled: true };
+    const presented: (boolean | undefined)[] = [];
+    let attached: AttachedAdapter | undefined;
+    const camera = {
+      get enabled(): unknown {
+        return state.enabled;
+      },
+      /** Reproduces the live sequence: the SDK reflects a landed write while HomeKit still awaits the answer. */
+      setEnabled: vi.fn(async (value: boolean) => {
+        state.enabled = value;
+        attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
+        presented.push(presentedDisabled(target));
+        if (value) {
+          throw new Error('synthetic refusal of the re-enable');
+        }
+      }),
+      live: vi.fn(),
+    };
+
+    attached = CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
+    state.enabled = false;
+    await expect(active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never)).rejects.toBe(
+      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+    );
+
+    expect(
+      presented,
+      'asking a camera HomeKit switched off to come back on does not make that off-state out of band, so a re-enable that has to be retried must not keep re-closing the trap',
+    ).toEqual([false, false]);
+    expect(presentedDisabled(target)).toBe(false);
+  });
+
   it('keeps the HomeKit camera-active state a camera has accepted but not yet converged on', async () => {
     const target = new Accessory(
       'Synthetic lagging active camera',

@@ -315,14 +315,27 @@ really is off and the reading is correct; it was observed holding across three r
 The provenance is recorded rather than inferred from the characteristic. `HomeKitCameraActive` is required on
 the service and HAP defaults a numeric characteristic to its minimum, so a value of off there is
 indistinguishable from a characteristic nothing has ever set — and a camera whose service was just created
-would read as one HomeKit asked to be off. What HomeKit asked this bundle to carry is retained on the
+would read as one HomeKit asked to be off. Whether HomeKit itself switched this camera off is retained on the
 accessory instead, written before the camera is, because HAP assigns a written value only once the write is
 answered: the reflection a landed write announces arrives while the characteristic still reads the previous
-value, and without the request already recorded that reflection is read as an out-of-band switch-off. A write
-the camera refuses is reverted, so the request follows the reading HomeKit is reverted to.
+value, and without the record already made that reflection is read as an out-of-band switch-off.
+
+What is recorded is where the off-state came from, not what HomeKit last asked for, and the difference is not
+academic. They diverge exactly when HomeKit asks a camera it switched off to come back on, which is the one
+moment that matters: measured live, a re-enable that failed to converge was retried by the home hub, and
+recording the request instead flipped the presented state on every attempt — publishing the very state Apple
+Home stops writing, so a failing recovery kept re-closing the trap it was escaping. The record therefore ends
+when the camera is next seen on, which is when the off-state HomeKit caused is genuinely over. That also keeps
+a later out-of-band switch-off honest, because the record no longer stands by then.
+
+The characteristic answers reads for the same reason. HomeKit owns the value and this bundle only carries it,
+but HAP throws the status a failed write left on a characteristic registering no read handler, on every later
+read and for good — so one refused power write reported a camera as unresponsive until the bridge restarted,
+which was observed on a real home and lasted until it was restarted. Serving the read clears that status,
+because HAP marks a served read successful.
 
 Two consequences are accepted deliberately. A camera already latched by an earlier version is not rescued by
-this rule, because its off-state predates any recorded request and the reading is genuinely off; the Camera
+this rule, because its off-state predates any record and the reading is genuinely off; the Camera
 Enabled switch is the way back for those. And an off-state the switch itself caused is still presented as
 disabled, because that switch is not HomeKit's camera-active setting: the power was turned off by something
 other than the state this rule is about, and the switch remains writable, so it is self-recovering.
