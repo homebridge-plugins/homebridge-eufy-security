@@ -788,7 +788,7 @@ export const CAMERA_STREAMING_ADAPTER = {
         "HomeKit's own camera-active state is carried through to the camera's power, so a camera the user set to off for this mode is off rather than merely unwatched",
       identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
       diagnostics:
-        'Only an explicit controller write is acted on, never a state HAP restored, so a restart cannot power a camera down from an intent expressed earlier; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
+        'The camera is written only where a controller wrote the state, the value moved, and the camera disagrees with it, so neither a restored state nor the re-assertion a controller sends when the bridge reappears can power a camera down; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
       verification: [
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
@@ -809,6 +809,14 @@ export const CAMERA_STREAMING_ADAPTER = {
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'writes the camera only for a controller write, never for a state HAP restored',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'ignores a camera-active write that only re-asserts the state HomeKit already held',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'ignores a camera-active write the camera already agrees with',
         },
       ],
     },
@@ -1501,9 +1509,17 @@ function operatingModePresentation(
  * told HomeKit not to use is a camera they have asked not to be watched by, and leaving it powered means it
  * keeps recording to the vendor's cloud.
  *
- * The device is written only for a value a controller wrote. That is what reaches a set handler: HAP restores
- * its own persisted copy of this state with an update rather than a write, so a restart cannot power a camera
- * down from an intent expressed days ago, and the vendor app stays a co-equal owner of that switch.
+ * Three things must all be true before the camera is written, because only their conjunction means the user
+ * just decided something:
+ *
+ * - **A controller wrote it.** An internal write carries no connection, so seeding a required state or
+ *   restoring one cannot reach the device.
+ * - **The value moved.** A controller may write the state it already holds, and one does: measured on a real
+ *   home, iOS re-asserts a camera's per-mode setting when the bridge reappears, which would otherwise power a
+ *   camera down every time Homebridge restarted — the very failure that not reconciling at startup was meant
+ *   to avoid, arriving as a write instead.
+ * - **The camera disagrees.** A camera already off is not told to turn off. Beyond sparing a pointless
+ *   command, this is what stops a write that cannot succeed from being retried on every reconnection.
  *
  * A camera whose power this plugin cannot write still accepts the state, because refusing it would leave the
  * user unable to turn the camera off in HomeKit at all; the write is simply HomeKit's own then. A camera that
@@ -1523,11 +1539,12 @@ function homeKitActiveOperation(
     typeof camera.setEnabled === 'function' &&
     !untrusted(camera, 'enabled');
   const active = service.getCharacteristic(hap.Characteristic.HomeKitCameraActive);
-  active.onSet(async (value: unknown) => {
-    if (!operable) {
+  active.onSet(async (value: unknown, _context?: unknown, connection?: unknown) => {
+    const enable = value === hap.Characteristic.HomeKitCameraActive.ON;
+    const held = active.value === hap.Characteristic.HomeKitCameraActive.ON;
+    if (!operable || connection === undefined || held === enable || enablement() === enable) {
       return;
     }
-    const enable = value === hap.Characteristic.HomeKitCameraActive.ON;
     try {
       await issue('camera', 'enabled', () => camera.setEnabled!(enable), republish);
     } catch (error) {

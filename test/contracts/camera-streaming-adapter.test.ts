@@ -2555,7 +2555,7 @@ describe('camera streaming bundle adapter', () => {
     const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
     expect(setEnabled).not.toHaveBeenCalled();
 
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF);
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
     expect(presentedDisabled(target)).toBe(true);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
@@ -2564,7 +2564,7 @@ describe('camera streaming bundle adapter', () => {
       Characteristic.HomeKitCameraActive.OFF,
     );
 
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON);
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never);
     expect(setEnabled).toHaveBeenLastCalledWith(true);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.ON);
   });
@@ -2592,7 +2592,7 @@ describe('camera streaming bundle adapter', () => {
     } satisfies AdapterAttachmentContext);
     const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
 
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF);
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
     await delay(0);
 
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
@@ -2705,7 +2705,9 @@ describe('camera streaming bundle adapter', () => {
     } satisfies AdapterAttachmentContext);
     const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
 
-    await expect(active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF)).resolves.not.toThrow();
+    await expect(
+      active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never),
+    ).resolves.not.toThrow();
 
     expect(setEnabled).not.toHaveBeenCalled();
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
@@ -2734,9 +2736,9 @@ describe('camera streaming bundle adapter', () => {
     } satisfies AdapterAttachmentContext);
     const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
 
-    await expect(active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF)).rejects.toBe(
-      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-    );
+    await expect(
+      active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never),
+    ).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
 
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.ON);
     expect(diagnose.mock.calls.map(([condition]) => condition)).toContainEqual({
@@ -2773,9 +2775,67 @@ describe('camera streaming bundle adapter', () => {
     CAMERA_STREAMING_ADAPTER.attach(context);
     expect(setEnabled).not.toHaveBeenCalled();
 
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF);
+    await active.setValue(Characteristic.HomeKitCameraActive.ON);
+    expect(setEnabled, 'an internal write carries no controller and must not reach the camera').not.toHaveBeenCalled();
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
 
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it('ignores a camera-active write that only re-asserts the state HomeKit already held', async () => {
+    const target = new Accessory(
+      'Synthetic reasserted active camera',
+      uuid.generate('synthetic-reasserted-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => undefined);
+    const context = {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext;
+
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never);
+
+    expect(
+      setEnabled,
+      'a controller re-asserting the state it already holds is not a new decision',
+    ).not.toHaveBeenCalled();
+  });
+
+  it('ignores a camera-active write the camera already agrees with', async () => {
+    const target = new Accessory(
+      'Synthetic agreed active camera',
+      uuid.generate('synthetic-agreed-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => undefined);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: false, setEnabled, live: vi.fn() }) } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
+
+    expect(setEnabled, 'a camera already off is not told to turn off').not.toHaveBeenCalled();
+    expect(presentedDisabled(target)).toBe(true);
   });
 
   it('follows the enablement change event rather than a timer', async () => {
