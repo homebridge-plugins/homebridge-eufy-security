@@ -2,9 +2,9 @@ import { type AudioActions, type CameraActions, type LightActions } from '@mega-
 
 import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 import {
-  booleanObservationReader,
   deviceOperationIssuer,
   INVALID_OBSERVATION_CONDITION,
+  observationReader,
   OPERATION_FAILED_CONDITION,
   type DeviceOperationState,
 } from '../device-control.js';
@@ -166,39 +166,26 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
     services.push(service);
     return service;
   };
-  const readBoolean = booleanObservationReader(context);
+  const readBoolean = observationReader(context, 'boolean');
 
+  const readNumber = observationReader(context, 'number');
+  /**
+   * One authoritative numeric observation reduced to a HomeKit percentage, rejecting a value outside the
+   * range HomeKit accepts rather than clamping it, because a value out of range is a value this plugin has
+   * not understood.
+   */
   const readPercent = (capability: string, member: string, minimum: number, read: () => unknown): number => {
-    let value: unknown;
-    try {
-      value = read();
-    } catch {
+    const value = readNumber(capability, member, read);
+    if (!Number.isInteger(value) || value < minimum || value > 100) {
       context.diagnose({
-        code: 'invalid-camera-control-observation',
+        code: INVALID_OBSERVATION_CONDITION,
         capability,
         member,
         active: true,
-        reason: 'sdk-fault',
+        reason: 'malformed',
       });
       throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > 100) {
-      context.diagnose({
-        code: 'invalid-camera-control-observation',
-        capability,
-        member,
-        active: true,
-        reason: value === undefined ? 'missing' : 'malformed',
-      });
-      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    context.diagnose({
-      code: 'invalid-camera-control-observation',
-      capability,
-      member,
-      active: false,
-      reason: 'recovered',
-    });
     return value;
   };
 

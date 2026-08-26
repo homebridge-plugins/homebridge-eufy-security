@@ -1,10 +1,12 @@
 import { EventEmitter } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
 
 import type { AvailabilityObservation, CameraActions } from '@mega-yfue/eufy-sdk';
 import {
   CapabilityNotSupportedError,
   LiveSnapshotUnavailableError,
+  NightVision,
   StoredSnapshotUnavailableError,
   unreflectedMembers,
 } from '@mega-yfue/eufy-sdk';
@@ -319,6 +321,35 @@ function indicatorEvidence(
     [
       'camera.statusLed.persistent-operation',
       { id: 'camera.statusLed.persistent-operation', kind: 'persistent-operation' as const },
+    ],
+  ]);
+}
+
+/** The exact evidence that admits carrying HomeKit's own camera-active state to the camera's power. */
+function enablementWriteEvidence(evidence: AdapterAttachmentContext['evidence']): AdapterAttachmentContext['evidence'] {
+  return new Map([
+    ...evidence,
+    [
+      'camera.enabled.persistent-operation',
+      { id: 'camera.enabled.persistent-operation', kind: 'persistent-operation' as const },
+    ],
+  ]);
+}
+
+/** The exact night-vision evidence that admits presenting and operating a camera's night vision. */
+function nightVisionEvidence(
+  evidence: AdapterAttachmentContext['evidence'],
+  overrides: Partial<DeviceMemberEvidence> = {},
+): AdapterAttachmentContext['evidence'] {
+  return new Map([
+    ...evidence,
+    [
+      'camera.nightVision.read',
+      { id: 'camera.nightVision.read', kind: 'read' as const, type: 'enum' as const, writable: true, ...overrides },
+    ],
+    [
+      'camera.nightVision.persistent-operation',
+      { id: 'camera.nightVision.persistent-operation', kind: 'persistent-operation' as const },
     ],
   ]);
 }
@@ -2374,6 +2405,377 @@ describe('camera streaming bundle adapter', () => {
       active: true,
       reason: 'capability-not-supported',
     });
+  });
+
+  it('restores the night-vision mode the camera reported rather than one chosen for it', async () => {
+    const target = new Accessory(
+      'Synthetic night vision camera',
+      uuid.generate('synthetic-night-vision-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { mode: NightVision.FullColor as number };
+    const setNightVision = vi.fn(async (mode: number) => {
+      state.mode = mode;
+    });
+    const camera = {
+      get enabled(): unknown {
+        return true;
+      },
+      get nightVision(): unknown {
+        return state.mode;
+      },
+      setNightVision,
+      live: vi.fn(),
+    };
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: nightVisionEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const night = operatingModes(target)[0]!.getCharacteristic(Characteristic.NightVision);
+
+    await expect(night.handleGetRequest()).resolves.toBe(true);
+
+    await night.handleSetRequest(false);
+    expect(setNightVision).toHaveBeenCalledExactlyOnceWith(NightVision.Off);
+    await expect(night.handleGetRequest()).resolves.toBe(false);
+
+    await night.handleSetRequest(true);
+    expect(setNightVision).toHaveBeenLastCalledWith(NightVision.FullColor);
+    await expect(night.handleGetRequest()).resolves.toBe(true);
+  });
+
+  it('turns night vision on to infrared for a camera whose lit mode was never observed', async () => {
+    const target = new Accessory(
+      'Synthetic dark night vision camera',
+      uuid.generate('synthetic-dark-night-vision-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setNightVision = vi.fn(async () => undefined);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ enabled: true, nightVision: NightVision.Off, setNightVision, live: vi.fn() }),
+      } as never,
+      evidence: nightVisionEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const night = operatingModes(target)[0]!.getCharacteristic(Characteristic.NightVision);
+
+    await expect(night.handleGetRequest()).resolves.toBe(false);
+    await night.handleSetRequest(true);
+
+    expect(setNightVision).toHaveBeenCalledExactlyOnceWith(NightVision.Infrared);
+  });
+
+  it('presents no night vision without exact evidence and a bound typed operation', async () => {
+    const cases = [
+      { label: 'unevidenced', evidence: enabledEvidence(snapshotEvidence()), setNightVision: vi.fn() },
+      {
+        label: 'malformed',
+        evidence: nightVisionEvidence(enabledEvidence(snapshotEvidence()), { type: 'bool' }),
+        setNightVision: vi.fn(),
+      },
+      {
+        label: 'unbound',
+        evidence: nightVisionEvidence(enabledEvidence(snapshotEvidence())),
+        setNightVision: undefined,
+      },
+    ];
+
+    for (const { label, evidence, setNightVision } of cases) {
+      const target = new Accessory(
+        `Synthetic unlit ${label} camera`,
+        uuid.generate(`synthetic-unlit-${label}-camera-stream`),
+      ) as unknown as PlatformAccessory;
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: {
+          sn: SNAPSHOT_SERIAL,
+          camera: () => ({
+            enabled: true,
+            nightVision: NightVision.Infrared,
+            live: vi.fn(),
+            ...(setNightVision ? { setNightVision } : {}),
+          }),
+        } as never,
+        evidence,
+        accessory: target,
+        hap: HAP,
+        liveMedia: { prepare: vi.fn() },
+        audioEnabled: false,
+        diagnose: vi.fn(),
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+
+      expect(operatingModes(target)[0]!.testCharacteristic(Characteristic.NightVision), label).toBe(false);
+    }
+  });
+
+  it('turns the camera off and on again when HomeKit writes its own camera-active state', async () => {
+    const target = new Accessory(
+      'Synthetic homekit active camera',
+      uuid.generate('synthetic-homekit-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { enabled: true };
+    const setEnabled = vi.fn(async (value: boolean) => {
+      state.enabled = value;
+    });
+    const camera = {
+      get enabled(): unknown {
+        return state.enabled;
+      },
+      setEnabled,
+      live: vi.fn(),
+    };
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+    expect(setEnabled).not.toHaveBeenCalled();
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF);
+    expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+    expect(presentedDisabled(target)).toBe(true);
+    expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
+    await delay(0);
+    expect(active.value, 'a landed write must not be undone by a reading taken before it converged').toBe(
+      Characteristic.HomeKitCameraActive.OFF,
+    );
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON);
+    expect(setEnabled).toHaveBeenLastCalledWith(true);
+    expect(active.value).toBe(Characteristic.HomeKitCameraActive.ON);
+  });
+
+  it('keeps the HomeKit camera-active state a camera has accepted but not yet converged on', async () => {
+    const target = new Accessory(
+      'Synthetic lagging active camera',
+      uuid.generate('synthetic-lagging-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => undefined);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ enabled: true, setEnabled, live: vi.fn() }),
+      } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF);
+    await delay(0);
+
+    expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+    expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
+    expect(presentedDisabled(target)).toBe(false);
+  });
+
+  it('restores a night-vision mode observed before a reconciliation replaced the attachment', async () => {
+    const target = new Accessory(
+      'Synthetic retained night vision camera',
+      uuid.generate('synthetic-retained-night-vision-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { mode: NightVision.FullColor as number };
+    const setNightVision = vi.fn(async (mode: number) => {
+      state.mode = mode;
+    });
+    const persist = vi.fn();
+    const context = {
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({
+          enabled: true,
+          get nightVision(): unknown {
+            return state.mode;
+          },
+          setNightVision,
+          live: vi.fn(),
+        }),
+      } as never,
+      evidence: nightVisionEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist,
+    } satisfies AdapterAttachmentContext;
+
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const first = operatingModes(target)[0]!.getCharacteristic(Characteristic.NightVision);
+    await expect(first.handleGetRequest()).resolves.toBe(true);
+    expect(persist).toHaveBeenCalled();
+
+    await first.handleSetRequest(false);
+    expect(setNightVision).toHaveBeenLastCalledWith(NightVision.Off);
+
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const second = operatingModes(target)[0]!.getCharacteristic(Characteristic.NightVision);
+    await expect(second.handleGetRequest()).resolves.toBe(false);
+    await second.handleSetRequest(true);
+
+    expect(setNightVision).toHaveBeenLastCalledWith(NightVision.FullColor);
+  });
+
+  it('refuses a night-vision mode the SDK does not declare instead of reading it as night vision', async () => {
+    const target = new Accessory(
+      'Synthetic unknown night vision camera',
+      uuid.generate('synthetic-unknown-night-vision-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setNightVision = vi.fn(async () => undefined);
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ enabled: true, nightVision: 7, setNightVision, live: vi.fn() }),
+      } as never,
+      evidence: nightVisionEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const night = operatingModes(target)[0]!.getCharacteristic(Characteristic.NightVision);
+
+    await expect(night.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    await night.handleSetRequest(true);
+
+    expect(setNightVision).toHaveBeenCalledExactlyOnceWith(NightVision.Infrared);
+    expect(diagnose.mock.calls.map(([condition]) => condition)).toContainEqual({
+      code: 'invalid-camera-control-observation',
+      capability: 'camera',
+      member: 'nightVision',
+      active: true,
+      reason: 'malformed',
+    });
+  });
+
+  it('accepts a HomeKit camera-active state it cannot carry to the camera without pretending to', async () => {
+    const target = new Accessory(
+      'Synthetic unwritable active camera',
+      uuid.generate('synthetic-unwritable-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => undefined);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
+      evidence: enabledEvidence(snapshotEvidence()),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await expect(active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF)).resolves.not.toThrow();
+
+    expect(setEnabled).not.toHaveBeenCalled();
+    expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
+  });
+
+  it('reverts the HomeKit camera-active state when the camera refuses the change', async () => {
+    const target = new Accessory(
+      'Synthetic refused active camera',
+      uuid.generate('synthetic-refused-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => {
+      throw new Error('synthetic power failure');
+    });
+    const diagnose = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await expect(active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF)).rejects.toBe(
+      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+    );
+
+    expect(active.value).toBe(Characteristic.HomeKitCameraActive.ON);
+    expect(diagnose.mock.calls.map(([condition]) => condition)).toContainEqual({
+      code: 'camera-control-operation-failed',
+      capability: 'camera',
+      member: 'enabled',
+      active: true,
+      reason: 'operation-failure',
+    });
+  });
+
+  it('writes the camera only for a controller write, never for a state HAP restored', async () => {
+    const target = new Accessory(
+      'Synthetic restored active camera',
+      uuid.generate('synthetic-restored-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => undefined);
+    const context = {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext;
+
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    active.updateValue(Characteristic.HomeKitCameraActive.OFF);
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    expect(setEnabled).not.toHaveBeenCalled();
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF);
+
+    expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it('follows the enablement change event rather than a timer', async () => {

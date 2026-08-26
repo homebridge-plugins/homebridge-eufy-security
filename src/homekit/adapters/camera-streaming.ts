@@ -1,5 +1,5 @@
 import type { AnyDeviceEvent, CameraActions } from '@mega-yfue/eufy-sdk';
-import { unreflectedMembers } from '@mega-yfue/eufy-sdk';
+import { NightVision, unreflectedMembers } from '@mega-yfue/eufy-sdk';
 import type {
   CameraController,
   CameraRecordingConfiguration,
@@ -15,8 +15,9 @@ import type {
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
 import {
-  booleanObservationReader,
   deviceOperationIssuer,
+  INVALID_OBSERVATION_CONDITION,
+  observationReader,
   type DeviceOperationIssuer,
   type DeviceOperationState,
 } from '../device-control.js';
@@ -120,6 +121,22 @@ const CAMERA_ENABLED_EVENT_ROW = 'camera.cameraEnabled.event';
  */
 const CAMERA_STATUS_LED_READ = { id: 'camera.statusLed.read', kind: 'read', type: 'bool', writable: true } as const;
 const CAMERA_STATUS_LED_WRITE = { id: 'camera.statusLed.persistent-operation', kind: 'persistent-operation' } as const;
+
+/**
+ * Night vision, presented on the same service. The SDK reports it as a three-value mode and HomeKit carries
+ * one boolean, so the projection is this plugin's: see {@link nightVisionPresentation}.
+ */
+const CAMERA_NIGHT_VISION_READ = { id: 'camera.nightVision.read', kind: 'read', type: 'enum', writable: true } as const;
+const CAMERA_NIGHT_VISION_WRITE = {
+  id: 'camera.nightVision.persistent-operation',
+  kind: 'persistent-operation',
+} as const;
+
+/** The operation that turns this camera off and on again, which HomeKit's own camera-active state drives. */
+const CAMERA_ENABLED_WRITE = { id: 'camera.enabled.persistent-operation', kind: 'persistent-operation' } as const;
+
+/** The night-vision modes the SDK declares, which are the only readings this plugin will project. */
+const NIGHT_VISION_MODES: ReadonlySet<number> = new Set(Object.values(NightVision));
 
 /**
  * The SDK event names that say this camera's enablement moved: the push one a write of this plugin's own
@@ -722,6 +739,80 @@ export const CAMERA_STREAMING_ADAPTER = {
       ],
     },
     {
+      id: CAMERA_NIGHT_VISION_READ.id,
+      hapFit:
+        "Night Vision carries the one boolean HomeKit has for it, projected from the camera's own three-mode reading, where every mode but off reads as on",
+      identityEffect: 'Night vision shares the one operating mode service this camera presents on',
+      diagnostics:
+        'A mode that is absent, of another shape, or faulting answers HomeKit with no response, and a camera that offers the setter without reporting a mode presents no night vision at all',
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'restores the night-vision mode the camera reported rather than one chosen for it',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'presents no night vision without exact evidence and a bound typed operation',
+        },
+      ],
+    },
+    {
+      id: CAMERA_NIGHT_VISION_WRITE.id,
+      hapFit:
+        'Turning night vision on restores the mode this camera last reported for itself, because HomeKit carries no mode of its own to state',
+      identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
+      diagnostics:
+        'Full colour is not offered by every model, so a camera whose lit mode was never observed is turned on to infrared rather than to a mode it may refuse, and the characteristic is restored from the authoritative reading',
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'restores the night-vision mode the camera reported rather than one chosen for it',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'turns night vision on to infrared for a camera whose lit mode was never observed',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'restores a night-vision mode observed before a reconciliation replaced the attachment',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'refuses a night-vision mode the SDK does not declare instead of reading it as night vision',
+        },
+      ],
+    },
+    {
+      id: CAMERA_ENABLED_WRITE.id,
+      hapFit:
+        "HomeKit's own camera-active state is carried through to the camera's power, so a camera the user set to off for this mode is off rather than merely unwatched",
+      identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
+      diagnostics:
+        'Only an explicit controller write is acted on, never a state HAP restored, so a restart cannot power a camera down from an intent expressed earlier; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'turns the camera off and on again when HomeKit writes its own camera-active state',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'accepts a HomeKit camera-active state it cannot carry to the camera without pretending to',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'reverts the HomeKit camera-active state when the camera refuses the change',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'keeps the HomeKit camera-active state a camera has accepted but not yet converged on',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'writes the camera only for a controller write, never for a state HAP restored',
+        },
+      ],
+    },
+    {
       id: CAMERA_ENABLED_EVENT_ROW,
       hapFit:
         'Camera Operating Mode presents the enablement observation as HomeKit disabled state, republished from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from every read the live gate makes, and answered from the observation on a HomeKit read',
@@ -849,7 +940,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const enablement = enablementObservation(camera, observed);
   const detachRejectors = new Set<(error: unknown) => void>();
   let detached = false;
-  const readBoolean = booleanObservationReader(context);
+  const readBoolean = observationReader(context, 'boolean');
+  const readNumber = observationReader(context, 'number');
   const reportAdmission = cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION);
   const acquireLiveSnapshot = liveAvailable ? camera.snapshotLive!.bind(camera) : undefined;
   const openTalkback = talkbackConfigured ? camera.talkback!.bind(camera) : undefined;
@@ -876,7 +968,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     detachRejectors,
   });
   /** Everything the operating mode service presents and operates, resolved once per attachment. */
-  const controls = { camera, enablement, observed, issue, readBoolean } as const;
+  const controls = { camera, enablement, observed, issue, readBoolean, readNumber } as const;
   /** Wakes every write still in flight when this attachment stops being the one HomeKit is talking to. */
   const releaseOperations = (): void => {
     detached = true;
@@ -1234,7 +1326,7 @@ function talkbackReporter(context: AdapterAttachmentContext): (outcome: Talkback
  * SDK stopped standing behind its reading.
  */
 function observesEnablement(context: AdapterAttachmentContext, camera: CameraActions): boolean {
-  return satisfiesMemberRequirements(context.evidence, [CAMERA_ENABLED_READ]) && !untrustedEnablement(camera);
+  return satisfiesMemberRequirements(context.evidence, [CAMERA_ENABLED_READ]) && !untrusted(camera, 'enabled');
 }
 
 /** Reads that observation where there is one, answering nothing for a reading that is absent or faults. */
@@ -1258,6 +1350,7 @@ interface OperatingModeControls {
   readonly observed: boolean;
   readonly issue: DeviceOperationIssuer;
   readonly readBoolean: (capability: string, member: string, read: () => unknown) => boolean;
+  readonly readNumber: (capability: string, member: string, read: () => unknown) => number;
 }
 
 /** Republishes what HomeKit is told on the camera operating mode service, and withdraws what it published. */
@@ -1267,14 +1360,16 @@ interface OperatingModePresentation {
 }
 
 /**
- * Whether the SDK declines to stand behind this camera's enablement reading on this device family.
+ * Whether the SDK declines to stand behind one of this camera's readings on this device family.
  *
- * The statement is read off the bound capability surface itself, so a surface that answers that read by
- * throwing has stated nothing this plugin may rely on and is treated as declining too.
+ * A member named there reports a value that does not track its own setter, so it may neither be presented nor
+ * written: publishing it would state something the SDK does not, and writing it would leave HomeKit unable to
+ * tell whether the write landed. The statement is read off the bound capability surface itself, so a surface
+ * that answers that read by throwing has stated nothing this plugin may rely on and is declined too.
  */
-function untrustedEnablement(camera: CameraActions): boolean {
+function untrusted(camera: CameraActions, member: string): boolean {
   try {
-    return unreflectedMembers(camera).includes('enabled');
+    return unreflectedMembers(camera).includes(member);
   } catch {
     return true;
   }
@@ -1307,20 +1402,39 @@ function untrustedEnablement(camera: CameraActions): boolean {
 function operatingModePresentation(
   context: AdapterAttachmentContext,
   controller: CameraController,
-  { camera, enablement, observed, issue, readBoolean }: OperatingModeControls,
+  { camera, enablement, observed, issue, readBoolean, readNumber }: OperatingModeControls,
 ): OperatingModePresentation {
   const { hap } = context;
   const indicated = indicatesStatusLed(context, camera);
+  const nightVisible = presentsNightVision(context, camera);
   let presented: boolean | undefined;
   let service: ReturnType<typeof operatingModeService> | undefined;
-  const resolve = () => (service ??= operatingModeService(context, controller));
+  let hooked = false;
+  /**
+   * The service, created on first need. HomeKit's own camera-active state is hooked here rather than up
+   * front, because it is only worth carrying to the device once this camera publishes something on that
+   * service at all — and a camera whose enablement reading never answers publishes nothing.
+   */
+  const resolve = () => {
+    service ??= operatingModeService(context, controller);
+    if (!hooked) {
+      hooked = true;
+      if (observed) {
+        homeKitActiveOperation(context, service, { camera, enablement, issue }, () => publish());
+      }
+    }
+    return service;
+  };
   if (!observed) {
     withdrawCharacteristic(context, controller, 'ManuallyDisabled');
   }
   if (!indicated) {
     withdrawCharacteristic(context, controller, 'CameraOperatingModeIndicator');
   }
-  if (!observed && !indicated) {
+  if (!nightVisible) {
+    withdrawCharacteristic(context, controller, 'NightVision');
+  }
+  if (!observed && !indicated && !nightVisible) {
     removeOperatingMode(context);
     return { present: () => ({ event: ENABLEMENT_EVENT_TRACE, observation: 'missing' }), remove: () => undefined };
   }
@@ -1344,33 +1458,171 @@ function operatingModePresentation(
       );
     });
   }
+  if (nightVisible) {
+    nightVisionPresentation(context, resolve(), { camera, issue, readNumber });
+  }
   let disabled: ReturnType<ReturnType<typeof operatingModeService>['getCharacteristic']> | undefined;
+  /**
+   * Publishes the disabled state, attaching it on the first reading that answers. A camera whose reading
+   * never answers is published as nothing at all rather than as a state defaulted on its behalf.
+   */
+  const publish = (): AdapterEventTrace => {
+    const enabled = enablement();
+    if (enabled === undefined) {
+      return { event: ENABLEMENT_EVENT_TRACE, observation: 'missing' };
+    }
+    disabled ??= resolve()
+      .getCharacteristic(hap.Characteristic.ManuallyDisabled)
+      .onGet(() => {
+        const reading = enablement();
+        return reading === undefined ? (presented ?? false) : !reading;
+      });
+    if (presented !== !enabled) {
+      presented = !enabled;
+      disabled.updateValue(presented);
+    }
+    return { event: ENABLEMENT_EVENT_TRACE, observation: 'valid' };
+  };
   return {
-    /**
-     * Publishes the disabled state, attaching it on the first reading that answers. A camera whose reading
-     * never answers is published as nothing at all rather than as a state defaulted on its behalf.
-     */
-    present(): AdapterEventTrace {
-      const enabled = enablement();
-      if (enabled === undefined) {
-        return { event: ENABLEMENT_EVENT_TRACE, observation: 'missing' };
-      }
-      disabled ??= resolve()
-        .getCharacteristic(hap.Characteristic.ManuallyDisabled)
-        .onGet(() => {
-          const reading = enablement();
-          return reading === undefined ? (presented ?? false) : !reading;
-        });
-      if (presented !== !enabled) {
-        presented = !enabled;
-        disabled.updateValue(presented);
-      }
-      return { event: ENABLEMENT_EVENT_TRACE, observation: 'valid' };
-    },
+    present: publish,
     remove(): void {
       removeOperatingMode(context);
     },
   };
+}
+
+/**
+ * Carries HomeKit's own camera-active state through to the camera's power, where the camera accepts it.
+ *
+ * HomeKit owns this state: the Home app writes it when a camera is set to off for the mode the home is in,
+ * and where HomeKit Secure Video created the service HAP gates streams, snapshots and recordings on it
+ * itself — on a service this bundle publishes instead, HAP gates nothing and the state is carried only here.
+ * Turning the camera off physically as well is this plugin's product policy, because a camera the user has
+ * told HomeKit not to use is a camera they have asked not to be watched by, and leaving it powered means it
+ * keeps recording to the vendor's cloud.
+ *
+ * The device is written only for a value a controller wrote. That is what reaches a set handler: HAP restores
+ * its own persisted copy of this state with an update rather than a write, so a restart cannot power a camera
+ * down from an intent expressed days ago, and the vendor app stays a co-equal owner of that switch.
+ *
+ * A camera whose power this plugin cannot write still accepts the state, because refusing it would leave the
+ * user unable to turn the camera off in HomeKit at all; the write is simply HomeKit's own then. A camera that
+ * refuses the change has it reverted to what the camera reports, so HomeKit never keeps a claim the device did
+ * not reach. Nothing moves this state the other way: a camera switched back on in the vendor app is presented
+ * as enabled again, but the HomeKit setting the user chose is theirs to change, not this plugin's to overrule.
+ */
+function homeKitActiveOperation(
+  context: AdapterAttachmentContext,
+  service: ReturnType<typeof operatingModeService>,
+  { camera, enablement, issue }: Pick<OperatingModeControls, 'camera' | 'enablement' | 'issue'>,
+  republish: () => void,
+): void {
+  const { hap } = context;
+  const operable =
+    satisfiesMemberRequirements(context.evidence, [CAMERA_ENABLED_WRITE]) &&
+    typeof camera.setEnabled === 'function' &&
+    !untrusted(camera, 'enabled');
+  const active = service.getCharacteristic(hap.Characteristic.HomeKitCameraActive);
+  active.onSet(async (value: unknown) => {
+    if (!operable) {
+      return;
+    }
+    const enable = value === hap.Characteristic.HomeKitCameraActive.ON;
+    try {
+      await issue('camera', 'enabled', () => camera.setEnabled!(enable), republish);
+    } catch (error) {
+      const enabled = enablement();
+      if (enabled !== undefined) {
+        active.updateValue(
+          enabled ? hap.Characteristic.HomeKitCameraActive.ON : hap.Characteristic.HomeKitCameraActive.OFF,
+        );
+      }
+      throw error;
+    }
+  });
+}
+
+/**
+ * Presents night vision as the one boolean HomeKit carries, over the three modes the SDK reports.
+ *
+ * `Off` is the only mode that is not night vision, so anything else reads as on. Turning it on again restores
+ * the mode this camera last reported for itself rather than a mode chosen here, because full colour night
+ * vision is not offered by every model — the SDK says so, and writing infrared blindly would silently
+ * downgrade a camera whose owner had chosen colour. That mode is retained on the accessory, so it survives a
+ * reconciliation and a restart: an attachment-local memory would be empty exactly when the camera currently
+ * reads off, which is when the restore matters. A camera whose lit mode has never been observed at all is
+ * turned on to infrared, which is the mode the SDK reports for every family and the one it says a model may
+ * offer without offering colour.
+ *
+ * A reading outside the modes the SDK declares is refused rather than projected, because "not off" would
+ * otherwise make any unexpected number read as night vision and be written back as a mode.
+ */
+function nightVisionPresentation(
+  context: AdapterAttachmentContext,
+  service: ReturnType<typeof operatingModeService>,
+  {
+    camera,
+    issue,
+    readNumber,
+  }: Pick<OperatingModeControls, 'camera' | 'issue'> & Pick<OperatingModeControls, 'readNumber'>,
+): void {
+  const { hap } = context;
+  interface NightVisionContext {
+    homebridgeEufyCameraNightVision?: { version: 1; mode: number };
+  }
+  const retained = (context.accessory.context ?? {}) as NightVisionContext;
+  context.accessory.context = retained;
+  const stored = retained.homebridgeEufyCameraNightVision;
+  let lit =
+    stored?.version === 1 && NIGHT_VISION_MODES.has(stored.mode) && stored.mode !== NightVision.Off
+      ? stored.mode
+      : undefined;
+  const mode = (): number => {
+    const reading = readNumber('camera', 'nightVision', () => camera.nightVision);
+    if (!NIGHT_VISION_MODES.has(reading)) {
+      context.diagnose({
+        code: INVALID_OBSERVATION_CONDITION,
+        capability: 'camera',
+        member: 'nightVision',
+        active: true,
+        reason: 'malformed',
+      });
+      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    if (reading !== NightVision.Off && lit !== reading) {
+      lit = reading;
+      retained.homebridgeEufyCameraNightVision = { version: 1, mode: reading };
+      context.persist();
+    }
+    return reading;
+  };
+  const characteristic = service.getCharacteristic(hap.Characteristic.NightVision);
+  characteristic.onGet(() => mode() !== NightVision.Off);
+  characteristic.onSet((value: unknown) => {
+    if (typeof value !== 'boolean') {
+      throw new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+    }
+    const requested = value ? (lit ?? NightVision.Infrared) : NightVision.Off;
+    return issue(
+      'camera',
+      'nightVision',
+      () => camera.setNightVision!(requested),
+      () => {
+        try {
+          characteristic.updateValue(mode() !== NightVision.Off);
+        } catch {}
+      },
+    );
+  });
+}
+
+/** Whether this camera reports its night-vision mode and accepts a change to it. */
+function presentsNightVision(context: AdapterAttachmentContext, camera: CameraActions): boolean {
+  return (
+    satisfiesMemberRequirements(context.evidence, [CAMERA_NIGHT_VISION_READ, CAMERA_NIGHT_VISION_WRITE]) &&
+    typeof camera.setNightVision === 'function' &&
+    !untrusted(camera, 'nightVision')
+  );
 }
 
 /**
@@ -1382,7 +1634,8 @@ function operatingModePresentation(
 function indicatesStatusLed(context: AdapterAttachmentContext, camera: CameraActions): boolean {
   return (
     satisfiesMemberRequirements(context.evidence, [CAMERA_STATUS_LED_READ, CAMERA_STATUS_LED_WRITE]) &&
-    typeof camera.setStatusLed === 'function'
+    typeof camera.setStatusLed === 'function' &&
+    !untrusted(camera, 'statusLed')
   );
 }
 
@@ -1416,7 +1669,7 @@ function operatingModeService(context: AdapterAttachmentContext, controller: Cam
 function withdrawCharacteristic(
   context: AdapterAttachmentContext,
   controller: CameraController,
-  attached: 'ManuallyDisabled' | 'CameraOperatingModeIndicator',
+  attached: 'ManuallyDisabled' | 'CameraOperatingModeIndicator' | 'NightVision',
 ): void {
   const service = existingOperatingMode(context, controller);
   const characteristic = context.hap.Characteristic[attached];

@@ -338,6 +338,87 @@ while requiring corroboration would delay every real switch-off by a whole super
 corroboration the SDK does offer, its `audio-only` start stage, is used where it exists: to name the reason,
 after a session the camera answered without video.
 
+### One owner for a HomeKit-initiated device operation
+
+Two camera bundles now write device state, so the bounded discipline that write needs lives once in
+`homekit/device-control.ts` rather than twice: one operation in flight per member, a deadline that answers
+HomeKit without cancelling a device that may be asleep, an operation the camera reports unsupported latched so
+it is asked once, restoration from the authoritative reading rather than from what HomeKit asked for, and the
+fail-closed observation read both bundles answer from. It is a seam for one contract, not a bucket: the policy
+of every control stays in the adapter that owns the control.
+
+### The camera operating mode service
+
+One accessory carries exactly one Camera Operating Mode service, and the bundle that owns the camera
+controller owns everything on it. That is not a preference: HomeKit Secure Video creates the service, HAP
+identifies a service by type and subtype, and the controller's own carries an empty subtype — so a bundle
+attaching to it before the controller exists creates a competing service that the controller then fails to
+attach over. Adapter attachment order decides who runs first, and nothing about a service's meaning should
+depend on that, so the streaming bundle publishes every state on it and the controls bundle publishes none.
+
+Four states are published, each from evidence the SDK gives:
+
+- **Manually disabled**, from the camera's enablement observation, so a camera that is off is presented as
+  off rather than offered as a tile whose stream would be refused.
+- **The operating mode indicator**, from the camera's status-light member. HomeKit calls this the camera
+  operating mode indicator and the Home app shows it as the camera's status light, which is where it belongs;
+  the switch an earlier version published for it is withdrawn by the bundle that published it. Measured on a
+  real fleet: all eight cameras report that state as a writable boolean.
+- **Night vision**, from the camera's night-vision mode. HomeKit carries one boolean and the SDK reports three
+  modes, so the projection is this plugin's: every mode but off reads as on, and turning it back on restores
+  the mode this camera last reported for itself. Infrared is the fallback where no lit mode was ever observed,
+  because the SDK states some models omit full colour and writing colour blindly would ask a camera for
+  something it may refuse — while writing infrared blindly would silently downgrade a camera whose owner had
+  chosen colour. Measured on the same fleet: five of eight cameras report a mode, and the other three publish
+  no night vision at all although all eight offer the setter. An installed setter is not evidence of a
+  readable state.
+- **HomeKit's own camera-active state**, which is HomeKit's rather than the camera's, and is carried through
+  to the camera's power — see below.
+
+Two more are seeded and deliberately not driven: the event and periodic snapshot states are HomeKit's own
+policy about what it may ask for, and no SDK member corresponds to them. Two are refused outright: a
+third-party-active state and a diagonal field of view have no SDK evidence behind them, and publishing either
+would mean inventing a device fact.
+
+The indicator and night vision are **timed-write** characteristics. A controller that writes them without
+first preparing the write is answered `-70410` by HAP itself, before this plugin is consulted
+(`Accessory.ts`), which is what a test controller sees and what iOS never does, because iOS prepares timed
+writes natively. Their write paths are therefore held by contract rather than by a live controller run; their
+published state is verified live.
+
+### Turning the camera off because HomeKit says so
+
+HomeKit's camera-active state is written by the Home app when a camera is set to off for the mode the home is
+in. Where HomeKit Secure Video created the operating mode service, HAP gates streams, snapshots and recordings
+on that state by itself; on a service this plugin publishes instead, HAP gates nothing and the state is
+carried only here. Either way this plugin carries it through to the camera's power, deliberately: a camera the user has told HomeKit not to use is one they have asked not
+to be watched by, and leaving it powered means it keeps recording to the vendor's cloud regardless.
+
+Three rules bound that, because it is the only place where HomeKit writes a physical device state here:
+
+- **The device is written only for a value a controller wrote.** That is what reaches a set handler: HAP
+  restores its own persisted copy of that state with an update rather than a write. A restored value is not a
+  decision the user just made, so a restart cannot power a camera down from an intent expressed days ago, and
+  the vendor app stays a co-equal owner of that switch.
+- **A camera whose power cannot be written still accepts the state.** Refusing the write would leave the user
+  unable to turn the camera off in HomeKit at all; where the operation is unevidenced or unbound, the state is
+  simply HomeKit's own.
+- **A camera that refuses the change reverts it.** The write fails to the controller and the state is put back
+  to what the camera reports, so HomeKit never keeps a claim the camera did not reach. A camera that _accepts_
+  it keeps the state the user chose: an acknowledgement is delivery and not convergence, so re-reading the
+  camera at that moment would answer with the old value and undo the setting. Convergence is presented through
+  the disabled state instead, which the SDK's change event moves a few seconds later.
+- **Nothing moves the state the other way.** A camera switched back on in the vendor app is presented as
+  enabled again, but the HomeKit setting the user chose stays theirs to change: overruling it from a device
+  change is the conflation this boundary exists to prevent, and it would mean a vendor-app tap silently
+  re-enabled HomeKit recording.
+
+Measured end to end on an isolated instance against a real account, with the write coming from a HomeKit
+controller: the camera reported itself disabled 3.0 s after the state was written off and enabled again 5.0 s
+after it was written on, and the power state was confirmed on the device independently of what HomeKit was
+told. The presented disabled state followed through the SDK's own change event, which is the one path a write
+this plugin issues does announce — measured five times in one run.
+
 ### Live adaptation input timeline
 
 A live source hands over an elementary stream through a pipe, and a pipe carries no container timeline.

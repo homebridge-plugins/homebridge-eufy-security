@@ -140,16 +140,21 @@ export function deviceOperationIssuer({
 }
 
 /**
- * Reads one authoritative boolean SDK observation for a HomeKit characteristic, failing closed.
+ * Reads one authoritative SDK observation for a HomeKit characteristic, failing closed.
  *
- * A camera control answers HomeKit from the device's own reading, so a reading that is absent, not a
- * boolean, or faults must make HomeKit show no response rather than borrow a plausible value from
- * somewhere else: a guessed control state is a control the user cannot trust. Each outcome is reported
- * once under its own reason, and a later readable value withdraws it.
+ * A camera control answers HomeKit from the device's own reading, so a reading that is absent, of another
+ * shape, or faults must make HomeKit show no response rather than borrow a plausible value from somewhere
+ * else: a guessed control state is a control the user cannot trust. Each outcome is reported once under its
+ * own reason, and a later readable value withdraws it.
+ *
+ * The expected shape is stated by the caller rather than inferred, because the SDK stores an enum member as
+ * a number and a caller that accepted whatever arrived would present one member's value under another
+ * member's meaning.
  */
-export function booleanObservationReader(
+export function observationReader<T extends 'boolean' | 'number'>(
   context: Pick<AdapterAttachmentContext, 'diagnose' | 'hap'>,
-): (capability: string, member: string, read: () => unknown) => boolean {
+  expected: T,
+): (capability: string, member: string, read: () => unknown) => T extends 'boolean' ? boolean : number {
   const { hap } = context;
   return (capability, member, read) => {
     let value: unknown;
@@ -165,7 +170,7 @@ export function booleanObservationReader(
       });
       throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-    if (typeof value !== 'boolean') {
+    if (typeof value !== expected || (expected === 'number' && !Number.isFinite(value))) {
       context.diagnose({
         code: INVALID_OBSERVATION_CONDITION,
         capability,
@@ -182,6 +187,6 @@ export function booleanObservationReader(
       active: false,
       reason: 'recovered',
     });
-    return value;
+    return value as T extends 'boolean' ? boolean : number;
   };
 }

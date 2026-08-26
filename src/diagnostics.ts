@@ -1284,25 +1284,32 @@ export type RuntimeState =
   | 'failed'
   | 'stopping';
 
-const CAPABILITIES = new Set(['arming', 'battery', 'camera', 'contact', 'siren', 'smart_light']);
+const CAPABILITIES = new Set(['arming', 'audio', 'battery', 'camera', 'contact', 'light', 'siren', 'smart_light']);
 const MEMBERS = new Set([
   'active',
   'batteryAlert',
   'brightness',
   'charging',
   'color',
+  'enabled',
   'level',
+  'isOn',
   'live',
+  'microphone',
   'mode',
+  'nightVision',
   'open',
   'power',
   'recordFragments',
   'snapshot',
   'snapshotLive',
   'snapshotStored',
+  'speaker',
+  'statusLed',
   'stop',
   'talkback',
   'test',
+  'volume',
 ]);
 const REASONS = new Set([
   'adaptation-failed',
@@ -1540,6 +1547,18 @@ const HOMEKIT_CONDITIONS = {
   'camera-recording-refused': {
     summaryKey: 'log.homekit.cameraRecordingRefused',
     actionKey: 'log.action.enableCamera',
+  },
+  'camera-controls-capability-unavailable': {
+    summaryKey: 'log.homekit.cameraControlsCapabilityUnavailable',
+    actionKey: 'log.action.waitCameraControl',
+  },
+  'camera-control-operation-failed': {
+    summaryKey: 'log.homekit.cameraControlOperationFailed',
+    actionKey: 'log.action.retryCameraControl',
+  },
+  'invalid-camera-control-observation': {
+    summaryKey: 'log.homekit.invalidCameraControlObservation',
+    actionKey: 'log.action.checkCameraControl',
   },
   'camera-snapshot-unavailable': {
     summaryKey: 'log.homekit.cameraSnapshotUnavailable',

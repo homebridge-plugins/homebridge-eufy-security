@@ -150,6 +150,9 @@ describe('SDK/HAP coverage matrix', () => {
         'camera.cameraEnabled.event',
         'camera.statusLed.read',
         'camera.statusLed.persistent-operation',
+        'camera.nightVision.read',
+        'camera.nightVision.persistent-operation',
+        'camera.enabled.persistent-operation',
       ].sort(),
     );
 
