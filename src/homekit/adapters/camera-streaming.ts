@@ -785,11 +785,15 @@ export const CAMERA_STREAMING_ADAPTER = {
     {
       id: CAMERA_ENABLED_WRITE.id,
       hapFit:
-        "HomeKit's own camera-active state is carried through to the camera's power, so a camera the user set to off for this mode is off rather than merely unwatched",
+        "HomeKit's own camera-active state is carried through to the camera's power, so a camera the user set to off for this mode is off rather than merely unwatched, and the camera controls bundle writes the same member from its Camera Enabled switch, which stays reachable when Apple Home declines to write a disabled camera's operating mode",
       identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
       diagnostics:
         'The camera is written only where a controller wrote the state, the value moved, and the camera disagrees with it, so neither a restored state nor the re-assertion a controller sends when the bridge reappears can power a camera down; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
       verification: [
+        {
+          file: 'test/contracts/camera-controls-adapter.test.ts',
+          behavior: 'switches the camera off and on again when HomeKit writes the enabled state',
+        },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'turns the camera off and on again when HomeKit writes its own camera-active state',
@@ -823,12 +827,20 @@ export const CAMERA_STREAMING_ADAPTER = {
     {
       id: CAMERA_ENABLED_EVENT_ROW,
       hapFit:
-        'Camera Operating Mode presents the enablement observation as HomeKit disabled state, republished from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from every read the live gate makes, and answered from the observation on a HomeKit read',
+        'Camera Operating Mode presents the enablement observation as HomeKit disabled state, republished from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from every read the live gate makes, and answered from the observation on a HomeKit read; only an off-state HomeKit did not itself ask for is presented, because Apple Home declines to write the operating mode of a camera reporting itself manually disabled',
       identityEffect:
         "Presentation uses the recording controller's own operating mode service where HomeKit Secure Video created one, and otherwise one service under the stable semantic key camera.operating-mode, so an accessory carries exactly one",
       diagnostics:
         'An absent, non-boolean, faulting, or SDK-declined enablement reading publishes nothing and withdraws no camera; each announced change records one identity-free trace naming whether the observation answered',
       verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'presents a camera switched off outside HomeKit as disabled, because HomeKit still wants it on',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'keeps withholding the disabled state for a camera HomeKit switched off before a restart',
+        },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'follows the enablement change event rather than a timer',
@@ -1418,6 +1430,34 @@ function operatingModePresentation(
   let presented: boolean | undefined;
   let service: ReturnType<typeof operatingModeService> | undefined;
   let hooked = false;
+  interface HomeKitActiveContext {
+    homebridgeEufyCameraHomeKitActive?: { version: 1; active: boolean };
+  }
+  const retained = (context.accessory.context ?? {}) as HomeKitActiveContext;
+  context.accessory.context = retained;
+  const stored = retained.homebridgeEufyCameraHomeKitActive;
+  /** The camera-active state HomeKit last asked this bundle to carry, or nothing where it never has. */
+  let requested = stored?.version === 1 && typeof stored.active === 'boolean' ? stored.active : undefined;
+  /**
+   * Records what HomeKit has asked this bundle to carry, retained on the accessory so it survives a restart.
+   *
+   * Recorded before the camera is written rather than after, because HAP assigns a written value only once
+   * the write is answered: the reflection a landed write announces arrives while the characteristic still
+   * reads the value before it, and without the request already recorded that reflection would be read as a
+   * switch-off HomeKit knows nothing about.
+   */
+  const request = (active: boolean | undefined): void => {
+    if (requested === active) {
+      return;
+    }
+    requested = active;
+    if (active === undefined) {
+      delete retained.homebridgeEufyCameraHomeKitActive;
+    } else {
+      retained.homebridgeEufyCameraHomeKitActive = { version: 1, active };
+    }
+    context.persist();
+  };
   /**
    * The service, created on first need. HomeKit's own camera-active state is hooked here rather than up
    * front, because it is only worth carrying to the device once this camera publishes something on that
@@ -1428,11 +1468,33 @@ function operatingModePresentation(
     if (!hooked) {
       hooked = true;
       if (observed) {
-        homeKitActiveOperation(context, service, { camera, enablement, issue }, () => publish());
+        homeKitActiveOperation(context, service, { camera, enablement, issue }, () => publish(), request);
       }
     }
     return service;
   };
+  /**
+   * Whether HomeKit's own camera-active state says this camera should be on.
+   *
+   * Answered from what HomeKit has asked this bundle to carry rather than from the characteristic, because
+   * `HomeKitCameraActive` is required on the service and HAP defaults a numeric characteristic to its
+   * minimum — so a value of off is indistinguishable there from a characteristic nothing has ever set. A
+   * camera HomeKit has said nothing about is treated as one HomeKit wants on, which is how both the
+   * recording controller and this bundle's own service seed it.
+   */
+  const homeKitActive = (): boolean => requested ?? true;
+  /**
+   * Whether HomeKit should be told this camera was switched off outside HomeKit.
+   *
+   * Only an off-state HomeKit did not ask for qualifies. `ManuallyDisabled` states that a camera was
+   * disabled out of band, and Apple Home acts on it by silently declining to write that camera's operating
+   * mode at all — measured on a real home, where the same phone wrote another camera's mode in the same
+   * minute and this camera's not at all. Publishing it for an off-state HomeKit itself caused therefore
+   * latches the camera off: HomeKit turns it off, is told the camera is manually disabled, and loses the
+   * only control that could turn it back on. HomeKit already holds its own camera-active state for that
+   * case, so withholding this conceals nothing from the user.
+   */
+  const disabledOutsideHomeKit = (enabled: boolean): boolean => !enabled && homeKitActive();
   if (!observed) {
     withdrawCharacteristic(context, controller, 'ManuallyDisabled');
   }
@@ -1483,10 +1545,11 @@ function operatingModePresentation(
       .getCharacteristic(hap.Characteristic.ManuallyDisabled)
       .onGet(() => {
         const reading = enablement();
-        return reading === undefined ? (presented ?? false) : !reading;
+        return reading === undefined ? (presented ?? false) : disabledOutsideHomeKit(reading);
       });
-    if (presented !== !enabled) {
-      presented = !enabled;
+    const state = disabledOutsideHomeKit(enabled);
+    if (presented !== state) {
+      presented = state;
       disabled.updateValue(presented);
     }
     return { event: ENABLEMENT_EVENT_TRACE, observation: 'valid' };
@@ -1532,6 +1595,7 @@ function homeKitActiveOperation(
   service: ReturnType<typeof operatingModeService>,
   { camera, enablement, issue }: Pick<OperatingModeControls, 'camera' | 'enablement' | 'issue'>,
   republish: () => void,
+  request: (active: boolean | undefined) => void,
 ): void {
   const { hap } = context;
   const operable =
@@ -1542,13 +1606,18 @@ function homeKitActiveOperation(
   active.onSet(async (value: unknown, _context?: unknown, connection?: unknown) => {
     const enable = value === hap.Characteristic.HomeKitCameraActive.ON;
     const held = active.value === hap.Characteristic.HomeKitCameraActive.ON;
-    if (!operable || connection === undefined || held === enable || enablement() === enable) {
+    if (!operable || connection === undefined) {
+      return;
+    }
+    request(enable);
+    if (held === enable || enablement() === enable) {
       return;
     }
     try {
       await issue('camera', 'enabled', () => camera.setEnabled!(enable), republish);
     } catch (error) {
       const enabled = enablement();
+      request(enabled);
       if (enabled !== undefined) {
         active.updateValue(
           enabled ? hap.Characteristic.HomeKitCameraActive.ON : hap.Characteristic.HomeKitCameraActive.OFF,

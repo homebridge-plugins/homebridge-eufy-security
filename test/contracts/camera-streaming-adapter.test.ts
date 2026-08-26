@@ -49,7 +49,7 @@ import type {
 } from 'homebridge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdapterAttachmentContext } from '../../src/homekit/adapter.js';
+import type { AdapterAttachmentContext, AttachedAdapter } from '../../src/homekit/adapter.js';
 import type {
   AdaptedRecording,
   LiveMediaAdapter,
@@ -2557,7 +2557,10 @@ describe('camera streaming bundle adapter', () => {
 
     await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
-    expect(presentedDisabled(target)).toBe(true);
+    expect(
+      presentedDisabled(target),
+      'a camera HomeKit itself switched off is not manually disabled, and saying so locks HomeKit out',
+    ).toBe(false);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
     await delay(0);
     expect(active.value, 'a landed write must not be undone by a reading taken before it converged').toBe(
@@ -2567,6 +2570,126 @@ describe('camera streaming bundle adapter', () => {
     await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never);
     expect(setEnabled).toHaveBeenLastCalledWith(true);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.ON);
+  });
+
+  it('never flashes the disabled state while its own camera-active write is still in flight', async () => {
+    const target = new Accessory(
+      'Synthetic in flight active camera',
+      uuid.generate('synthetic-in-flight-active-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { enabled: true };
+    const presented: (boolean | undefined)[] = [];
+    let attached: AttachedAdapter | undefined;
+    const camera = {
+      get enabled(): unknown {
+        return state.enabled;
+      },
+      /**
+       * Reproduces the live sequence: the SDK reflects a landed enablement write with its own change event,
+       * which arrives while HomeKit is still waiting for the write to be answered.
+       */
+      setEnabled: vi.fn(async (value: boolean) => {
+        state.enabled = value;
+        attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
+        presented.push(presentedDisabled(target));
+      }),
+      live: vi.fn(),
+    };
+
+    attached = CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
+    await delay(0);
+
+    expect(
+      presented,
+      'HAP assigns its own value only after the write is answered, so a reflection arriving first must not be read as an out-of-band switch-off',
+    ).toEqual([false]);
+    expect(presentedDisabled(target)).toBe(false);
+  });
+
+  it('keeps withholding the disabled state for a camera HomeKit switched off before a restart', async () => {
+    const target = new Accessory(
+      'Synthetic restored disabled camera',
+      uuid.generate('synthetic-restored-disabled-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const state = { enabled: true };
+    const camera = {
+      get enabled(): unknown {
+        return state.enabled;
+      },
+      setEnabled: vi.fn(async (value: boolean) => {
+        state.enabled = value;
+      }),
+      live: vi.fn(),
+    };
+    const context = {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext;
+
+    const attached = CAMERA_STREAMING_ADAPTER.attach(context);
+    await operatingModes(target)[0]!
+      .getCharacteristic(Characteristic.HomeKitCameraActive)
+      .handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
+    expect(context.persist, 'the request has to be retained to survive a restart').toHaveBeenCalled();
+    attached?.detach?.();
+
+    const restored = CAMERA_STREAMING_ADAPTER.attach(context);
+
+    expect(
+      presentedDisabled(target),
+      'the retained request says HomeKit asked for this camera to be off, so it is not manually disabled',
+    ).toBe(false);
+    await expect(
+      operatingModes(target)[0]!.getCharacteristic(Characteristic.ManuallyDisabled).handleGetRequest(),
+    ).resolves.toBe(false);
+    restored?.detach?.();
+  });
+
+  it('presents a camera switched off outside HomeKit as disabled, because HomeKit still wants it on', async () => {
+    const target = new Accessory(
+      'Synthetic externally disabled camera',
+      uuid.generate('synthetic-externally-disabled-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const { state, camera } = observedCamera(true);
+
+    const attached = CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+
+    expect(active.value, 'the precondition this rule turns on').toBe(Characteristic.HomeKitCameraActive.ON);
+    state.value = false;
+    attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
+
+    expect(presentedDisabled(target)).toBe(true);
   });
 
   it('keeps the HomeKit camera-active state a camera has accepted but not yet converged on', async () => {
