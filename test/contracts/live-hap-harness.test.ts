@@ -20,6 +20,8 @@ const {
   isStructuralJpeg,
   judgeWindow,
   logMark,
+  operatingModeAddress,
+  operatingModeState,
   presentedDisabled,
   refuseUnadvertised,
   retainedSnapshotName,
@@ -285,6 +287,40 @@ describe('observed live conditions', () => {
       }),
     ).rejects.toThrow('2 camera operating mode services');
     expect(client.getCharacteristics).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports every operating mode state a camera publishes and omits the ones it does not', async () => {
+    const accessory = {
+      aid: 9,
+      services: [
+        {
+          type: '0000021a-0000-1000-8000-0026bb765291',
+          characteristics: [
+            { type: '00000227', iid: 11 },
+            { type: '0000021b', iid: 12 },
+            { type: '0000011b', iid: 13 },
+          ],
+        },
+      ],
+    };
+    const values: Record<string, unknown> = { '9.11': 1, '9.12': 1, '9.13': 0 };
+    const client = {
+      getCharacteristics: vi.fn(async (addresses: string[]) => ({
+        characteristics: [{ value: values[addresses[0]!] }],
+      })),
+    };
+
+    await expect(operatingModeState(client, accessory)).resolves.toEqual({
+      manuallyDisabled: 1,
+      homeKitCameraActive: 1,
+      nightVision: 0,
+    });
+    expect(operatingModeAddress(accessory, 'indicator')).toBeUndefined();
+    expect(operatingModeAddress(accessory, 'nightVision')).toBe('9.13');
+    expect(() => operatingModeAddress(accessory, 'invented')).toThrow('unknown operating mode state');
+    expect(() =>
+      operatingModeAddress({ aid: 9, services: [...accessory.services, accessory.services[0]] }, 'nightVision'),
+    ).toThrow('2 camera operating mode services');
   });
 
   it('separates outbound video, outbound audio, and return-audio adaptation', () => {

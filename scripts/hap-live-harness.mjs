@@ -27,6 +27,19 @@ import { readFileSync, statSync } from 'node:fs';
 export const CAMERA_RTP_STREAM_MANAGEMENT = '00000110-0000-1000-8000-0026BB765291';
 export const CAMERA_OPERATING_MODE = '0000021A-0000-1000-8000-0026BB765291';
 export const MANUALLY_DISABLED = '00000227';
+/**
+ * The operating mode states a camera may publish, by characteristic UUID prefix. Read from the accessory
+ * rather than assumed: HomeKit's own snapshot and camera-active states are always there, while the disabled
+ * state, the indicator LED and night vision are published only where the SDK evidences them.
+ */
+export const OPERATING_MODE_STATES = {
+  manuallyDisabled: '00000227',
+  indicator: '0000021D',
+  nightVision: '0000011B',
+  homeKitCameraActive: '0000021B',
+  eventSnapshotsActive: '00000223',
+  periodicSnapshotsActive: '00000225',
+};
 export const BATTERY = '00000096-0000-1000-8000-0026BB765291';
 export const ACCESSORY_INFORMATION = '0000003E';
 export const MODEL = '00000021';
@@ -332,6 +345,46 @@ export function selectCameras(accessories, { battery = false, aid, serial } = {}
     return cameras.filter((accessory) => accessory.aid === Number(aid));
   }
   return battery ? cameras : cameras.filter((accessory) => !hasBattery(accessory));
+}
+
+/**
+ * The one operating mode service a camera carries, refusing an accessory that carries more than one: HomeKit
+ * presents one camera state, so a second service is a defect rather than something to choose between.
+ */
+export function cameraOperatingMode(accessory) {
+  const services = accessory.services.filter((service) => service.type.toUpperCase() === CAMERA_OPERATING_MODE);
+  if (services.length > 1) {
+    throw new Error(`accessory ${accessory.aid} carries ${services.length} camera operating mode services`);
+  }
+  return services[0];
+}
+
+/** The address of one operating mode state on one accessory, or nothing where it is not published. */
+export function operatingModeAddress(accessory, state) {
+  const prefix = OPERATING_MODE_STATES[state];
+  if (!prefix) {
+    throw new Error(`unknown operating mode state ${state}`);
+  }
+  const characteristic = cameraOperatingMode(accessory)?.characteristics.find((entry) =>
+    entry.type.toUpperCase().startsWith(prefix),
+  );
+  return characteristic ? `${accessory.aid}.${characteristic.iid}` : undefined;
+}
+
+/**
+ * Every operating mode state one camera publishes, with its current value. Absent states are omitted rather
+ * than reported as false, because "not published" and "published as off" are different answers.
+ */
+export async function operatingModeState(client, accessory) {
+  const published = Object.keys(OPERATING_MODE_STATES).filter(
+    (state) => operatingModeAddress(accessory, state) !== undefined,
+  );
+  const state = {};
+  for (const name of published) {
+    const response = await client.getCharacteristics([operatingModeAddress(accessory, name)]);
+    state[name] = response.characteristics[0].value;
+  }
+  return state;
 }
 
 /**

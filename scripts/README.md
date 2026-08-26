@@ -15,6 +15,7 @@ Most scripts are observation-only. These are not, and are excluded from the publ
 | --- | --- |
 | `eufy-camera-power.mjs` | Moves one camera's enablement state |
 | `live-hap-disabled-camera-check.mjs` | Turns a camera off and on again |
+| `live-hap-operating-mode-check.mjs` | Turns a camera off and on again through HomeKit, with `--serial` |
 | `live-talkback-check.mjs` | Plays audio through a camera speaker |
 | `authentication-handoff-evidence.mjs` | Takes one ownership lease against a live storage root |
 | `qualify-authentication-handoff.sh` | Provisions a throwaway Homebridge instance and replaces its account |
@@ -71,6 +72,12 @@ session and closes the controller connection, which must release the reservation
 accessory presents the camera as disabled once it is switched off, refuses a session for it, ends one that
 was already running, and reverses both when the camera comes back on. What Apple Home renders from that
 presented state is not observable from a controller and remains a human check.
+
+`scripts/live-hap-operating-mode-check.mjs` qualifies the camera operating mode service: what every camera
+publishes on it, and — with `--serial` — that HomeKit's own camera-active state is carried through to that
+camera's power and back again. The indicator LED and night vision are read but not written there, because both
+are timed-write characteristics that HAP refuses to a controller which cannot prepare a write; their write
+paths are held by the contract suite instead.
 
 `scripts/live-hksv-check.mjs` qualifies negotiated HomeKit Secure Video output measured on the adapted
 fragments. `scripts/live-talkback-check.mjs` qualifies the controller-to-camera return-audio path.
