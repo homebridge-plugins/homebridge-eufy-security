@@ -12,6 +12,7 @@ import {
   DiagnosticConditions,
   GuidedDiagnostics,
   reportHomeKitEvent,
+  unconfirmedWriteCondition,
   reportRuntimeNotice,
 } from '../../src/diagnostics.js';
 
@@ -45,6 +46,44 @@ describe('diagnostic conditions', () => {
         reason: 'recovered',
       }),
     );
+  });
+
+  it('names an unconfirmed write only for a member this plugin actually writes', () => {
+    expect(unconfirmedWriteCondition('enabled')).toEqual({
+      code: 'camera-control-operation-failed',
+      capability: 'camera',
+      member: 'enabled',
+      active: true,
+      reason: 'not-confirmed',
+    });
+    expect(unconfirmedWriteCondition('statusLed')?.member).toBe('statusLed');
+    expect(unconfirmedWriteCondition('nightVision')?.member).toBe('nightVision');
+    expect(
+      unconfirmedWriteCondition('watermark'),
+      'a property this plugin never writes belongs to another consumer of the same account',
+    ).toBeUndefined();
+    expect(unconfirmedWriteCondition('constructor')).toBeUndefined();
+  });
+
+  it('reports an unconfirmed write against the accessory it names, under its own reason', () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info: vi.fn(), warn });
+
+    conditions.reportHomeKit(unconfirmedWriteCondition('enabled')!, ['T8170T10230000000']);
+
+    expect(warn, 'a write the camera ignored has to reach the console, not only the record').toHaveBeenCalledOnce();
+    const record = JSON.parse(debug.mock.calls[0]![0]);
+    expect(record).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-control-operation-failed',
+      capability: 'camera',
+      member: 'enabled',
+      active: true,
+      reason: 'not-confirmed',
+      affectedAccessoryCount: 1,
+    });
+    expect(JSON.stringify(record), 'the serial is never emitted').not.toContain('T8170T10230000000');
   });
 
   it('uses stable support-case accessory aliases and never emits supplied identity', () => {

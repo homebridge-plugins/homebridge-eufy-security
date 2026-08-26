@@ -6,6 +6,7 @@ import {
   DiagnosticConditions,
   reportDiscardedV4Settings,
   reportHomeKitEvent,
+  unconfirmedWriteCondition,
   reportInvalidSnapshotCache,
   type PlatformLogger,
 } from './diagnostics.js';
@@ -50,6 +51,7 @@ export function createEufyPlatform(
     private readonly runtime: RuntimeOwner;
     private readonly cachedAccessories: PlatformAccessory[] = [];
     private reconciler?: HomeKitReconciler;
+    private unconfirmedWrites?: () => void;
 
     constructor(log: PlatformLogger, config: PlatformConfig, api: PlatformApi) {
       const configuredConfig = parseConfig(config);
@@ -88,6 +90,12 @@ export function createEufyPlatform(
       for (const signal of signals) {
         signalTarget?.on(signal, stop);
       }
+      this.unconfirmedWrites ??= this.runtime.subscribeUnconfirmedWrites((write) => {
+        const condition = unconfirmedWriteCondition(write.property);
+        if (condition) {
+          diagnostics.reportHomeKit(condition, [write.serial]);
+        }
+      });
       api.on('didFinishLaunching', () => {
         const accessoryStore = createAccessoryStore(api);
         if (accessoryStore) {

@@ -5,7 +5,7 @@ import type { AnyDeviceEvent, AvailabilityObservation, Device, FcmStore, Session
 import { AccountOwnership, type AccountOwnerEvidence, type AccountReleaseResult } from '../account/ownership.js';
 import { AccountSessionPersistence } from '../account/persistence.js';
 import type { EufyConfig } from '../configuration.js';
-import { reportRuntimeNotice, type PlatformLogger, type RuntimeState } from '../diagnostics.js';
+import { reportRuntimeNotice, type PlatformLogger, type RuntimeState, type UnconfirmedWrite } from '../diagnostics.js';
 import { parseCompleteDeviceSnapshot, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 import type { SdkClient, SdkClientFactory, SdkStartResult } from './sdk-client.js';
 import { RuntimeTracker, type RuntimeTrackerUpdate } from './tracker.js';
@@ -67,6 +67,7 @@ export interface RuntimeRegistryView {
 
 export type RuntimeRegistryListener = (view: RuntimeRegistryView) => void;
 export type RuntimeEventListener = (event: AnyDeviceEvent) => void;
+export type RuntimeUnconfirmedWriteListener = (write: UnconfirmedWrite) => void;
 export type RuntimeStateListener = (state: RuntimeState) => void;
 
 /** Owns the long-lived SDK session, canonical registry, and runtime state transitions. */
@@ -85,6 +86,7 @@ export class RuntimeOwner {
   private registryVersion = 0;
   private readonly registryListeners = new Set<RuntimeRegistryListener>();
   private readonly eventListeners = new Set<RuntimeEventListener>();
+  private readonly unconfirmedListeners = new Set<RuntimeUnconfirmedWriteListener>();
   private readonly stateListeners = new Set<RuntimeStateListener>();
   private stopping = false;
   private cleanupTerminalState?: 'authentication-required' | 'failed' | 'stopped';
@@ -138,6 +140,15 @@ export class RuntimeOwner {
   subscribeEvents(listener: RuntimeEventListener): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);
+  }
+
+  /**
+   * Follows a write the device acknowledged and never applied. Separate from the event subscription because
+   * it is an operation outcome and not device state: nothing about the device changed, which is the news.
+   */
+  subscribeUnconfirmedWrites(listener: RuntimeUnconfirmedWriteListener): () => void {
+    this.unconfirmedListeners.add(listener);
+    return () => this.unconfirmedListeners.delete(listener);
   }
 
   subscribeState(listener: RuntimeStateListener): () => void {
@@ -230,6 +241,7 @@ export class RuntimeOwner {
         }
         this.client = this.clientFactory(config, active, this.log);
         this.client.onEvent?.((event) => this.publishEvent(event));
+        this.client.onUnconfirmedWrite?.((write) => this.publishUnconfirmedWrite(write));
         this.client.onInventory?.((result) => {
           void this.applyRuntimeResult(active, result).catch((error: unknown) => this.failRuntime(error));
         });
@@ -501,6 +513,16 @@ export class RuntimeOwner {
         listener(view);
       } catch {
         reportRuntimeNotice(this.log, 'registry-subscriber-failed');
+      }
+    }
+  }
+
+  private publishUnconfirmedWrite(write: UnconfirmedWrite): void {
+    for (const listener of this.unconfirmedListeners) {
+      try {
+        listener(write);
+      } catch {
+        reportRuntimeNotice(this.log, 'event-subscriber-failed');
       }
     }
   }

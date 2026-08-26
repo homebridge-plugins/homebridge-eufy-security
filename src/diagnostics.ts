@@ -24,6 +24,41 @@ export interface HomeKitCondition {
   reason: string;
 }
 
+/** One write the device acknowledged and never applied, as the SDK reports it. */
+export interface UnconfirmedWrite {
+  serial: string;
+  /** The SDK property the write targeted, which is its vocabulary and not this plugin's. */
+  property: string;
+}
+
+/**
+ * The SDK properties whose unconfirmed write this plugin can name, and what it calls them.
+ *
+ * A write is acknowledged when the transport carried it, and the SDK reports separately where the device
+ * never applied it. Only a member this plugin actually writes is translated: anything else is a property
+ * some other consumer of the same account asked for, and claiming it would report a condition against an
+ * accessory this plugin never touched.
+ */
+const UNCONFIRMED_WRITE_MEMBERS: Readonly<Record<string, { capability: string; member: string }>> = {
+  enabled: { capability: 'camera', member: 'enabled' },
+  statusLed: { capability: 'camera', member: 'statusLed' },
+  nightVision: { capability: 'camera', member: 'nightVision' },
+};
+
+/**
+ * The condition an unconfirmed write is reported under, or nothing where this plugin did not write it.
+ *
+ * It shares the code a failed control operation already uses, because the user's situation is the same one —
+ * a control that did not take — and differs only in how it was learnt: no error was raised, the device simply
+ * never reported the value. The reason names that distinction so a support case can tell the two apart.
+ */
+export function unconfirmedWriteCondition(property: string): HomeKitCondition | undefined {
+  const named = Object.hasOwn(UNCONFIRMED_WRITE_MEMBERS, property) ? UNCONFIRMED_WRITE_MEMBERS[property] : undefined;
+  return named === undefined
+    ? undefined
+    : { code: 'camera-control-operation-failed', ...named, active: true, reason: 'not-confirmed' };
+}
+
 export type HomeKitEventTrace =
   | { adapter: string; event: string; observation: string }
   | {
@@ -1284,7 +1319,17 @@ export type RuntimeState =
   | 'failed'
   | 'stopping';
 
-const CAPABILITIES = new Set(['arming', 'audio', 'battery', 'camera', 'contact', 'light', 'siren', 'smart_light']);
+const CAPABILITIES = new Set([
+  'arming',
+  'audio',
+  'battery',
+  'camera',
+  'contact',
+  'light',
+  'lock',
+  'siren',
+  'smart_light',
+]);
 const MEMBERS = new Set([
   'active',
   'batteryAlert',
@@ -1308,6 +1353,7 @@ const MEMBERS = new Set([
   'statusLed',
   'stop',
   'talkback',
+  'target',
   'test',
   'volume',
 ]);
@@ -1332,6 +1378,7 @@ const REASONS = new Set([
   'no-acquisition',
   'no-primary-purpose-member',
   'no-retained-image',
+  'not-confirmed',
   'no-video-within-backstop',
   'operation-failure',
   'primary-adapter-unavailable',

@@ -614,9 +614,10 @@ describe('persisted runtime owner', () => {
       state: 'ready',
       snapshot: snapshot('synthetic-current'),
     });
-    expect(calls.slice(0, 7)).toEqual([
+    expect(calls.slice(0, 8)).toEqual([
       'on:error',
       'on:event',
+      'on:commandUnconfirmed',
       'on:connect',
       'on:disconnect',
       'on:deviceAdded',
@@ -793,6 +794,7 @@ describe('persisted runtime owner', () => {
     expect([...listeners.keys()]).toEqual([
       'error',
       'event',
+      'commandUnconfirmed',
       'connect',
       'disconnect',
       'deviceAdded',

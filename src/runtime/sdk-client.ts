@@ -10,7 +10,7 @@ import type {
 
 import type { EufyConfig } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
-import { createSdkLogger, type PlatformLogger } from '../diagnostics.js';
+import { createSdkLogger, type PlatformLogger, type UnconfirmedWrite } from '../diagnostics.js';
 
 interface RealtimeReadyClient {
   waitForRealtime?(): Promise<{ state: string }>;
@@ -36,6 +36,8 @@ export interface SdkClient {
   stop(): Promise<void>;
   onInventory?(listener: (result: SdkStartResult) => void): void;
   onEvent?(listener: (event: AnyDeviceEvent) => void): void;
+  /** A write this plugin issued that the device acknowledged and never applied. */
+  onUnconfirmedWrite?(listener: (write: UnconfirmedWrite) => void): void;
   deviceAvailability?(serial: string): AvailabilityObservation | undefined;
 }
 
@@ -65,6 +67,7 @@ export class PersistedSdkClient implements SdkClient {
   private registry: ReadonlyMap<string, Device> = new Map();
   private inventoryListener?: (result: SdkStartResult) => void;
   private eventListener?: (event: AnyDeviceEvent) => void;
+  private unconfirmedListener?: (write: UnconfirmedWrite) => void;
   private refresh = Promise.resolve();
   private epoch = 0;
   private connected = false;
@@ -78,6 +81,12 @@ export class PersistedSdkClient implements SdkClient {
     }
   };
   private readonly handleEvent = (event: AnyDeviceEvent): void => this.eventListener?.(event);
+  /**
+   * Forwards a write the device never applied, translating none of it: the SDK's property name is its own
+   * vocabulary, and what this plugin calls that member is diagnostics' to decide.
+   */
+  private readonly handleUnconfirmed = (info: { sn: string; property: string }): void =>
+    this.unconfirmedListener?.({ serial: info.sn, property: info.property });
   private readonly handleConnect = (): void => {
     this.connected = true;
     if (!this.inventoryReady) {
@@ -132,6 +141,7 @@ export class PersistedSdkClient implements SdkClient {
     this.client = client;
     client.on('error', this.handleError);
     client.on('event', this.handleEvent);
+    client.on('commandUnconfirmed', this.handleUnconfirmed);
     client.on('connect', this.handleConnect);
     client.on('disconnect', this.handleDisconnect);
     client.on('deviceAdded', this.refreshInventory);
@@ -173,8 +183,10 @@ export class PersistedSdkClient implements SdkClient {
     this.client = undefined;
     this.inventoryListener = undefined;
     this.eventListener = undefined;
+    this.unconfirmedListener = undefined;
     client?.off('error', this.handleError);
     client?.off('event', this.handleEvent);
+    client?.off('commandUnconfirmed', this.handleUnconfirmed);
     client?.off('connect', this.handleConnect);
     client?.off('disconnect', this.handleDisconnect);
     client?.off('deviceAdded', this.refreshInventory);
@@ -190,6 +202,10 @@ export class PersistedSdkClient implements SdkClient {
 
   onEvent(listener: (event: AnyDeviceEvent) => void): void {
     this.eventListener = listener;
+  }
+
+  onUnconfirmedWrite(listener: (write: UnconfirmedWrite) => void): void {
+    this.unconfirmedListener = listener;
   }
 
   deviceAvailability(serial: string): AvailabilityObservation | undefined {
