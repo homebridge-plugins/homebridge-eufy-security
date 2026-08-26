@@ -232,4 +232,44 @@ describe('T8531 lock capability adapter', () => {
     );
     vi.useRealTimers();
   });
+
+  it('reports a lock whose typed operations are absent as an unavailable capability', () => {
+    const target = accessory();
+    const diagnose = vi.fn();
+
+    expect(attach({ lock: () => ({}) as never }, target, diagnose)).toBeUndefined();
+
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'lock-capability-unavailable',
+      capability: 'lock',
+      member: 'target',
+      active: true,
+      reason: 'missing',
+    });
+  });
+
+  it('reports a lock accessor that throws as an unavailable capability', () => {
+    const target = accessory();
+    const diagnose = vi.fn();
+
+    expect(
+      attach(
+        {
+          lock: () => {
+            throw new Error('synthetic lock accessor fault');
+          },
+        },
+        target,
+        diagnose,
+      ),
+    ).toBeUndefined();
+
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'lock-capability-unavailable',
+      capability: 'lock',
+      member: 'target',
+      active: true,
+      reason: 'sdk-fault',
+    });
+  });
 });

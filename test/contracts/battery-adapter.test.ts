@@ -250,4 +250,27 @@ describe('battery capability adapter', () => {
     replacement.detach?.();
     expect(target.getServiceById(Service.Battery, BATTERY_ADAPTER_KEY)).toBeUndefined();
   });
+
+  it('reports an unreadable battery level as an invalid observation', async () => {
+    const target = accessory();
+    const diagnose = vi.fn();
+    attach(
+      batteryDevice(() => {
+        throw new Error('synthetic battery read fault');
+      }),
+      target,
+      ALL_BATTERY_EVIDENCE,
+      diagnose,
+    );
+    const level = target.getService(Service.Battery)!.getCharacteristic(Characteristic.BatteryLevel);
+
+    await expect(level.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'invalid-battery-observation',
+      capability: 'battery',
+      member: 'level',
+      active: true,
+      reason: 'sdk-fault',
+    });
+  });
 });

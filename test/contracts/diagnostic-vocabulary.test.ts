@@ -148,17 +148,12 @@ describe('diagnostic vocabulary', () => {
 
   /**
    * The reverse direction, decided by demonstration rather than by static analysis: a code no test names has
-   * never been shown to reach a log, and the two recording codes prove what that costs. The exceptions are
-   * named so the list shrinks rather than hides — each is a diagnostic that exists in declaration only.
+   * never been shown to reach a log, and the two recording codes prove what that costs. The exception list is
+   * empty and must stay that way — a diagnostic that exists in declaration only is one the maintainer believes
+   * they have.
    */
   it('demonstrates every code it declares with a test', () => {
-    const undemonstrated = new Set([
-      'arming-capability-unavailable',
-      'arming-operation-failed',
-      'invalid-battery-observation',
-      'invalid-siren-active-observation',
-      'lock-capability-unavailable',
-    ]);
+    const undemonstrated = new Set<string>([]);
     const tests = sourceFiles('test')
       .filter((path) => !path.endsWith('diagnostic-vocabulary.test.ts'))
       .map((path) => readFileSync(path, 'utf8'))

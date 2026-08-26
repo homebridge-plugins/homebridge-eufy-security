@@ -199,4 +199,30 @@ describe('indoor siren capability adapter', () => {
       expect.objectContaining({ code: 'siren-capability-unavailable', member: 'test', active: false }),
     );
   });
+
+  it('reports an unreadable siren state as an invalid observation', async () => {
+    const target = accessory();
+    const diagnose = vi.fn();
+    attach(
+      sirenDevice({
+        get active(): boolean {
+          throw new Error('synthetic siren read fault');
+        },
+        test: vi.fn(),
+        stop: vi.fn(),
+      }),
+      target,
+      diagnose,
+    );
+    const on = target.getService(Service.Switch)!.getCharacteristic(Characteristic.On);
+
+    await expect(on.handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'invalid-siren-active-observation',
+      capability: 'siren',
+      member: 'active',
+      active: true,
+      reason: 'sdk-fault',
+    });
+  });
 });

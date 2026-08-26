@@ -360,4 +360,40 @@ describe('security-system capability adapter', () => {
 
     await expect(desired.handleGetRequest()).resolves.toBe(Characteristic.SecuritySystemTargetState.STAY_ARM);
   });
+
+  it('reports an arming capability whose typed operation is absent as unavailable', () => {
+    const target = accessory();
+    const diagnose = vi.fn();
+
+    expect(attach(armingDevice({}), target, diagnose)).toBeUndefined();
+
+    expect(diagnose).toHaveBeenCalledWith({
+      code: 'arming-capability-unavailable',
+      capability: 'arming',
+      member: 'mode',
+      active: true,
+      reason: 'missing',
+    });
+  });
+
+  it('reports an arming write the station refused as a failed operation', async () => {
+    const target = accessory();
+    const diagnose = vi.fn();
+    const setMode = vi.fn(async () => {
+      throw new Error('synthetic arming write fault');
+    });
+    attach(armingDevice({ mode: 1, setMode }), target, diagnose);
+    const desired = target
+      .getService(Service.SecuritySystem)!
+      .getCharacteristic(Characteristic.SecuritySystemTargetState);
+
+    await expect(desired.handleSetRequest(Characteristic.SecuritySystemTargetState.AWAY_ARM)).rejects.toBe(
+      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+    );
+
+    expect(setMode).toHaveBeenCalledOnce();
+    expect(diagnose).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'arming-operation-failed', capability: 'arming', active: true }),
+    );
+  });
 });
