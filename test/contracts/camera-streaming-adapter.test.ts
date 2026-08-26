@@ -2249,38 +2249,6 @@ describe('camera streaming bundle adapter', () => {
     expect(JSON.stringify(diagnose.mock.calls)).not.toContain(SNAPSHOT_SERIAL);
   });
 
-  it('presents a camera the admitted observation reports as disabled to HomeKit as disabled', async () => {
-    for (const enabled of [true, false]) {
-      const target = new Accessory(
-        `Synthetic presented ${enabled ? 'enabled' : 'disabled'} camera`,
-        uuid.generate(`synthetic-presented-${enabled}-camera-stream`),
-      ) as unknown as PlatformAccessory;
-      const { camera } = observedCamera(enabled);
-
-      CAMERA_STREAMING_ADAPTER.attach({
-        device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-        evidence: enabledEvidence(snapshotEvidence()),
-        accessory: target,
-        hap: HAP,
-        liveMedia: { prepare: vi.fn() },
-        audioEnabled: false,
-        diagnose: vi.fn(),
-        observed: vi.fn(),
-        persist: vi.fn(),
-      } satisfies AdapterAttachmentContext);
-
-      expect(operatingModes(target), String(enabled)).toHaveLength(1);
-      expect(presentedDisabled(target), String(enabled)).toBe(!enabled);
-      const [service] = operatingModes(target);
-      expect(service!.getCharacteristic(Characteristic.HomeKitCameraActive).value, String(enabled)).toBe(
-        Characteristic.HomeKitCameraActive.ON,
-      );
-      expect(service!.getCharacteristic(Characteristic.EventSnapshotsActive).value, String(enabled)).toBe(
-        Characteristic.EventSnapshotsActive.ENABLE,
-      );
-    }
-  });
-
   it('presents the indicator LED on the operating mode service and moves it through the typed operation', async () => {
     const target = new Accessory(
       'Synthetic indicator camera',
@@ -2358,11 +2326,10 @@ describe('camera streaming bundle adapter', () => {
         persist: vi.fn(),
       } satisfies AdapterAttachmentContext);
 
-      expect(operatingModes(target), label).toHaveLength(1);
-      expect(operatingModes(target)[0]!.testCharacteristic(Characteristic.CameraOperatingModeIndicator), label).toBe(
-        false,
-      );
-      expect(presentedDisabled(target), label).toBe(false);
+      expect(
+        operatingModes(target)[0]?.testCharacteristic(Characteristic.CameraOperatingModeIndicator) ?? false,
+        label,
+      ).toBe(false);
     }
   });
 
@@ -2520,7 +2487,7 @@ describe('camera streaming bundle adapter', () => {
         persist: vi.fn(),
       } satisfies AdapterAttachmentContext);
 
-      expect(operatingModes(target)[0]!.testCharacteristic(Characteristic.NightVision), label).toBe(false);
+      expect(operatingModes(target)[0]?.testCharacteristic(Characteristic.NightVision) ?? false, label).toBe(false);
     }
   });
 
@@ -2557,10 +2524,6 @@ describe('camera streaming bundle adapter', () => {
 
     await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
-    expect(
-      presentedDisabled(target),
-      'a camera HomeKit itself switched off is not manually disabled, and saying so locks HomeKit out',
-    ).toBe(false);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
     await delay(0);
     expect(active.value, 'a landed write must not be undone by a reading taken before it converged').toBe(
@@ -2570,168 +2533,6 @@ describe('camera streaming bundle adapter', () => {
     await active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never);
     expect(setEnabled).toHaveBeenLastCalledWith(true);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.ON);
-  });
-
-  it('never flashes the disabled state while its own camera-active write is still in flight', async () => {
-    const target = new Accessory(
-      'Synthetic in flight active camera',
-      uuid.generate('synthetic-in-flight-active-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const state = { enabled: true };
-    const presented: (boolean | undefined)[] = [];
-    let attached: AttachedAdapter | undefined;
-    const camera = {
-      get enabled(): unknown {
-        return state.enabled;
-      },
-      /**
-       * Reproduces the live sequence: the SDK reflects a landed enablement write with its own change event,
-       * which arrives while HomeKit is still waiting for the write to be answered.
-       */
-      setEnabled: vi.fn(async (value: boolean) => {
-        state.enabled = value;
-        attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
-        presented.push(presentedDisabled(target));
-      }),
-      live: vi.fn(),
-    };
-
-    attached = CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext);
-    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
-
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
-    await delay(0);
-
-    expect(
-      presented,
-      'HAP assigns its own value only after the write is answered, so a reflection arriving first must not be read as an out-of-band switch-off',
-    ).toEqual([false]);
-    expect(presentedDisabled(target)).toBe(false);
-  });
-
-  it('withholds the disabled state for a camera whose reading converges after the write was answered', async () => {
-    const target = new Accessory(
-      'Synthetic late converging camera',
-      uuid.generate('synthetic-late-converging-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const state = { enabled: true };
-    let attached: AttachedAdapter | undefined;
-    const camera = {
-      get enabled(): unknown {
-        return state.enabled;
-      },
-      /** Acknowledges delivery only, which is all a command does: the reading converges later. */
-      setEnabled: vi.fn(async () => undefined),
-      live: vi.fn(),
-    };
-
-    attached = CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext);
-    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
-
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
-    expect(camera.setEnabled).toHaveBeenCalledExactlyOnceWith(false);
-    await delay(0);
-
-    state.enabled = false;
-    attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
-
-    expect(
-      presentedDisabled(target),
-      'a reading taken between the acknowledgement and the convergence still says on, and must not erase the record of who switched the camera off',
-    ).toBe(false);
-  });
-
-  it('keeps withholding the disabled state for a camera HomeKit switched off before a restart', async () => {
-    const target = new Accessory(
-      'Synthetic restored disabled camera',
-      uuid.generate('synthetic-restored-disabled-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const state = { enabled: true };
-    const camera = {
-      get enabled(): unknown {
-        return state.enabled;
-      },
-      setEnabled: vi.fn(async (value: boolean) => {
-        state.enabled = value;
-      }),
-      live: vi.fn(),
-    };
-    const context = {
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext;
-
-    const attached = CAMERA_STREAMING_ADAPTER.attach(context);
-    await operatingModes(target)[0]!
-      .getCharacteristic(Characteristic.HomeKitCameraActive)
-      .handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
-    expect(context.persist, 'the request has to be retained to survive a restart').toHaveBeenCalled();
-    attached?.detach?.();
-
-    const restored = CAMERA_STREAMING_ADAPTER.attach(context);
-
-    expect(
-      presentedDisabled(target),
-      'the retained request says HomeKit asked for this camera to be off, so it is not manually disabled',
-    ).toBe(false);
-    await expect(
-      operatingModes(target)[0]!.getCharacteristic(Characteristic.ManuallyDisabled).handleGetRequest(),
-    ).resolves.toBe(false);
-    restored?.detach?.();
-  });
-
-  it('presents a camera switched off outside HomeKit as disabled, because HomeKit still wants it on', async () => {
-    const target = new Accessory(
-      'Synthetic externally disabled camera',
-      uuid.generate('synthetic-externally-disabled-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const { state, camera } = observedCamera(true);
-
-    const attached = CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext);
-    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
-
-    expect(active.value, 'the precondition this rule turns on').toBe(Characteristic.HomeKitCameraActive.ON);
-    state.value = false;
-    attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
-
-    expect(presentedDisabled(target)).toBe(true);
   });
 
   it('answers a read of its own camera-active state, so a refused write cannot leave it unreadable', async () => {
@@ -2777,56 +2578,6 @@ describe('camera streaming bundle adapter', () => {
     ).resolves.toBeDefined();
   });
 
-  it('holds the withheld state while it switches a camera it switched off back on', async () => {
-    const target = new Accessory(
-      'Synthetic in flight presented camera',
-      uuid.generate('synthetic-in-flight-presented-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const state = { enabled: true };
-    const presented: (boolean | undefined)[] = [];
-    let attached: AttachedAdapter | undefined;
-    const camera = {
-      get enabled(): unknown {
-        return state.enabled;
-      },
-      /** Reproduces the live sequence: the SDK reflects a landed write while HomeKit still awaits the answer. */
-      setEnabled: vi.fn(async (value: boolean) => {
-        state.enabled = value;
-        attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never);
-        presented.push(presentedDisabled(target));
-        if (value) {
-          throw new Error('synthetic refusal of the re-enable');
-        }
-      }),
-      live: vi.fn(),
-    };
-
-    attached = CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext);
-    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
-
-    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
-    state.enabled = false;
-    await expect(active.handleSetRequest(Characteristic.HomeKitCameraActive.ON, hapConnection() as never)).rejects.toBe(
-      HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-    );
-
-    expect(
-      presented,
-      'asking a camera HomeKit switched off to come back on does not make that off-state out of band, so a re-enable that has to be retried must not keep re-closing the trap',
-    ).toEqual([false, false]);
-    expect(presentedDisabled(target)).toBe(false);
-  });
-
   it('keeps the HomeKit camera-active state a camera has accepted but not yet converged on', async () => {
     const target = new Accessory(
       'Synthetic lagging active camera',
@@ -2855,7 +2606,6 @@ describe('camera streaming bundle adapter', () => {
 
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(false);
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
-    expect(presentedDisabled(target)).toBe(false);
   });
 
   it('restores a night-vision mode observed before a reconciliation replaced the attachment', async () => {
@@ -2951,8 +2701,8 @@ describe('camera streaming bundle adapter', () => {
     const setEnabled = vi.fn(async () => undefined);
 
     CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
-      evidence: enabledEvidence(snapshotEvidence()),
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, live: vi.fn() }) } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
       accessory: target,
       hap: HAP,
       liveMedia: { prepare: vi.fn() },
@@ -2969,6 +2719,68 @@ describe('camera streaming bundle adapter', () => {
 
     expect(setEnabled).not.toHaveBeenCalled();
     expect(active.value).toBe(Characteristic.HomeKitCameraActive.OFF);
+  });
+
+  it('withdraws the disabled state an earlier version published, and the record it kept for it', () => {
+    const target = new Accessory(
+      'Synthetic migrated disabled camera',
+      uuid.generate('synthetic-migrated-disabled-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const restored = target.addService(Service.CameraOperatingMode, target.displayName, 'camera.operating-mode');
+    restored.addOptionalCharacteristic(Characteristic.ManuallyDisabled);
+    restored.getCharacteristic(Characteristic.ManuallyDisabled).updateValue(true);
+    target.context = { homebridgeEufyCameraHomeKitActive: { version: 1, causedOff: true } };
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ enabled: false, setEnabled: vi.fn(), live: vi.fn() }),
+      } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+
+    expect(
+      operatingModes(target)[0]!.testCharacteristic(Characteristic.ManuallyDisabled),
+      'a camera left reporting it would stay unwritable from HomeKit for good',
+    ).toBe(false);
+    expect(target.context).toEqual({});
+  });
+
+  it('carries a camera-active state HomeKit re-asserts to a camera that disagrees with it', async () => {
+    const target = new Accessory(
+      'Synthetic reasserted disagreeing camera',
+      uuid.generate('synthetic-reasserted-disagreeing-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setEnabled = vi.fn(async () => undefined);
+    const context = {
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ enabled: true, setEnabled, live: vi.fn() }) } as never,
+      evidence: enablementWriteEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext;
+
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const active = operatingModes(target)[0]!.getCharacteristic(Characteristic.HomeKitCameraActive);
+    active.updateValue(Characteristic.HomeKitCameraActive.OFF);
+
+    await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
+
+    expect(
+      setEnabled,
+      'HomeKit decides whether the camera is on, so a value it re-asserts still reaches a camera that disagrees',
+    ).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it('reverts the HomeKit camera-active state when the camera refuses the change', async () => {
@@ -3093,7 +2905,6 @@ describe('camera streaming bundle adapter', () => {
     await active.handleSetRequest(Characteristic.HomeKitCameraActive.OFF, hapConnection() as never);
 
     expect(setEnabled, 'a camera already off is not told to turn off').not.toHaveBeenCalled();
-    expect(presentedDisabled(target)).toBe(true);
   });
 
   it('follows the enablement change event rather than a timer', async () => {
@@ -3118,15 +2929,11 @@ describe('camera streaming bundle adapter', () => {
     } satisfies AdapterAttachmentContext);
     vi.useFakeTimers();
 
-    expect(presentedDisabled(target)).toBe(false);
-
     state.value = false;
     expect(attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never)).toEqual({
       event: 'camera-enabled-changed',
       observation: 'valid',
     });
-
-    expect(presentedDisabled(target)).toBe(true);
     expect(trace).not.toHaveBeenCalled();
 
     state.value = true;
@@ -3136,11 +2943,14 @@ describe('camera streaming bundle adapter', () => {
         observation: 'valid',
       },
     );
-    expect(presentedDisabled(target)).toBe(false);
 
-    state.value = false;
+    state.value = undefined;
+    expect(
+      attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never),
+      'a reading that does not answer is reported as such rather than as a state',
+    ).toEqual({ event: 'camera-enabled-changed', observation: 'missing' });
+
     expect(attached!.event!({ eventName: 'motion', deviceSn: SNAPSHOT_SERIAL } as never)).toBeUndefined();
-    expect(presentedDisabled(target)).toBe(false);
     vi.useRealTimers();
   });
 
@@ -3188,7 +2998,6 @@ describe('camera streaming bundle adapter', () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expect(streamingStatus(management)).toBe(STREAMING_AVAILABLE);
-    expect(presentedDisabled(target)).toBe(true);
     expect(
       diagnose.mock.calls.map(([condition]) => condition).filter(({ code }) => code === 'camera-live-session-refused'),
     ).toEqual([
@@ -3206,47 +3015,20 @@ describe('camera streaming bundle adapter', () => {
     vi.useRealTimers();
   });
 
-  it('answers a HomeKit read of the presented state from the observation as it reads then', async () => {
-    const target = new Accessory(
-      'Synthetic read presented camera',
-      uuid.generate('synthetic-read-presented-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const { state, camera } = observedCamera(true);
-
-    CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enabledEvidence(snapshotEvidence()),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext);
-    const characteristic = operatingModes(target)[0]!.getCharacteristic(Characteristic.ManuallyDisabled);
-
-    state.value = false;
-    await expect(characteristic.handleGetRequest()).resolves.toBe(true);
-    state.value = true;
-    await expect(characteristic.handleGetRequest()).resolves.toBe(false);
-    state.value = undefined;
-    await expect(characteristic.handleGetRequest()).resolves.toBe(false);
-  });
-
-  it('republishes the presented state from the supervision read that ends the session', async () => {
+  it('ends the session from the supervision read when nothing announced the change', async () => {
     const target = new Accessory(
       'Synthetic supervised presented camera',
       uuid.generate('synthetic-supervised-presented-camera-stream'),
     ) as unknown as PlatformAccessory;
     const configureController = vi.spyOn(target, 'configureController');
+    const stop = vi.fn();
     const prepare = vi.fn(
       async () =>
         ({
           videoPort: 41000,
           start: vi.fn(async () => undefined),
           reconfigure: vi.fn(),
-          stop: vi.fn(),
+          stop,
         }) satisfies PreparedLiveMedia,
     );
     const { state, camera } = observedCamera(true);
@@ -3273,12 +3055,11 @@ describe('camera streaming bundle adapter', () => {
       videoPort: 41000,
     });
     await callStream(controller.delegate, startRequest(sessionID, 1));
-    expect(presentedDisabled(target)).toBe(false);
 
     state.value = false;
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(presentedDisabled(target)).toBe(true);
+    expect(stop, 'the supervision read is the backstop for a change nothing announced').toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
@@ -3320,55 +3101,17 @@ describe('camera streaming bundle adapter', () => {
     }
   });
 
-  it('keeps the presented state a read could not answer, rather than withdrawing a camera on a failed read', async () => {
-    const target = new Accessory(
-      'Synthetic faulting presented camera',
-      uuid.generate('synthetic-faulting-presented-camera-stream'),
-    ) as unknown as PlatformAccessory;
-    const state = { value: false as boolean | undefined, faults: false };
-    const camera = {
-      get enabled(): unknown {
-        if (state.faults) {
-          throw new Error('synthetic enabled observation fault');
-        }
-        return state.value;
-      },
-      live: vi.fn(),
-    };
-
-    const attached = CAMERA_STREAMING_ADAPTER.attach({
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enabledEvidence(snapshotEvidence()),
-      accessory: target,
-      hap: HAP,
-      liveMedia: { prepare: vi.fn() },
-      audioEnabled: false,
-      diagnose: vi.fn(),
-      observed: vi.fn(),
-      persist: vi.fn(),
-    } satisfies AdapterAttachmentContext);
-    const characteristic = operatingModes(target)[0]!.getCharacteristic(Characteristic.ManuallyDisabled);
-    expect(presentedDisabled(target)).toBe(true);
-
-    state.faults = true;
-    expect(attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never)).toEqual({
-      event: 'camera-enabled-changed',
-      observation: 'missing',
-    });
-
-    expect(presentedDisabled(target)).toBe(true);
-    await expect(characteristic.handleGetRequest()).resolves.toBe(true);
-  });
-
   it('withdraws a published disabled state when a reconciliation leaves no observation to act on', async () => {
     const target = new Accessory(
       'Synthetic withdrawn presentation camera',
       uuid.generate('synthetic-withdrawn-presentation-camera-stream'),
     ) as unknown as PlatformAccessory;
-    const { camera } = observedCamera(false);
     const context = {
-      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
-      evidence: enabledEvidence(snapshotEvidence()),
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ enabled: false, statusLed: true, setStatusLed: vi.fn(), live: vi.fn() }),
+      } as never,
+      evidence: indicatorEvidence(enabledEvidence(snapshotEvidence())),
       accessory: target,
       hap: HAP,
       liveMedia: { prepare: vi.fn() },
@@ -3379,7 +3122,7 @@ describe('camera streaming bundle adapter', () => {
     } satisfies AdapterAttachmentContext;
 
     CAMERA_STREAMING_ADAPTER.attach(context);
-    expect(presentedDisabled(target)).toBe(true);
+    expect(operatingModes(target)).toHaveLength(1);
 
     CAMERA_STREAMING_ADAPTER.attach({ ...context, evidence: snapshotEvidence() });
 
@@ -3406,8 +3149,10 @@ describe('camera streaming bundle adapter', () => {
       persist: vi.fn(),
     } satisfies AdapterAttachmentContext);
 
-    expect(operatingModes(target)).toHaveLength(1);
-    expect(presentedDisabled(target)).toBe(true);
+    expect(
+      operatingModes(target),
+      'a service the accessory restored carries no subtype, and a second one must not be added beside it',
+    ).toHaveLength(1);
   });
 
   it('declines an enablement observation the SDK names as unreflected', async () => {
@@ -4000,18 +3745,6 @@ describe('camera recording bundle adapter', () => {
     expect(decodeTlv(container[2])[1].readInt32LE(0)).toBe(4_000);
   });
 
-  it("presents the disabled state on the recording controller's own operating mode service", () => {
-    const { state, camera } = observedCamera(false);
-    const { controller, accessory } = attachRecordingCamera('Synthetic recorded disabled camera', {
-      device: { sn: SNAPSHOT_SERIAL, camera: () => Object.assign(camera, { recordFragments: vi.fn() }) } as never,
-      evidence: recordingEvidence(enabledEvidence(new Map())),
-    });
-
-    expect(operatingModes(accessory)).toEqual([controller.recordingManagement!.operatingModeService]);
-    expect(presentedDisabled(accessory)).toBe(true);
-    expect(state.value).toBe(false);
-  });
-
   it('withdraws a stale operating mode service before the recording controller attaches its own', () => {
     const accessory = new Accessory(
       'Synthetic recovered recording camera',
@@ -4035,7 +3768,6 @@ describe('camera recording bundle adapter', () => {
     const controller = configureController.mock.calls[0][0] as CameraController;
 
     expect(operatingModes(accessory)).toEqual([controller.recordingManagement!.operatingModeService]);
-    expect(presentedDisabled(accessory)).toBe(false);
   });
 
   it('admits one 16 kHz return-audio source only from exact talkback evidence and a bound SDK action', async () => {

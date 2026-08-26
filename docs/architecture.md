@@ -279,80 +279,51 @@ untrustworthy to publish is also too untrustworthy to withdraw a camera on. No c
 pinned SDK declares the flag that produces that statement, so nothing is declined today, and a family whose
 read stopped tracking its write would be declined the moment the SDK said so.
 
-HomeKit is also told, and not only refused. Without that, Apple Home offers a tile for a camera with no
-video to give, a tap starts a request the plugin then refuses, and a user sees a camera that fails rather
-than one that is off. The disabled state is published on the Camera Operating Mode service, and exactly one
-such service may exist on an accessory: a camera configured for HomeKit Secure Video already carries one
-that the HAP recording controller owns, and HAP documents attaching an optional characteristic to it rather
-than adding a second service, while a camera with no recording carries none and this plugin adds it under
-its own stable key. The two cannot coexist, because HAP identifies a service by type and subtype and the
-controller's own carries an empty subtype: a plugin-owned service surviving from a run without recording
-makes the controller's own service throw on attach, so it is withdrawn before the controller is configured.
-The presented state is presentation and the refusal is policy; neither replaces the other, and both read the
-same observation.
+HomeKit is deliberately **not** told, only refused, and that reversal is the most expensive lesson this
+feature taught. HAP's `ManuallyDisabled` states that a camera was disabled out of band, and Apple Home acts on
+it: measured on a real home, a camera reporting it had every per-mode write silently dropped, while the same
+phone, in the same minute, wrote another camera's mode and this camera's status light successfully. Both paired
+controllers held admin permission, so the writes were declined by the controller, not by HAP.
 
-`ManuallyDisabled` is read-only, notify-capable, and persisted by nothing, so it is both pushed and
-answered: pushed on attachment, on every announced enablement change, and from every read the live gate
-already makes, and answered from the observation whenever HomeKit reads it. Both halves are load-bearing,
-because an announcement is not guaranteed. The SDK now announces a change — a push once a write it issued
-has been read back off the device, and a poll event where a cloud poll saw the value move — but measured
-live, a camera switched off by another client produced no event for this one at all, and only this plugin's
-own re-read saw it. Nothing else on this accessory drives that service: the two states HomeKit requires it
-to carry are seeded active, because this camera does stream and does answer snapshots, and neither is this
-bundle's to own.
+That makes the state a trap rather than a description. Publishing it costs the ability to write that camera's
+operating mode at all, so it must never be published for an off-state HomeKit can still fix — and the one case
+it was published for is a write that failed, which is exactly when HomeKit needs to keep retrying. Not
+publishing it leaves the home hub re-asserting its per-mode setting on every mode change and every
+reconnection, so a failure heals itself; publishing it stops those re-assertions and makes the failure
+permanent. Weighed against a cosmetic gain — a tile that reads "off" instead of one that fails — the trade was
+never close, and four separate races reached the bad state during one afternoon of live testing before the
+conclusion was drawn.
 
-Only an off-state HomeKit did not itself ask for is presented that way, and that limit is load-bearing rather
-than cosmetic. `ManuallyDisabled` states that a camera was disabled out of band, and Apple Home acts on it:
-measured on a real home, a camera reporting it had every per-mode write silently dropped, while the same
-phone, in the same minute, wrote another camera's mode and this camera's status light successfully. Both
-paired controllers held admin permission, so the writes were declined by the controller rather than by HAP.
-Publishing the state for an off-state HomeKit itself caused therefore latches the camera off: HomeKit turns it
-off, the plugin turns the camera off, the camera reads disabled, HomeKit is told it is manually disabled, and
-the only control that could turn it back on stops being written — about one second after the user's own
-action, since the SDK reflects a landed write that fast. That state survives restarts, because the camera
-really is off and the reading is correct; it was observed holding across three restarts and a reboot.
+So the camera's own power is not published as HomeKit state at all, and an accessory restored from a version
+that did has the characteristic withdrawn, along with the record that version kept for it. What replaces it is
+actionable rather than decorative: the Camera Enabled switch reports the power and accepts writes, and Apple
+Home was measured delivering writes to it on the very accessory whose operating mode it refused. A session a
+disabled camera cannot serve is still refused by its own gate under a named reason, so nothing about the
+refusal changed.
 
-The provenance is recorded rather than inferred from the characteristic. `HomeKitCameraActive` is required on
-the service and HAP defaults a numeric characteristic to its minimum, so a value of off there is
-indistinguishable from a characteristic nothing has ever set — and a camera whose service was just created
-would read as one HomeKit asked to be off. Whether HomeKit itself switched this camera off is retained on the
-accessory instead, written before the camera is, because HAP assigns a written value only once the write is
-answered: the reflection a landed write announces arrives while the characteristic still reads the previous
-value, and without the record already made that reflection is read as an out-of-band switch-off.
+The operating mode service is therefore attached only where this bundle has something to put on it — the
+indicator LED, night vision, or a camera-active state it can carry to the device. Exactly one such service may
+exist on an accessory: a camera configured for HomeKit Secure Video already carries one that the HAP recording
+controller owns, and HAP documents attaching an optional characteristic to it rather than adding a second
+service, while a camera with no recording carries none and this plugin adds it under its own stable key. The
+two cannot coexist, because HAP identifies a service by type and subtype and the controller's own carries an
+empty subtype: a plugin-owned service surviving from a run without recording makes the controller's own throw
+on attach, so it is withdrawn before the controller is configured.
 
-What is recorded is where the off-state came from, not what HomeKit last asked for, and the difference is not
-academic. They diverge exactly when HomeKit asks a camera it switched off to come back on, which is the one
-moment that matters: measured live, a re-enable that failed to converge was retried by the home hub, and
-recording the request instead flipped the presented state on every attempt — publishing the very state Apple
-Home stops writing, so a failing recovery kept re-closing the trap it was escaping. The record therefore ends
-when the camera is next seen on, which is when the off-state HomeKit caused is genuinely over. That also keeps
-a later out-of-band switch-off honest, because the record no longer stands by then.
+HomeKit decides whether a camera is on, and this plugin carries that decision to the device. A per-mode value
+reaches a camera that disagrees with it whether or not HomeKit's own value moved, because the alternative left
+a divergence no action in the Home app could resolve: the only value a user can write is the one HomeKit
+already holds, so a camera that was on while HomeKit held off stayed on for good. Reconciliation needs no
+write of this plugin's own, because the home hub re-asserts its setting when the bridge reappears — that
+re-assertion is now applied instead of discarded, which is also what makes a restart converge the device onto
+the state the user chose.
 
-A reading taken while a write is still being carried does not end the record, though, and that distinction was
-measured rather than reasoned. A command acknowledges delivery and the reading converges after it, so a read
-between the two still says the camera is on: on a real home that read erased the record, and the camera was
-republished as manually disabled the instant it did switch off, restoring the latch in full. The record ends
-only on a reading taken while nothing is in flight, or explicitly when a write fails and the camera is still
-on — the case where the off never happened at all.
-
-The characteristic answers reads for the same reason. HomeKit owns the value and this bundle only carries it,
-but HAP throws the status a failed write left on a characteristic registering no read handler, on every later
-read and for good — so one refused power write reported a camera as unresponsive until the bridge restarted,
-which was observed on a real home and lasted until it was restarted. Serving the read clears that status,
-because HAP marks a served read successful.
-
-Two consequences are accepted deliberately. A camera already latched by an earlier version is not rescued by
-this rule, because its off-state predates any record and the reading is genuinely off; the Camera
-Enabled switch is the way back for those. And an off-state the switch itself caused is still presented as
-disabled, because that switch is not HomeKit's camera-active setting: the power was turned off by something
-other than the state this rule is about, and the switch remains writable, so it is self-recovering.
-
-That switch is the reason a camera disabled out of band is not a dead end. It carries no HomeKit meaning that
-Apple Home gates on, and Home was measured delivering writes to it on the same accessory whose operating mode
-it refused, so it is the only control that stays reachable once a camera reports itself disabled. It writes
-the same member the operating mode service does and shares the one bounded operation issuer, so the
-capability is declared once. Where the camera's power cannot be written it still refuses, but now reports the
-refusal instead of failing silently.
+A camera-active state this plugin cannot carry is still accepted rather than refused, because refusing would
+leave the user unable to set the camera off in HomeKit at all; the write is simply HomeKit's own then. A write
+the camera refuses reverts the state to what the camera reports, so HomeKit never keeps a claim the device did
+not reach, and the characteristic answers reads: HAP throws the status a failed write left on a characteristic
+that registers no read handler, on every later read and for good, so one refused power write reported a camera
+as unresponsive until the bridge was restarted — observed on a real home.
 
 Mid-session the plugin still re-reads the observation while a session is active, as the backstop for a
 change no announcement reached. Re-reading is cheap — the read is served from memory and its own freshness
