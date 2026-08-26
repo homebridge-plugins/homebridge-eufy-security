@@ -64,36 +64,49 @@ function attach(
 }
 
 describe('camera controls capability adapter', () => {
-  it('keeps the physical camera light and unified status LED as separate authoritative services', async () => {
+  it('keeps the physical camera light distinct from the enabled state and from mute', async () => {
     const target = accessory();
     attach(
       target,
       device(
-        { enabled: true, statusLed: false, setStatusLed: vi.fn() },
+        { enabled: true },
         { isOn: true, brightness: 45, set: vi.fn(), setBrightness: vi.fn() },
+        {
+          microphone: true,
+          setMicrophone: vi.fn(),
+        },
       ),
     );
 
     const physicalLight = target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)!;
-    const statusLed = target.getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)!;
+    const enabled = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!;
+    const microphone = target.getServiceById(Service.Microphone, CAMERA_MICROPHONE_SERVICE_KEY)!;
 
     expect(physicalLight).toBeDefined();
-    expect(statusLed).toBeDefined();
-    expect(physicalLight).not.toBe(statusLed);
+    expect(physicalLight).not.toBe(enabled);
+    expect(physicalLight).not.toBe(microphone);
     await expect(physicalLight.getCharacteristic(Characteristic.On).handleGetRequest()).resolves.toBe(true);
     await expect(physicalLight.getCharacteristic(Characteristic.Brightness).handleGetRequest()).resolves.toBe(45);
-    await expect(statusLed.getCharacteristic(Characteristic.On).handleGetRequest()).resolves.toBe(false);
+    await expect(enabled.getCharacteristic(Characteristic.On).handleGetRequest()).resolves.toBe(true);
+  });
+
+  it('withdraws the indicator LED switch an earlier version published for this camera', () => {
+    const target = accessory();
+    target.addService(Service.Switch, 'Status LED', CAMERA_STATUS_LED_SERVICE_KEY);
+
+    attach(target, device({ enabled: true }));
+
+    expect(target.getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)).toBeUndefined();
   });
 
   it('maps enabled state and audio controls without conflating enabled switches with mute', async () => {
     const target = accessory();
-    const setStatusLed = vi.fn(async () => undefined);
     const setMicrophone = vi.fn(async () => undefined);
     const setSpeaker = vi.fn(async () => undefined);
     const setVolume = vi.fn(async () => undefined);
     attach(
       target,
-      device({ enabled: false, statusLed: true, setStatusLed }, undefined, {
+      device({ enabled: false }, undefined, {
         microphone: true,
         speaker: false,
         volume: 65,
@@ -106,7 +119,6 @@ describe('camera controls capability adapter', () => {
     const enabled = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!;
     const microphone = target.getServiceById(Service.Microphone, CAMERA_MICROPHONE_SERVICE_KEY)!;
     const speaker = target.getServiceById(Service.Speaker, CAMERA_SPEAKER_SERVICE_KEY)!;
-    const statusLed = target.getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)!;
 
     await expect(enabled.getCharacteristic(Characteristic.On).handleGetRequest()).resolves.toBe(false);
     await expect(microphone.getCharacteristic(Characteristic.Mute).handleGetRequest()).resolves.toBe(false);
@@ -116,23 +128,14 @@ describe('camera controls capability adapter', () => {
     await microphone.getCharacteristic(Characteristic.Mute).handleSetRequest(true);
     await speaker.getCharacteristic(Characteristic.Mute).handleSetRequest(false);
     await speaker.getCharacteristic(Characteristic.Volume).handleSetRequest(25);
-    await statusLed.getCharacteristic(Characteristic.On).handleSetRequest(false);
     expect(setMicrophone).toHaveBeenCalledExactlyOnceWith(false);
     expect(setSpeaker).toHaveBeenCalledExactlyOnceWith(true);
     expect(setVolume).toHaveBeenCalledExactlyOnceWith(25);
-    expect(setStatusLed).toHaveBeenCalledExactlyOnceWith(false);
-    await expect(statusLed.getCharacteristic(Characteristic.On).handleGetRequest()).resolves.toBe(true);
   });
 
   it('omits optional controls whose evidence has the wrong semantic contract', () => {
     const target = accessory();
     const malformedEvidence = new Map(EVIDENCE);
-    malformedEvidence.set('camera.statusLed.read', {
-      id: 'camera.statusLed.read',
-      kind: 'read',
-      type: 'string',
-      writable: true,
-    });
     malformedEvidence.set('light.brightness.read', {
       id: 'light.brightness.read',
       kind: 'read',
@@ -142,14 +145,10 @@ describe('camera controls capability adapter', () => {
 
     attach(
       target,
-      device(
-        { enabled: true, statusLed: true, setStatusLed: vi.fn() },
-        { isOn: false, brightness: 40, set: vi.fn(), setBrightness: vi.fn() },
-      ),
+      device({ enabled: true }, { isOn: false, brightness: 40, set: vi.fn(), setBrightness: vi.fn() }),
       malformedEvidence,
     );
 
-    expect(target.getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)).toBeUndefined();
     expect(
       target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)!.testCharacteristic(Characteristic.Brightness),
     ).toBe(false);
@@ -159,15 +158,12 @@ describe('camera controls capability adapter', () => {
     const target = accessory();
     attach(
       target,
-      device(
-        { enabled: true, statusLed: 'malformed' as never, setStatusLed: vi.fn() },
-        { isOn: false, brightness: 0, set: vi.fn(), setBrightness: vi.fn() },
-      ),
+      device({ enabled: true }, { isOn: 'malformed' as never, brightness: 0, set: vi.fn(), setBrightness: vi.fn() }),
     );
 
     await expect(
       target
-        .getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)!
+        .getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)!
         .getCharacteristic(Characteristic.On)
         .handleGetRequest(),
     ).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
@@ -183,16 +179,16 @@ describe('camera controls capability adapter', () => {
     const target = accessory();
     const diagnostics: AdapterDiagnostic[] = [];
 
-    attach(target, device({ enabled: true, statusLed: true, setStatusLed: vi.fn() }));
+    attach(target, device({ enabled: true }, { isOn: true, set: vi.fn() }));
 
-    attach(target, device({ enabled: true, statusLed: true }), EVIDENCE, (diagnostic) => diagnostics.push(diagnostic));
+    attach(target, device({ enabled: true }, { isOn: true }), EVIDENCE, (diagnostic) => diagnostics.push(diagnostic));
 
-    expect(target.getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)).toBeUndefined();
+    expect(target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)).toBeUndefined();
     expect(diagnostics).toContainEqual(
       expect.objectContaining({
         code: 'camera-controls-capability-unavailable',
-        capability: 'camera',
-        member: 'statusLed',
+        capability: 'light',
+        member: 'isOn',
         active: true,
         reason: 'missing',
       }),
@@ -202,48 +198,40 @@ describe('camera controls capability adapter', () => {
   it('bounds a camera control operation without retrying or replacing its authoritative observation', async () => {
     vi.useFakeTimers();
     const target = accessory();
-    const setStatusLed = vi.fn(() => new Promise<void>(() => undefined));
-    attach(target, device({ enabled: true, statusLed: false, setStatusLed }));
-    const on = target
-      .getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)!
-      .getCharacteristic(Characteristic.On);
+    const set = vi.fn(() => new Promise<void>(() => undefined));
+    attach(target, device({ enabled: true }, { isOn: false, set }));
+    const on = target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
 
     const write = expect(on.handleSetRequest(true)).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     await vi.advanceTimersByTimeAsync(8_000);
 
     await write;
-    expect(setStatusLed).toHaveBeenCalledExactlyOnceWith(true);
+    expect(set).toHaveBeenCalledExactlyOnceWith(true);
     await expect(on.handleGetRequest()).resolves.toBe(false);
     vi.useRealTimers();
   });
 
   it('blocks later writes after the SDK reports the evidenced operation unsupported', async () => {
     const target = accessory();
-    const setStatusLed = vi.fn(async () => {
-      throw new CapabilityNotSupportedError('synthetic-camera', 'statusLed');
+    const set = vi.fn(async () => {
+      throw new CapabilityNotSupportedError('synthetic-camera', 'isOn');
     });
-    attach(target, device({ enabled: true, statusLed: false, setStatusLed }));
-    const on = target
-      .getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)!
-      .getCharacteristic(Characteristic.On);
+    attach(target, device({ enabled: true }, { isOn: false, set }));
+    const on = target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
 
     await expect(on.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-    attach(target, device({ enabled: true, statusLed: false, setStatusLed }));
+    attach(target, device({ enabled: true }, { isOn: false, set }));
     await expect(on.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-    expect(setStatusLed).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledOnce();
   });
 
   it('removes cached optional services when complete evidence withdraws their members', () => {
     const target = accessory();
-    const sdkDevice = device(
-      { enabled: true, statusLed: false, setStatusLed: vi.fn() },
-      { isOn: true, brightness: 50, set: vi.fn(), setBrightness: vi.fn() },
-    );
+    const sdkDevice = device({ enabled: true }, { isOn: true, brightness: 50, set: vi.fn(), setBrightness: vi.fn() });
     attach(target, sdkDevice);
 
     attach(target, sdkDevice, new Map([['camera.enabled.read', requirement('camera.enabled.read')]]));
 
-    expect(target.getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)).toBeUndefined();
     expect(target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)).toBeUndefined();
   });
 
@@ -253,20 +241,18 @@ describe('camera controls capability adapter', () => {
     const operation = new Promise<void>((_, reject) => {
       rejectOperation = reject;
     });
-    const setStatusLed = vi.fn(() => operation);
-    const sdkDevice = device({ enabled: true, statusLed: false, setStatusLed });
+    const set = vi.fn(() => operation);
+    const sdkDevice = device({ enabled: true }, { isOn: false, set });
     const first = attach(target, sdkDevice)!;
-    const on = target
-      .getServiceById(Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY)!
-      .getCharacteristic(Characteristic.On);
+    const on = target.getServiceById(Service.Lightbulb, CAMERA_LIGHT_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
     const pending = on.handleSetRequest(true);
-    await vi.waitFor(() => expect(setStatusLed).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(set).toHaveBeenCalledOnce());
 
     attach(target, sdkDevice);
     first.detach?.();
     await expect(pending).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    rejectOperation(new CapabilityNotSupportedError('synthetic-camera', 'statusLed'));
+    rejectOperation(new CapabilityNotSupportedError('synthetic-camera', 'isOn'));
     await vi.waitFor(() => expect(on.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE));
-    expect(setStatusLed).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledOnce();
   });
 });

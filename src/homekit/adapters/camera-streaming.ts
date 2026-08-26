@@ -14,6 +14,12 @@ import type {
 } from 'homebridge';
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
+import {
+  booleanObservationReader,
+  deviceOperationIssuer,
+  type DeviceOperationIssuer,
+  type DeviceOperationState,
+} from '../device-control.js';
 import type {
   AdaptedRecording,
   LiveMediaAdapter,
@@ -108,6 +114,14 @@ const CAMERA_ENABLED_READ = { id: 'camera.enabled.read', kind: 'read', type: 'bo
 const CAMERA_ENABLED_EVENT_ROW = 'camera.cameraEnabled.event';
 
 /**
+ * The indicator LED this bundle presents on the same service, and the operation that moves it. HomeKit
+ * calls it the camera operating mode indicator, which is what the Home app shows as the camera's status
+ * light, so it belongs on that service rather than on a switch of its own.
+ */
+const CAMERA_STATUS_LED_READ = { id: 'camera.statusLed.read', kind: 'read', type: 'bool', writable: true } as const;
+const CAMERA_STATUS_LED_WRITE = { id: 'camera.statusLed.persistent-operation', kind: 'persistent-operation' } as const;
+
+/**
  * The SDK event names that say this camera's enablement moved: the push one a write of this plugin's own
  * confirmed, and the poll one a change made anywhere else produced. Neither carries the authority — the
  * observation is re-read, because that is the value every other decision here is made on.
@@ -156,6 +170,7 @@ const CAMERA_STREAMING_STATES = new WeakMap<
     controller: CameraController;
     delegate: LiveCameraDelegate;
     recording?: RecordingCameraDelegate;
+    operations: DeviceOperationState;
     audio: boolean;
     talkback: boolean;
   }
@@ -667,6 +682,46 @@ export const CAMERA_STREAMING_ADAPTER = {
       ],
     },
     {
+      id: CAMERA_STATUS_LED_READ.id,
+      hapFit:
+        "Camera Operating Mode Indicator carries the camera's own status-light state, which is what the Home app presents as its status light",
+      identityEffect:
+        'The indicator shares the one operating mode service this camera presents on, so no separate switch service is published for it',
+      diagnostics:
+        'A reading that is absent, not a boolean, or faulting answers HomeKit with no response rather than a borrowed value, and a camera that offers the setter without reporting the state publishes no indicator at all',
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'presents the indicator LED on the operating mode service and moves it through the typed operation',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'presents no indicator LED without exact evidence and a bound typed operation',
+        },
+        {
+          file: 'test/contracts/camera-controls-adapter.test.ts',
+          behavior: 'withdraws the indicator LED switch an earlier version published for this camera',
+        },
+      ],
+    },
+    {
+      id: CAMERA_STATUS_LED_WRITE.id,
+      hapFit: 'A HomeKit write moves the indicator LED through the typed SDK operation and nothing else',
+      identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
+      diagnostics:
+        'One write is in flight per member at a time, a write is bounded before HomeKit is answered, an operation the camera reports unsupported is latched and asked once, and the characteristic is restored from the authoritative reading rather than from what was asked for',
+      verification: [
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'presents the indicator LED on the operating mode service and moves it through the typed operation',
+        },
+        {
+          file: 'test/contracts/camera-streaming-adapter.test.ts',
+          behavior: 'blocks later indicator writes once the camera reports the operation unsupported',
+        },
+      ],
+    },
+    {
       id: CAMERA_ENABLED_EVENT_ROW,
       hapFit:
         'Camera Operating Mode presents the enablement observation as HomeKit disabled state, republished from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from every read the live gate makes, and answered from the observation on a HomeKit read',
@@ -792,6 +847,9 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const openLiveSource = camera.live.bind(camera);
   const observed = observesEnablement(context, camera);
   const enablement = enablementObservation(camera, observed);
+  const detachRejectors = new Set<(error: unknown) => void>();
+  let detached = false;
+  const readBoolean = booleanObservationReader(context);
   const reportAdmission = cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION);
   const acquireLiveSnapshot = liveAvailable ? camera.snapshotLive!.bind(camera) : undefined;
   const openTalkback = talkbackConfigured ? camera.talkback!.bind(camera) : undefined;
@@ -804,6 +862,30 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   };
   const existing = CAMERA_STREAMING_STATES.get(context.accessory);
   const owner = Symbol('camera-streaming-owner');
+  const operations: DeviceOperationState = existing?.operations ?? {
+    owner,
+    activeOperations: new Map(),
+    blockedOperations: new Set(),
+  };
+  operations.owner = owner;
+  const issue = deviceOperationIssuer({
+    context,
+    state: operations,
+    owned: () => CAMERA_STREAMING_OWNERS.get(context.accessory) === owner,
+    detached: () => detached,
+    detachRejectors,
+  });
+  /** Everything the operating mode service presents and operates, resolved once per attachment. */
+  const controls = { camera, enablement, observed, issue, readBoolean } as const;
+  /** Wakes every write still in flight when this attachment stops being the one HomeKit is talking to. */
+  const releaseOperations = (): void => {
+    detached = true;
+    const error = new context.hap.HapStatusError(context.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    for (const reject of detachRejectors) {
+      reject(error);
+    }
+    detachRejectors.clear();
+  };
   const binding: LiveCameraBinding = {
     source,
     media: context.liveMedia,
@@ -832,10 +914,19 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     : undefined;
   if (existing && existing.audio === binding.audioEnabled && existing.talkback === talkbackConfigured) {
     existing.owner = owner;
+    existing.operations = operations;
     existing.delegate.update(binding);
     existing.recording?.update(recordingBinding);
     CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
-    return attachment(context, existing.controller, existing.delegate, existing.recording, owner, enablement, observed);
+    return attachment(
+      context,
+      existing.controller,
+      existing.delegate,
+      existing.recording,
+      owner,
+      controls,
+      releaseOperations,
+    );
   }
   if (existing) {
     existing.delegate.stop();
@@ -905,12 +996,13 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     owner,
     controller,
     delegate,
+    operations,
     audio: binding.audioEnabled,
     talkback: talkbackConfigured,
     ...(recording ? { recording } : {}),
   });
   CAMERA_STREAMING_OWNERS.set(context.accessory, owner);
-  return attachment(context, controller, delegate, recording, owner, enablement, observed);
+  return attachment(context, controller, delegate, recording, owner, controls, releaseOperations);
 }
 
 /**
@@ -996,10 +1088,10 @@ function attachment(
   delegate: LiveCameraDelegate,
   recording: RecordingCameraDelegate | undefined,
   owner: symbol,
-  enablement: () => boolean | undefined,
-  observed: boolean,
+  controls: OperatingModeControls,
+  releaseOperations: () => void,
 ): AttachedAdapter {
-  const presentation = enablementPresentation(context, controller, enablement, observed);
+  const presentation = operatingModePresentation(context, controller, controls);
   delegate.presentation = presentation;
   presentation.present();
   return {
@@ -1022,6 +1114,7 @@ function attachment(
       }
       delegate.stop();
       recording?.stop();
+      releaseOperations();
       if (reason === 'shutdown') {
         return;
       }
@@ -1158,8 +1251,17 @@ function enablementObservation(camera: CameraActions, observed: boolean): () => 
   };
 }
 
-/** Republishes what HomeKit is told about this camera's enablement, and withdraws the state it published. */
-interface EnablementPresentation {
+/** Everything one attachment supplies to the camera operating mode service it presents and operates on. */
+interface OperatingModeControls {
+  readonly camera: CameraActions;
+  readonly enablement: () => boolean | undefined;
+  readonly observed: boolean;
+  readonly issue: DeviceOperationIssuer;
+  readonly readBoolean: (capability: string, member: string, read: () => unknown) => boolean;
+}
+
+/** Republishes what HomeKit is told on the camera operating mode service, and withdraws what it published. */
+interface OperatingModePresentation {
   present(): AdapterEventTrace;
   remove(): void;
 }
@@ -1202,38 +1304,67 @@ function untrustedEnablement(camera: CameraActions): boolean {
  * strength of a read that failed; an observation this bundle may not act on at all withdraws what it
  * published.
  */
-function enablementPresentation(
+function operatingModePresentation(
   context: AdapterAttachmentContext,
   controller: CameraController,
-  enablement: () => boolean | undefined,
-  observed: boolean,
-): EnablementPresentation {
-  const { accessory, hap } = context;
+  { camera, enablement, observed, issue, readBoolean }: OperatingModeControls,
+): OperatingModePresentation {
+  const { hap } = context;
+  const indicated = indicatesStatusLed(context, camera);
   let presented: boolean | undefined;
-  let characteristic: ReturnType<ReturnType<typeof operatingModeService>['getCharacteristic']> | undefined;
-  const resolve = () => {
-    characteristic ??= operatingModeService(context, controller)
-      .getCharacteristic(hap.Characteristic.ManuallyDisabled)
-      .onGet(() => {
-        const enabled = enablement();
-        return enabled === undefined ? (presented ?? false) : !enabled;
-      });
-    return characteristic;
-  };
+  let service: ReturnType<typeof operatingModeService> | undefined;
+  const resolve = () => (service ??= operatingModeService(context, controller));
   if (!observed) {
-    withdrawOperatingMode(context, controller);
+    withdrawCharacteristic(context, controller, 'ManuallyDisabled');
   }
+  if (!indicated) {
+    withdrawCharacteristic(context, controller, 'CameraOperatingModeIndicator');
+  }
+  if (!observed && !indicated) {
+    removeOperatingMode(context);
+    return { present: () => ({ event: ENABLEMENT_EVENT_TRACE, observation: 'missing' }), remove: () => undefined };
+  }
+  if (indicated) {
+    const read = (): boolean => readBoolean('camera', 'statusLed', () => camera.statusLed);
+    const indicator = resolve().getCharacteristic(hap.Characteristic.CameraOperatingModeIndicator);
+    indicator.onGet(read);
+    indicator.onSet((value: unknown) => {
+      if (typeof value !== 'boolean') {
+        throw new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+      }
+      return issue(
+        'camera',
+        'statusLed',
+        () => camera.setStatusLed!(value),
+        () => {
+          try {
+            indicator.updateValue(read());
+          } catch {}
+        },
+      );
+    });
+  }
+  let disabled: ReturnType<ReturnType<typeof operatingModeService>['getCharacteristic']> | undefined;
   return {
+    /**
+     * Publishes the disabled state, attaching it on the first reading that answers. A camera whose reading
+     * never answers is published as nothing at all rather than as a state defaulted on its behalf.
+     */
     present(): AdapterEventTrace {
       const enabled = enablement();
       if (enabled === undefined) {
         return { event: ENABLEMENT_EVENT_TRACE, observation: 'missing' };
       }
-      if (presented === !enabled) {
-        return { event: ENABLEMENT_EVENT_TRACE, observation: 'valid' };
+      disabled ??= resolve()
+        .getCharacteristic(hap.Characteristic.ManuallyDisabled)
+        .onGet(() => {
+          const reading = enablement();
+          return reading === undefined ? (presented ?? false) : !reading;
+        });
+      if (presented !== !enabled) {
+        presented = !enabled;
+        disabled.updateValue(presented);
       }
-      presented = !enabled;
-      resolve().updateValue(presented);
       return { event: ENABLEMENT_EVENT_TRACE, observation: 'valid' };
     },
     remove(): void {
@@ -1243,44 +1374,64 @@ function enablementPresentation(
 }
 
 /**
- * The one Camera Operating Mode service this accessory presents on: the recording controller's own where
- * HomeKit Secure Video created one, this bundle's own where it already exists, an existing service the
- * accessory restored from cache under no subtype, and otherwise a new one under this bundle's key.
+ * Whether this camera's indicator LED may be presented and operated: the SDK reports its state as an
+ * exactly evidenced boolean, accepts a write for it, and installed the setter on this device. A camera that
+ * offers the setter without reporting the state publishes nothing, because a control HomeKit cannot read is
+ * a control it would answer with a guess.
  */
-function operatingModeService(context: AdapterAttachmentContext, controller: CameraController) {
-  const { accessory, hap } = context;
+function indicatesStatusLed(context: AdapterAttachmentContext, camera: CameraActions): boolean {
   return (
-    controller.recordingManagement?.operatingModeService ??
-    accessory.getServiceById(hap.Service.CameraOperatingMode, CAMERA_OPERATING_MODE_SERVICE_KEY) ??
-    accessory.services.find((service) => service.UUID === hap.Service.CameraOperatingMode.UUID) ??
-    publishedOperatingMode(context)
+    satisfiesMemberRequirements(context.evidence, [CAMERA_STATUS_LED_READ, CAMERA_STATUS_LED_WRITE]) &&
+    typeof camera.setStatusLed === 'function'
   );
 }
 
 /**
- * Withdraws a disabled state this plugin published for a camera whose observation it may no longer act on,
- * because a stale published value is a claim about a camera nothing is checking any more. A service this
- * bundle owns goes entirely; on a controller-owned service only the characteristic this bundle attached is
- * withdrawn, because the service is not this bundle's to remove.
+ * The operating mode service this accessory already carries, without creating one.
+ *
+ * Exactly one may exist: the recording controller's own where HomeKit Secure Video created it, this
+ * bundle's own under its stable key, or one the accessory restored from a cached run whose recording is no
+ * longer configured, which carries no subtype and would otherwise make a second service look absent.
  */
-function withdrawOperatingMode(context: AdapterAttachmentContext, controller: CameraController): void {
-  const owned = controller.recordingManagement?.operatingModeService;
-  const attached = owned?.testCharacteristic(context.hap.Characteristic.ManuallyDisabled)
-    ? owned.getCharacteristic(context.hap.Characteristic.ManuallyDisabled)
-    : undefined;
-  if (owned && attached) {
-    owned.removeCharacteristic(attached);
+function existingOperatingMode(context: AdapterAttachmentContext, controller: CameraController) {
+  const { accessory, hap } = context;
+  return (
+    controller.recordingManagement?.operatingModeService ??
+    accessory.getServiceById(hap.Service.CameraOperatingMode, CAMERA_OPERATING_MODE_SERVICE_KEY) ??
+    accessory.services.find((service) => service.UUID === hap.Service.CameraOperatingMode.UUID)
+  );
+}
+
+/** That service, adding this bundle's own when the accessory carries none. */
+function operatingModeService(context: AdapterAttachmentContext, controller: CameraController) {
+  return existingOperatingMode(context, controller) ?? publishedOperatingMode(context);
+}
+
+/**
+ * Withdraws one state this plugin published, because a stale published value is a claim about a camera
+ * nothing is checking any more. Only the characteristic is withdrawn here: a controller-owned service is
+ * not this bundle's to remove, and a service this bundle owns is removed by its caller once nothing at all
+ * is left to publish on it.
+ */
+function withdrawCharacteristic(
+  context: AdapterAttachmentContext,
+  controller: CameraController,
+  attached: 'ManuallyDisabled' | 'CameraOperatingModeIndicator',
+): void {
+  const service = existingOperatingMode(context, controller);
+  const characteristic = context.hap.Characteristic[attached];
+  if (service?.testCharacteristic(characteristic)) {
+    service.removeCharacteristic(service.getCharacteristic(characteristic));
   }
-  removeOperatingMode(context);
 }
 
 /**
  * This bundle's own Camera Operating Mode service, seeded with the two states HomeKit requires it to carry.
  *
  * Both are seeded active because this camera does stream and does answer snapshot requests, and the
- * recording controller seeds its own service the same way. Neither is this bundle's to drive: HomeKit may
- * write them and nothing here acts on that, which for a camera with no recording means the HomeKit-active
- * state is presentation only, while on a controller-owned service HAP itself gates streams on it.
+ * recording controller seeds its own service the same way. Neither is driven from a device observation:
+ * HomeKit owns them, and on a controller-owned service HAP itself gates streams and snapshots on the
+ * HomeKit-active state.
  */
 function publishedOperatingMode(context: AdapterAttachmentContext) {
   const { accessory, hap } = context;
@@ -1380,7 +1531,7 @@ interface LiveCameraBinding {
 class LiveCameraDelegate implements CameraStreamingDelegate {
   controller?: CameraController;
   /** Assigned once the accessory has a service to present on, which is only true after the controller is. */
-  presentation?: EnablementPresentation;
+  presentation?: OperatingModePresentation;
   private readonly sessions = new Map<string, PendingSession>();
   private readonly prepareGenerations = new Map<string, symbol>();
   private readonly snapshotScope: SnapshotAcquisitionScope;

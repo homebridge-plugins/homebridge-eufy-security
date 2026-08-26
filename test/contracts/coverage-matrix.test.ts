@@ -126,8 +126,6 @@ describe('SDK/HAP coverage matrix', () => {
     expect(representedCameraControls.map(({ id }) => id).sort()).toEqual(
       [
         'camera.enabled.read',
-        'camera.statusLed.read',
-        'camera.statusLed.persistent-operation',
         'light.isOn.read',
         'light.isOn.persistent-operation',
         'light.brightness.read',
@@ -138,6 +136,20 @@ describe('SDK/HAP coverage matrix', () => {
         'audio.speaker.persistent-operation',
         'audio.volume.read',
         'audio.volume.persistent-operation',
+      ].sort(),
+    );
+
+    const representedStreaming = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'camera.streaming');
+    expect(representedStreaming.map(({ id }) => id).sort()).toEqual(
+      [
+        'camera.live.momentary-action',
+        'camera.snapshotStored.momentary-action',
+        'camera.snapshotLive.momentary-action',
+        'camera.talkback.momentary-action',
+        'camera.recordFragments.momentary-action',
+        'camera.cameraEnabled.event',
+        'camera.statusLed.read',
+        'camera.statusLed.persistent-operation',
       ].sort(),
     );
 

@@ -1,15 +1,18 @@
-import {
-  CapabilityNotSupportedError,
-  type AudioActions,
-  type CameraActions,
-  type LightActions,
-} from '@mega-yfue/eufy-sdk';
+import { type AudioActions, type CameraActions, type LightActions } from '@mega-yfue/eufy-sdk';
 
 import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
+import {
+  booleanObservationReader,
+  deviceOperationIssuer,
+  INVALID_OBSERVATION_CONDITION,
+  OPERATION_FAILED_CONDITION,
+  type DeviceOperationState,
+} from '../device-control.js';
 
 export const CAMERA_CONTROLS_ADAPTER_KEY = 'camera.controls';
 export const CAMERA_ENABLED_SERVICE_KEY = 'camera.enabled';
 export const CAMERA_LIGHT_SERVICE_KEY = 'camera.physical-light';
+/** The switch an earlier version published for the indicator LED, retained only to withdraw it. */
 export const CAMERA_STATUS_LED_SERVICE_KEY = 'camera.status-led';
 export const CAMERA_MICROPHONE_SERVICE_KEY = 'camera.microphone';
 export const CAMERA_SPEAKER_SERVICE_KEY = 'camera.speaker';
@@ -19,16 +22,6 @@ const CAMERA_ENABLED_READ = {
   kind: 'read',
   type: 'bool',
   writable: true,
-} as const;
-const CAMERA_STATUS_LED_READ = {
-  id: 'camera.statusLed.read',
-  kind: 'read',
-  type: 'bool',
-  writable: true,
-} as const;
-const CAMERA_STATUS_LED_WRITE = {
-  id: 'camera.statusLed.persistent-operation',
-  kind: 'persistent-operation',
 } as const;
 const LIGHT_POWER_READ = {
   id: 'light.isOn.read',
@@ -83,8 +76,6 @@ const AUDIO_VOLUME_WRITE = {
 
 const CAMERA_CONTROL_ROWS = [
   CAMERA_ENABLED_READ,
-  CAMERA_STATUS_LED_READ,
-  CAMERA_STATUS_LED_WRITE,
   LIGHT_POWER_READ,
   LIGHT_POWER_WRITE,
   LIGHT_BRIGHTNESS_READ,
@@ -98,15 +89,7 @@ const CAMERA_CONTROL_ROWS = [
 ] as const;
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
 
-/** Operation lifetime retained by the stable enabled service across adapter replacement. */
-interface CameraControlsState {
-  owner: symbol;
-  activeOperations: Map<string, Promise<void>>;
-  blockedOperations: Set<string>;
-}
-const CAMERA_CONTROL_STATES = new WeakMap<object, CameraControlsState>();
-const OPERATION_DEADLINE_MS = 8_000;
-const OPERATION_TIMEOUT = Symbol('camera-control-operation-timeout');
+const CAMERA_CONTROL_STATES = new WeakMap<object, DeviceOperationState>();
 
 /** The typed SDK camera, physical-light, and audio accessors consumed by HomeKit. */
 export interface CameraControlsSdkDevice {
@@ -128,7 +111,7 @@ export const CAMERA_CONTROLS_ADAPTER = {
     verification: [
       {
         file: 'test/contracts/camera-controls-adapter.test.ts',
-        behavior: 'keeps the physical camera light and unified status LED as separate authoritative services',
+        behavior: 'keeps the physical camera light distinct from the enabled state and from mute',
       },
       {
         file: 'test/contracts/homekit-reconciler.test.ts',
@@ -183,39 +166,8 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
     services.push(service);
     return service;
   };
-  const readBoolean = (capability: string, member: string, read: () => unknown): boolean => {
-    let value: unknown;
-    try {
-      value = read();
-    } catch {
-      context.diagnose({
-        code: 'invalid-camera-control-observation',
-        capability,
-        member,
-        active: true,
-        reason: 'sdk-fault',
-      });
-      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    if (typeof value !== 'boolean') {
-      context.diagnose({
-        code: 'invalid-camera-control-observation',
-        capability,
-        member,
-        active: true,
-        reason: value === undefined ? 'missing' : 'malformed',
-      });
-      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    context.diagnose({
-      code: 'invalid-camera-control-observation',
-      capability,
-      member,
-      active: false,
-      reason: 'recovered',
-    });
-    return value;
-  };
+  const readBoolean = booleanObservationReader(context);
+
   const readPercent = (capability: string, member: string, minimum: number, read: () => unknown): number => {
     let value: unknown;
     try {
@@ -261,7 +213,7 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
     throw new hap.HapStatusError(hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
   });
   const previousState = CAMERA_CONTROL_STATES.get(enabledService);
-  const state: CameraControlsState = {
+  const state: DeviceOperationState = {
     owner,
     activeOperations: previousState?.activeOperations ?? new Map(),
     blockedOperations: previousState?.blockedOperations ?? new Set(),
@@ -290,92 +242,19 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
       reason,
     });
   };
-  const issue = async (
-    capability: string,
-    member: string,
-    operation: () => Promise<void>,
-    restore: () => void,
-  ): Promise<void> => {
-    const key = `${capability}.${member}`;
-    if (state.blockedOperations.has(key)) {
-      throw new hap.HapStatusError(hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-    }
-    if (state.activeOperations.has(key)) {
-      throw new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-    let deadline: ReturnType<typeof setTimeout> | undefined;
-    const operationPromise = Promise.resolve().then(operation);
-    state.activeOperations.set(key, operationPromise);
-    void operationPromise.then(
-      () => state.activeOperations.delete(key),
-      (error) => {
-        state.activeOperations.delete(key);
-        if (error instanceof CapabilityNotSupportedError) {
-          state.blockedOperations.add(key);
-        }
-      },
-    );
-    let rejectDetached!: (error: unknown) => void;
-    const detachedPromise = new Promise<never>((_, reject) => {
-      rejectDetached = reject;
-    });
-    detachRejectors.add(rejectDetached);
-    try {
-      await Promise.race([
-        operationPromise,
-        detachedPromise,
-        new Promise<never>((_, reject) => {
-          deadline = setTimeout(() => reject(OPERATION_TIMEOUT), OPERATION_DEADLINE_MS);
-        }),
-      ]);
-      if (!detached && CAMERA_CONTROL_STATES.get(enabledService)?.owner === owner) {
-        context.diagnose({
-          code: 'camera-control-operation-failed',
-          capability,
-          member,
-          active: false,
-          reason: 'recovered',
-        });
-        queueMicrotask(() => {
-          if (!detached && CAMERA_CONTROL_STATES.get(enabledService)?.owner === owner) {
-            restore();
-          }
-        });
-      }
-    } catch (error) {
-      const unsupported = error instanceof CapabilityNotSupportedError;
-      if (unsupported) {
-        state.blockedOperations.add(key);
-      }
-      if (!detached && CAMERA_CONTROL_STATES.get(enabledService)?.owner === owner) {
-        context.diagnose({
-          code: 'camera-control-operation-failed',
-          capability,
-          member,
-          active: true,
-          reason: unsupported
-            ? 'capability-not-supported'
-            : error === OPERATION_TIMEOUT
-              ? 'timeout'
-              : 'operation-failure',
-        });
-      }
-      throw new hap.HapStatusError(
-        unsupported ? hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE : hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
-      );
-    } finally {
-      detachRejectors.delete(rejectDetached);
-      if (deadline) {
-        clearTimeout(deadline);
-      }
-    }
-  };
+  const issue = deviceOperationIssuer({
+    context,
+    state,
+    owned: () => CAMERA_CONTROL_STATES.get(enabledService)?.owner === owner,
+    detached: () => detached,
+    detachRejectors,
+  });
 
   const clearMemberDiagnostics = (capability: string, member: string): void => {
     for (const code of [
       'camera-controls-capability-unavailable',
-      'invalid-camera-control-observation',
-      'camera-control-operation-failed',
+      INVALID_OBSERVATION_CONDITION,
+      OPERATION_FAILED_CONDITION,
     ]) {
       context.diagnose({ code, capability, member, active: false, reason: 'recovered' });
     }
@@ -392,44 +271,14 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
     return !installed ? 'absent' : requirements.every(matches) ? 'valid' : 'malformed';
   };
 
-  const statusLedEvidence = evidenceState(CAMERA_STATUS_LED_READ, CAMERA_STATUS_LED_WRITE);
-  if (statusLedEvidence === 'valid') {
-    if (typeof camera.setStatusLed !== 'function') {
-      removeService(hap.Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY);
-      unavailable('camera', 'statusLed', true, 'missing');
-    } else {
-      unavailable('camera', 'statusLed', false, 'recovered');
-      const statusLed = own(
-        accessory.getServiceById(hap.Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY) ??
-          accessory.addService(hap.Service.Switch, 'Status LED', CAMERA_STATUS_LED_SERVICE_KEY),
-      );
-      const on = statusLed.getCharacteristic(hap.Characteristic.On);
-      const readStatusLed = (): boolean => readBoolean('camera', 'statusLed', () => camera.statusLed);
-      on.onGet(readStatusLed);
-      on.onSet((value) => {
-        if (typeof value !== 'boolean') {
-          throw new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
-        }
-        return issue(
-          'camera',
-          'statusLed',
-          () => camera.setStatusLed!(value),
-          () => {
-            try {
-              on.updateValue(readStatusLed());
-            } catch {}
-          },
-        );
-      });
-    }
-  } else {
-    removeService(hap.Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY);
-    if (statusLedEvidence === 'malformed') {
-      unavailable('camera', 'statusLed', true, 'malformed');
-    } else {
-      clearMemberDiagnostics('camera', 'statusLed');
-    }
-  }
+  /**
+   * The indicator LED moved to the camera operating mode service, where HomeKit calls it the camera
+   * operating mode indicator and the Home app shows it as the camera's status light. A switch published for
+   * it by an earlier version is withdrawn here, by the bundle that published it, so an accessory does not
+   * keep a second control for one member.
+   */
+  removeService(hap.Service.Switch, CAMERA_STATUS_LED_SERVICE_KEY);
+  clearMemberDiagnostics('camera', 'statusLed');
 
   let light: LightActions | undefined;
   let lightFault = false;

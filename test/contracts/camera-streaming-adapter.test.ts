@@ -2,7 +2,12 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 
 import type { AvailabilityObservation, CameraActions } from '@mega-yfue/eufy-sdk';
-import { LiveSnapshotUnavailableError, StoredSnapshotUnavailableError, unreflectedMembers } from '@mega-yfue/eufy-sdk';
+import {
+  CapabilityNotSupportedError,
+  LiveSnapshotUnavailableError,
+  StoredSnapshotUnavailableError,
+  unreflectedMembers,
+} from '@mega-yfue/eufy-sdk';
 import {
   Accessory,
   AudioBitrate,
@@ -296,6 +301,24 @@ function enabledEvidence(
     [
       'camera.enabled.read',
       { id: 'camera.enabled.read', kind: 'read' as const, type: 'bool' as const, writable: true, ...overrides },
+    ],
+  ]);
+}
+
+/** The exact indicator LED evidence that admits presenting and operating a camera's status light. */
+function indicatorEvidence(
+  evidence: AdapterAttachmentContext['evidence'],
+  overrides: Partial<DeviceMemberEvidence> = {},
+): AdapterAttachmentContext['evidence'] {
+  return new Map([
+    ...evidence,
+    [
+      'camera.statusLed.read',
+      { id: 'camera.statusLed.read', kind: 'read' as const, type: 'bool' as const, writable: true, ...overrides },
+    ],
+    [
+      'camera.statusLed.persistent-operation',
+      { id: 'camera.statusLed.persistent-operation', kind: 'persistent-operation' as const },
     ],
   ]);
 }
@@ -2225,6 +2248,132 @@ describe('camera streaming bundle adapter', () => {
         Characteristic.EventSnapshotsActive.ENABLE,
       );
     }
+  });
+
+  it('presents the indicator LED on the operating mode service and moves it through the typed operation', async () => {
+    const target = new Accessory(
+      'Synthetic indicator camera',
+      uuid.generate('synthetic-indicator-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const led = { value: false };
+    const setStatusLed = vi.fn(async (value: boolean) => {
+      led.value = value;
+    });
+    const camera = {
+      get enabled(): unknown {
+        return true;
+      },
+      get statusLed(): unknown {
+        return led.value;
+      },
+      setStatusLed,
+      live: vi.fn(),
+    };
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => camera } as never,
+      evidence: indicatorEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+
+    expect(target.services.filter((service) => service.UUID === Service.Switch.UUID)).toEqual([]);
+    const indicator = operatingModes(target)[0]!.getCharacteristic(Characteristic.CameraOperatingModeIndicator);
+    await expect(indicator.handleGetRequest()).resolves.toBe(false);
+
+    await indicator.handleSetRequest(true);
+
+    expect(setStatusLed).toHaveBeenCalledExactlyOnceWith(true);
+    await expect(indicator.handleGetRequest()).resolves.toBe(true);
+  });
+
+  it('presents no indicator LED without exact evidence and a bound typed operation', async () => {
+    const cases = [
+      { label: 'unevidenced', evidence: enabledEvidence(snapshotEvidence()), setStatusLed: vi.fn() },
+      {
+        label: 'malformed',
+        evidence: indicatorEvidence(enabledEvidence(snapshotEvidence()), { type: 'string' }),
+        setStatusLed: vi.fn(),
+      },
+      {
+        label: 'unbound',
+        evidence: indicatorEvidence(enabledEvidence(snapshotEvidence())),
+        setStatusLed: undefined,
+      },
+    ];
+
+    for (const { label, evidence, setStatusLed } of cases) {
+      const target = new Accessory(
+        `Synthetic unindicated ${label} camera`,
+        uuid.generate(`synthetic-unindicated-${label}-camera-stream`),
+      ) as unknown as PlatformAccessory;
+      CAMERA_STREAMING_ADAPTER.attach({
+        device: {
+          sn: SNAPSHOT_SERIAL,
+          camera: () => ({ enabled: true, statusLed: true, live: vi.fn(), ...(setStatusLed ? { setStatusLed } : {}) }),
+        } as never,
+        evidence,
+        accessory: target,
+        hap: HAP,
+        liveMedia: { prepare: vi.fn() },
+        audioEnabled: false,
+        diagnose: vi.fn(),
+        observed: vi.fn(),
+        persist: vi.fn(),
+      } satisfies AdapterAttachmentContext);
+
+      expect(operatingModes(target), label).toHaveLength(1);
+      expect(operatingModes(target)[0]!.testCharacteristic(Characteristic.CameraOperatingModeIndicator), label).toBe(
+        false,
+      );
+      expect(presentedDisabled(target), label).toBe(false);
+    }
+  });
+
+  it('blocks later indicator writes once the camera reports the operation unsupported', async () => {
+    const target = new Accessory(
+      'Synthetic unsupported indicator camera',
+      uuid.generate('synthetic-unsupported-indicator-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const setStatusLed = vi.fn(async () => {
+      throw new CapabilityNotSupportedError('synthetic-camera', 'statusLed');
+    });
+    const diagnose = vi.fn();
+    const context = {
+      device: {
+        sn: SNAPSHOT_SERIAL,
+        camera: () => ({ enabled: true, statusLed: false, setStatusLed, live: vi.fn() }),
+      } as never,
+      evidence: indicatorEvidence(enabledEvidence(snapshotEvidence())),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare: vi.fn() },
+      audioEnabled: false,
+      diagnose,
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext;
+
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    const indicator = operatingModes(target)[0]!.getCharacteristic(Characteristic.CameraOperatingModeIndicator);
+
+    await expect(indicator.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    CAMERA_STREAMING_ADAPTER.attach(context);
+    await expect(indicator.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+
+    expect(setStatusLed).toHaveBeenCalledOnce();
+    expect(diagnose.mock.calls.map(([condition]) => condition)).toContainEqual({
+      code: 'camera-control-operation-failed',
+      capability: 'camera',
+      member: 'statusLed',
+      active: true,
+      reason: 'capability-not-supported',
+    });
   });
 
   it('follows the enablement change event rather than a timer', async () => {
