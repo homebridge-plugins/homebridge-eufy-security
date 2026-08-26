@@ -84,5 +84,9 @@
   "log.runtime.failed": "The Eufy runtime failed",
   "log.runtime.ownerConflict": "Another process owns the Eufy account session",
   "log.runtime.state": "Homebridge Eufy runtime is {state}.",
-  "log.runtime.transportDegraded": "The Eufy connection is degraded"
+  "log.runtime.transportDegraded": "The Eufy connection is degraded",
+  "log.action.checkCameraRecording": "Check that HomeKit Secure Video is set up for this camera and that it reports motion",
+  "log.action.retryRecording": "No action is needed; recording is attempted again on the next trigger",
+  "log.homekit.cameraRecordingUnavailable": "HomeKit Secure Video recording is unavailable for this camera",
+  "log.homekit.cameraRecordingFailed": "A HomeKit Secure Video recording did not complete"
 }

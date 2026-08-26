@@ -1332,6 +1332,7 @@ const CAPABILITIES = new Set([
 ]);
 const MEMBERS = new Set([
   'active',
+  'alarm',
   'batteryAlert',
   'brightness',
   'charging',
@@ -1375,6 +1376,7 @@ const REASONS = new Set([
   'malformed',
   'missing',
   'missing-evidence',
+  'missing-trigger',
   'no-acquisition',
   'no-primary-purpose-member',
   'no-retained-image',
@@ -1590,6 +1592,14 @@ const HOMEKIT_CONDITIONS = {
   'camera-live-session-refused': {
     summaryKey: 'log.homekit.cameraLiveSessionRefused',
     actionKey: 'log.action.enableCamera',
+  },
+  'camera-recording-unavailable': {
+    summaryKey: 'log.homekit.cameraRecordingUnavailable',
+    actionKey: 'log.action.checkCameraRecording',
+  },
+  'camera-recording-failed': {
+    summaryKey: 'log.homekit.cameraRecordingFailed',
+    actionKey: 'log.action.retryRecording',
   },
   'camera-recording-refused': {
     summaryKey: 'log.homekit.cameraRecordingRefused',
