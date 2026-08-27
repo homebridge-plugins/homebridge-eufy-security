@@ -33,6 +33,14 @@ describe('V5 configuration', () => {
     expect(schema.schema.properties.country.default).toBe('US');
     expect(schema.schema.properties.trustedDeviceName.default).toBe('Homebridge Eufy');
     expect(schema.schema.properties.pollingIntervalMinutes.default).toBe(10);
+    expect(schema.schema.properties.sessionWarmUp.default).toBe('doorbell');
+    expect(
+      (schema.schema.properties.sessionWarmUp.oneOf as { enum: string[] }[]).map(({ enum: [value] }) => value),
+    ).toEqual(['off', 'doorbell', 'detections']);
+    expect(
+      schema.schema.properties.sessionWarmUp.description,
+      'the user has to be told what the setting costs, not only what it does',
+    ).toMatch(/battery/i);
     expect(schema.schema.properties.entityPreferences.additionalProperties).toBe(false);
     expect(schema.schema.properties.entityPreferences.patternProperties).toEqual({
       '^.+$': {
@@ -55,6 +63,7 @@ describe('V5 configuration', () => {
       country: 'US',
       trustedDeviceName: 'Homebridge Eufy',
       pollingIntervalMinutes: 10,
+      sessionWarmUp: 'doorbell',
       ffmpegPath,
       entityPreferences: {},
     });
@@ -98,6 +107,7 @@ describe('V5 configuration', () => {
       country: 'GB',
       trustedDeviceName: 'Synthetic Bridge',
       pollingIntervalMinutes: 3,
+      sessionWarmUp: 'doorbell',
       ffmpegPath: '/synthetic/ffmpeg',
       entityPreferences: {
         [absentSerial]: {
@@ -134,6 +144,7 @@ describe('V5 configuration', () => {
       country: 'CA',
       trustedDeviceName: 'V5 bridge',
       pollingIntervalMinutes: 2,
+      sessionWarmUp: 'doorbell',
       ffmpegPath: '/legacy/ffmpeg',
       entityPreferences: {
         'synthetic-absent-entity': { represented: false },
@@ -168,5 +179,20 @@ describe('V5 configuration', () => {
     expect(() => parseConfig({ platform: 'HomebridgeEufy', capabilities: ['lock'] })).toThrowError(
       'capabilities cannot be supplied by configuration',
     );
+  });
+
+  it('refuses a session warm-up it does not recognise, naming the ones it does', () => {
+    expect(() => parseConfig({ platform: 'HomebridgeEufy', sessionWarmUp: 'always' })).toThrow(
+      /sessionWarmUp must be one of off, doorbell, detections/,
+    );
+  });
+
+  it('keeps a session warm-up the user chose', () => {
+    expect(parseConfig({ platform: 'HomebridgeEufy', sessionWarmUp: 'detections' })).toMatchObject({
+      sessionWarmUp: 'detections',
+    });
+    expect(parseConfig({ platform: 'HomebridgeEufy', sessionWarmUp: 'off' })).toMatchObject({
+      sessionWarmUp: 'off',
+    });
   });
 });

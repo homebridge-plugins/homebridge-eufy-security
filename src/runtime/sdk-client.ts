@@ -8,7 +8,7 @@ import type {
   SessionStore,
 } from '@mega-yfue/eufy-sdk';
 
-import type { EufyConfig } from '../configuration.js';
+import type { EufyConfig, SessionWarmUp } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 import { createSdkLogger, type PlatformLogger, type UnconfirmedWrite } from '../diagnostics.js';
 
@@ -60,6 +60,29 @@ export class SyntheticSdkClient implements SdkClient {
 export function createSyntheticSdkClient(_config: EufyConfig): SdkClient {
   return new SyntheticSdkClient();
 }
+
+/**
+ * Which events open a camera's session before HomeKit asks, for each warm-up setting.
+ *
+ * The SDK ships its speculative warm-up off and leaves the choice to its caller, because the only station a
+ * warm-up genuinely opens is a standalone battery camera — which it then keeps awake for the whole idle window
+ * that follows. This plugin answers an event by raising the HomeKit one and nothing more, so the snapshot or
+ * live view HomeKit asks for next is exactly what would otherwise wait on a cold session.
+ *
+ * `doorbell` is the default because a press means somebody is at the door, so the cost is earned every time.
+ * `detections` extends it to what a camera reports on its own, which is the setting that trades battery for a
+ * faster first frame; raw motion is included there deliberately, since it is the event that fires most and so
+ * the one whose latency is most often felt — and equally the one the SDK's own measurements found holding a
+ * battery camera awake for minutes at a time.
+ *
+ * Both station power tiers stay eligible, deliberately: sparing the battery tier would spare exactly the
+ * doorbells and cameras that need this most, and the user has already chosen the cost by naming the setting.
+ */
+const WARM_UP_EVENTS: Readonly<Record<SessionWarmUp, readonly string[]>> = {
+  off: [],
+  doorbell: ['doorbellPress'],
+  detections: ['doorbellPress', 'motion', 'personDetected', 'petDetection', 'packageDelivered'],
+};
 
 /** Long-lived SDK adapter that can only start from a locally accepted persisted session. */
 export class PersistedSdkClient implements SdkClient {
@@ -130,6 +153,7 @@ export class PersistedSdkClient implements SdkClient {
         email: this.stores.account,
         password: this.config.password ?? '',
         countryCode: this.config.country,
+        prewarmEvents: [...WARM_UP_EVENTS[this.config.sessionWarmUp]] as never,
         phoneModel: this.config.trustedDeviceName,
         pollMs: this.config.pollingIntervalMinutes * 60_000,
         store: this.stores.session,

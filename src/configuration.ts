@@ -5,6 +5,7 @@ import { PLATFORM_NAME } from './settings.js';
 export const DEFAULT_COUNTRY = 'US';
 export const DEFAULT_TRUSTED_DEVICE_NAME = 'Homebridge Eufy';
 export const DEFAULT_POLLING_INTERVAL_MINUTES = 10;
+export const DEFAULT_SESSION_WARM_UP: SessionWarmUp = 'doorbell';
 
 export type SnapshotMode = 'Cloud' | 'Live' | 'Refresh';
 
@@ -27,11 +28,25 @@ export interface EufyConfig {
   country: string;
   trustedDeviceName: string;
   pollingIntervalMinutes: number;
+  sessionWarmUp: SessionWarmUp;
   ffmpegPath: string | undefined;
   entityPreferences: Record<string, EntityPreference>;
   discardedV4Settings: string[];
   discardedV4Acknowledged: boolean;
 }
+
+/**
+ * How eagerly a camera's session is opened before HomeKit asks for its media.
+ *
+ * Opening it early is what makes the first live view or snapshot after an event start immediately instead of
+ * waiting on a cold session. It is not free: the only camera a warm-up genuinely opens is one that runs on its
+ * own battery, and it is then kept awake for the whole idle window that follows. So the setting is ordered by
+ * what it costs, and the default earns it — a doorbell press means somebody is at the door, while a detection
+ * nobody looks at spends battery for nothing.
+ */
+export type SessionWarmUp = 'off' | 'doorbell' | 'detections';
+
+const SESSION_WARM_UPS = new Set<SessionWarmUp>(['off', 'doorbell', 'detections']);
 
 const ENTITY_PREFERENCE_KEYS = new Set<keyof EntityPreference>(['represented', 'audio', 'snapshotMode']);
 const SNAPSHOT_MODES = new Set<SnapshotMode>(['Cloud', 'Live', 'Refresh']);
@@ -121,6 +136,10 @@ export function parseConfig(value: unknown): EufyConfig {
   if (!Number.isInteger(pollingIntervalMinutes) || (pollingIntervalMinutes as number) < 0) {
     throw new TypeError('pollingIntervalMinutes must be a non-negative integer');
   }
+  const sessionWarmUp = (value.sessionWarmUp ?? DEFAULT_SESSION_WARM_UP) as SessionWarmUp;
+  if (!SESSION_WARM_UPS.has(sessionWarmUp)) {
+    throw new TypeError(`sessionWarmUp must be one of ${[...SESSION_WARM_UPS].join(', ')}`);
+  }
   const configuredFfmpegPath = optionalString(value, 'ffmpegPath');
   if (configuredFfmpegPath === '') {
     throw new TypeError('ffmpegPath must not be empty');
@@ -133,6 +152,7 @@ export function parseConfig(value: unknown): EufyConfig {
     country: country.toUpperCase(),
     trustedDeviceName,
     pollingIntervalMinutes: pollingIntervalMinutes as number,
+    sessionWarmUp,
     ffmpegPath: configuredFfmpegPath ?? bundledFfmpegPath,
     entityPreferences: parseEntityPreferences(value.entityPreferences),
     discardedV4Settings: parseDiscardedV4Settings(value.discardedV4Settings),
@@ -149,6 +169,7 @@ export function serializeConfig(config: EufyConfig): Record<string, unknown> {
     country: config.country,
     trustedDeviceName: config.trustedDeviceName,
     pollingIntervalMinutes: config.pollingIntervalMinutes,
+    sessionWarmUp: config.sessionWarmUp,
     ffmpegPath: config.ffmpegPath,
     entityPreferences: Object.fromEntries(
       Object.entries(config.entityPreferences).map(([serial, preference]) => [serial, { ...preference }]),
