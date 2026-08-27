@@ -1515,7 +1515,15 @@ button:disabled {
 .warm-up-column button:hover,
 .warm-up-column button:focus-visible {
   border-color: var(--line);
-  background: var(--panel-hover, rgba(127, 127, 127, 0.12));
+  background: var(--panel-hover, rgb(127 127 127 / 12%));
+}
+
+/* Without this the click leaves no mark, so the user cannot tell whether the entry was taken. */
+.warm-up-column button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-ink);
+  font-weight: 700;
 }
 
 .warm-up-controls {
