@@ -1424,6 +1424,7 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'arming.security-system': new Set(['arming-mode-changed', 'security-system-alarm']),
   'smart-light.lightbulb': new Set(['smart-light-state']),
   'camera.streaming': new Set(['camera-enabled-changed']),
+  'camera.controls': new Set(['camera-enabled-changed']),
 };
 const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
 /** What announced a change, for an adapter that follows more than one announcement for the same state. */

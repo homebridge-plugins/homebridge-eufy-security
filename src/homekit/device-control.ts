@@ -20,6 +20,19 @@ export const INVALID_OBSERVATION_CONDITION = 'invalid-camera-control-observation
 
 const OPERATION_TIMEOUT = Symbol('camera-control-operation-timeout');
 
+/**
+ * The announcements both camera bundles follow for the camera's power, and what each one means happened.
+ *
+ * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued; `cameraEnabled` is a cloud poll
+ * seeing the value move, which means something other than this plugin changed it — the vendor app, or a
+ * physical switch. Declared here because both bundles act on the same two events: one ends a session watching
+ * a camera that just went off, the other keeps its switch honest, and a copy beside either would drift.
+ */
+export const ENABLEMENT_ANNOUNCEMENTS: Readonly<Record<string, 'write' | 'poll'>> = {
+  cameraEnabledChanged: 'write',
+  cameraEnabled: 'poll',
+};
+
 /** Operation lifetime retained across adapter replacement, so a write in flight survives reconciliation. */
 export interface DeviceOperationState {
   owner: symbol;

@@ -15,6 +15,7 @@ import type {
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
 import {
+  ENABLEMENT_ANNOUNCEMENTS,
   deviceOperationIssuer,
   INVALID_OBSERVATION_CONDITION,
   observationReader,
@@ -143,18 +144,6 @@ const NIGHT_VISION_MODES: ReadonlySet<number> = new Set(Object.values(NightVisio
  * confirmed, and the poll one a change made anywhere else produced. Neither carries the authority — the
  * observation is re-read, because that is the value every other decision here is made on.
  */
-/**
- * The announcements this bundle follows for the camera's power, and what each one means happened.
- *
- * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued; `cameraEnabled` is a cloud poll
- * seeing the value move, which means something other than this plugin changed it — the vendor app, or a
- * physical switch. Both end a session watching a camera that just went off, so both reach the same handler,
- * but they answer opposite questions in a support case and are recorded apart.
- */
-const ENABLEMENT_ANNOUNCEMENTS: Readonly<Record<string, 'write' | 'poll'>> = {
-  cameraEnabledChanged: 'write',
-  cameraEnabled: 'poll',
-};
 
 /** The identity-free trace one observed enablement change records. */
 const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
@@ -834,12 +823,16 @@ export const CAMERA_STREAMING_ADAPTER = {
     {
       id: CAMERA_ENABLED_EVENT_ROW,
       hapFit:
-        'The enablement observation ends a session watching a camera that just went off, from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from a supervision read where nothing announced the change; it is deliberately published as no HomeKit state, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
+        'The enablement observation ends a session watching a camera that just went off, from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from a supervision read where nothing announced the change; the camera controls bundle follows the same two announcements to push its Camera Enabled switch, since HomeKit reads a characteristic only while the Home app is open and is otherwise told or shows the old state for good; it is deliberately published as no HomeKit state on the operating mode service, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
       identityEffect:
         "Session lifetime only: the operating mode service is the recording controller's own where HomeKit Secure Video created one, and otherwise one service under the stable semantic key camera.operating-mode, so an accessory carries exactly one",
       diagnostics:
         'An absent, non-boolean, faulting, or SDK-declined enablement reading withdraws no camera and refuses no session; each announced change records one identity-free trace naming whether the observation answered',
       verification: [
+        {
+          file: 'test/contracts/camera-controls-adapter.test.ts',
+          behavior: 'announces the camera power to HomeKit when something else changed it',
+        },
         {
           file: 'test/contracts/camera-streaming-adapter.test.ts',
           behavior: 'withdraws the disabled state an earlier version published, and the record it kept for it',

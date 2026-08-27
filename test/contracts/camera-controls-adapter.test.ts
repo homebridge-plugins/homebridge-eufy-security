@@ -381,4 +381,66 @@ describe('camera controls capability adapter', () => {
     await vi.waitFor(() => expect(on.handleSetRequest(true)).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE));
     expect(set).toHaveBeenCalledOnce();
   });
+
+  it('announces the camera power to HomeKit when something else changed it', async () => {
+    const target = accessory();
+    const state = { enabled: true };
+    const attached = attach(
+      target,
+      device({
+        get enabled(): boolean {
+          return state.enabled;
+        },
+      } as Partial<CameraActions>),
+    );
+    const on = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
+    await on.handleGetRequest();
+    const announced: unknown[] = [];
+    on.on('change', ({ newValue }) => announced.push(newValue));
+
+    state.enabled = false;
+    const trace = attached!.event!({
+      eventName: 'cameraEnabled',
+      deviceSn: 'T8000P0000000000',
+      enabled: false,
+    } as never);
+
+    expect(
+      announced,
+      'HomeKit reads only while the Home app is open, so a switch that never pushes shows the old state for good',
+    ).toEqual([false]);
+    expect(trace).toEqual({ event: 'camera-enabled-changed', observation: 'valid', announcedBy: 'poll' });
+
+    attached!.event!({ eventName: 'cameraEnabled', deviceSn: 'T8000P0000000000', enabled: false } as never);
+    expect(announced, 'a repeated announcement is not a change, so it is not a notification').toEqual([false]);
+  });
+
+  it('leaves the announced switch alone when the reading faults, and says the reading was missing', () => {
+    const target = accessory();
+    const state = { faulting: false };
+    const attached = attach(
+      target,
+      device({
+        get enabled(): boolean {
+          if (state.faulting) throw new Error('synthetic enablement read fault');
+          return true;
+        },
+      } as Partial<CameraActions>),
+    );
+    const on = target.getServiceById(Service.Switch, CAMERA_ENABLED_SERVICE_KEY)!.getCharacteristic(Characteristic.On);
+    on.updateValue(true);
+
+    state.faulting = true;
+    const trace = attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: 'T8000P0000000000' } as never);
+
+    expect(on.value, 'a switch showing its last known state is honest; one showing a guess is not').toBe(true);
+    expect(trace).toEqual({ event: 'camera-enabled-changed', observation: 'missing', announcedBy: 'write' });
+  });
+
+  it('claims no event that is not an enablement announcement', () => {
+    const target = accessory();
+    const attached = attach(target, device({ enabled: true }));
+
+    expect(attached!.event!({ eventName: 'motion', deviceSn: 'T8000P0000000000' } as never)).toBeUndefined();
+  });
 });

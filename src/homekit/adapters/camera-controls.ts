@@ -1,7 +1,8 @@
 import { unreflectedMembers, type AudioActions, type CameraActions, type LightActions } from '@mega-yfue/eufy-sdk';
 
-import type { AdapterAttachmentContext, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
+import type { AdapterAttachmentContext, AdapterEventTrace, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 import {
+  ENABLEMENT_ANNOUNCEMENTS,
   deviceOperationIssuer,
   INVALID_OBSERVATION_CONDITION,
   observationReader,
@@ -554,6 +555,34 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
   }
 
   return {
+    /**
+     * Keeps the Camera Enabled switch honest when the camera's power changes.
+     *
+     * HomeKit is not told a characteristic moved unless the accessory says so: it subscribes to notifications
+     * and otherwise reads only while the Home app is open, so a switch that answers reads and never pushes shows
+     * the old state indefinitely. That matters most for the change this plugin did not make — the vendor app or a
+     * physical switch — which is exactly what the poll announcement reports.
+     *
+     * Pushed only when the value actually moved, so a repeated announcement is not a notification, and nothing is
+     * pushed for a reading that faults: a switch left showing its last known state is honest, one showing a
+     * guess is not.
+     */
+    event(event): AdapterEventTrace | undefined {
+      const announcedBy = ENABLEMENT_ANNOUNCEMENTS[event.eventName];
+      if (announcedBy === undefined) {
+        return undefined;
+      }
+      let observation: AdapterEventTrace['observation'] = 'valid';
+      try {
+        const reading = readEnabled();
+        if (enabledPower.value !== reading) {
+          enabledPower.updateValue(reading);
+        }
+      } catch {
+        observation = 'missing';
+      }
+      return { event: 'camera-enabled-changed', observation, announcedBy };
+    },
     detach(): void {
       detached = true;
       const detachedError = new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
