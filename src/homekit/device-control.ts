@@ -28,10 +28,28 @@ const OPERATION_TIMEOUT = Symbol('camera-control-operation-timeout');
  * physical switch. Declared here because both bundles act on the same two events: one ends a session watching
  * a camera that just went off, the other keeps its switch honest, and a copy beside either would drift.
  */
-export const ENABLEMENT_ANNOUNCEMENTS: Readonly<Record<string, 'write' | 'poll'>> = {
+const ENABLEMENT_ANNOUNCEMENTS: Readonly<Record<string, 'write' | 'poll'>> = {
   cameraEnabledChanged: 'write',
   cameraEnabled: 'poll',
 };
+
+/** The identity-free trace one observed enablement change records, whichever bundle records it. */
+export const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
+
+/**
+ * The trace one enablement announcement records, or nothing for an event that is not one.
+ *
+ * Both camera bundles answer the same two announcements and must agree on what they are and how they are
+ * recorded; what each does about it differs — one ends a session watching a camera that just went off, the
+ * other keeps its switch honest — so the observation is theirs to determine and only the envelope is shared.
+ */
+export function enablementAnnouncement(
+  eventName: string,
+  observe: () => 'valid' | 'missing' | 'malformed',
+): { event: string; observation: 'valid' | 'missing' | 'malformed'; announcedBy: 'write' | 'poll' } | undefined {
+  const announcedBy = ENABLEMENT_ANNOUNCEMENTS[eventName];
+  return announcedBy === undefined ? undefined : { event: ENABLEMENT_EVENT_TRACE, observation: observe(), announcedBy };
+}
 
 /** Operation lifetime retained across adapter replacement, so a write in flight survives reconciliation. */
 export interface DeviceOperationState {

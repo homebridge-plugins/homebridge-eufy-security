@@ -2,8 +2,8 @@ import { unreflectedMembers, type AudioActions, type CameraActions, type LightAc
 
 import type { AdapterAttachmentContext, AdapterEventTrace, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 import {
-  ENABLEMENT_ANNOUNCEMENTS,
   deviceOperationIssuer,
+  enablementAnnouncement,
   INVALID_OBSERVATION_CONDITION,
   observationReader,
   OPERATION_FAILED_CONDITION,
@@ -568,20 +568,17 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
      * guess is not.
      */
     event(event): AdapterEventTrace | undefined {
-      const announcedBy = ENABLEMENT_ANNOUNCEMENTS[event.eventName];
-      if (announcedBy === undefined) {
-        return undefined;
-      }
-      let observation: AdapterEventTrace['observation'] = 'valid';
-      try {
-        const reading = readEnabled();
-        if (enabledPower.value !== reading) {
-          enabledPower.updateValue(reading);
+      return enablementAnnouncement(event.eventName, () => {
+        try {
+          const reading = readEnabled();
+          if (enabledPower.value !== reading) {
+            enabledPower.updateValue(reading);
+          }
+          return 'valid';
+        } catch {
+          return 'missing';
         }
-      } catch {
-        observation = 'missing';
-      }
-      return { event: 'camera-enabled-changed', observation, announcedBy };
+      });
     },
     detach(): void {
       detached = true;

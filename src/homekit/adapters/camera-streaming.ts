@@ -15,8 +15,9 @@ import type {
 
 import { satisfiesMemberRequirements } from '../../device/member-evidence.js';
 import {
-  ENABLEMENT_ANNOUNCEMENTS,
+  ENABLEMENT_EVENT_TRACE,
   deviceOperationIssuer,
+  enablementAnnouncement,
   INVALID_OBSERVATION_CONDITION,
   observationReader,
   type DeviceOperationIssuer,
@@ -144,9 +145,6 @@ const NIGHT_VISION_MODES: ReadonlySet<number> = new Set(Object.values(NightVisio
  * confirmed, and the poll one a change made anywhere else produced. Neither carries the authority — the
  * observation is re-read, because that is the value every other decision here is made on.
  */
-
-/** The identity-free trace one observed enablement change records. */
-const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
 
 /**
  * How often an active live session re-reads the enablement observation.
@@ -1206,11 +1204,10 @@ function attachment(
      * decision answered.
      */
     event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
-      const announcedBy = ENABLEMENT_ANNOUNCEMENTS[event.eventName];
-      if (announcedBy === undefined) {
+      const trace = enablementAnnouncement(event.eventName, presentation.observe);
+      if (trace === undefined) {
         return undefined;
       }
-      const trace = { ...presentation.trace(), announcedBy };
       delegate.observeEnablement();
       return trace;
     },
@@ -1369,7 +1366,7 @@ interface OperatingModeControls {
 
 /** Reports the enablement observation behind an announced change, and withdraws what this bundle attached. */
 interface OperatingModePresentation {
-  trace(): AdapterEventTrace;
+  observe(): AdapterEventTrace['observation'];
   remove(): void;
 }
 
@@ -1442,7 +1439,7 @@ function operatingModePresentation(
   }
   if (!carriesCameraActive && !indicated && !nightVisible) {
     removeOperatingMode(context);
-    return { trace: enablementTrace(enablement), remove: () => undefined };
+    return { observe: enablementTrace(enablement), remove: () => undefined };
   }
   if (indicated) {
     const read = (): boolean => readBoolean('camera', 'statusLed', () => camera.statusLed);
@@ -1469,7 +1466,7 @@ function operatingModePresentation(
   }
   resolve();
   return {
-    trace: enablementTrace(enablement),
+    observe: enablementTrace(enablement),
     remove(): void {
       removeOperatingMode(context);
     },
@@ -1482,11 +1479,8 @@ function operatingModePresentation(
  * The event is still acted on — a session watching a camera that just went off is ended at once — so the
  * trace states whether the reading behind that decision was there, without publishing anything from it.
  */
-function enablementTrace(enablement: () => boolean | undefined): () => AdapterEventTrace {
-  return () => ({
-    event: ENABLEMENT_EVENT_TRACE,
-    observation: enablement() === undefined ? 'missing' : 'valid',
-  });
+function enablementTrace(enablement: () => boolean | undefined): () => AdapterEventTrace['observation'] {
+  return () => (enablement() === undefined ? 'missing' : 'valid');
 }
 
 /**
