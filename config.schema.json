@@ -36,9 +36,11 @@
       },
       "warmUpEvents": {
         "title": "Warm up camera connections",
-        "description": "Events that open a camera’s connection as soon as it reports them, so the live view or snapshot straight afterwards starts immediately. A camera on its own battery is kept awake for several minutes each time; wired cameras and those behind a HomeBase are unaffected. Choose these in the plugin interface, which offers whatever your devices actually report.",
+        "description": "Events that open a camera’s connection as soon as it reports one, so the live view or snapshot straight afterwards starts immediately. Every camera is independent: an event opens only the camera that reported it, and only for the events chosen here. A camera on its own battery is kept awake for several minutes each time; wired cameras and those behind a HomeBase are unaffected. Choose these in the plugin interface, which offers whatever your devices actually report.",
         "type": "array",
-        "default": ["doorbellPress"],
+        "default": [
+          "doorbellPress"
+        ],
         "uniqueItems": true,
         "items": {
           "type": "string"
@@ -69,7 +71,11 @@
               },
               "snapshotMode": {
                 "default": "Refresh",
-                "enum": ["Cloud", "Live", "Refresh"],
+                "enum": [
+                  "Cloud",
+                  "Live",
+                  "Refresh"
+                ],
                 "type": "string"
               }
             },

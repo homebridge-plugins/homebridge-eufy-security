@@ -45,9 +45,10 @@ export interface EufyConfig {
  * the SDK no longer emits simply never fires.
  *
  * Opening a connection early is what makes the media HomeKit asks for straight afterwards start immediately
- * instead of waiting on a cold one. It is not free: a camera running on its own battery is kept awake for the
- * whole idle window that follows, so a camera reporting often may never sleep. Which events earn that is the
- * user's call.
+ * instead of waiting on a cold one. The list is global and the warming is not: an event opens the connection of
+ * the camera that reported it and no other, so each camera is warmed only by the events it reports itself. It is
+ * not free either — a camera running on its own battery is kept awake for the whole idle window that follows, so
+ * a camera reporting often may never sleep. Which events earn that is the user's call.
  */
 
 const ENTITY_PREFERENCE_KEYS = new Set<keyof EntityPreference>(['represented', 'audio', 'snapshotMode']);

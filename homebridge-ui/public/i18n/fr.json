@@ -20,7 +20,7 @@
   "advancedWarmUpEvent_packageDelivered": "Colis livré",
   "advancedWarmUpEvent_personDetected": "Personne vue",
   "advancedWarmUpEvent_petDetection": "Animal vu",
-  "advancedWarmUpHelp": "Choisissez les événements qui doivent ouvrir la connexion d’une caméra dès qu’elle les signale, pour que la vue en direct ou l’instantané juste après démarre immédiatement. Une caméra sur batterie est maintenue éveillée plusieurs minutes à chaque fois, et une caméra qui signale souvent risque de ne jamais dormir ; les caméras filaires et celles derrière une HomeBase ne sont pas concernées. Les appuis sur la sonnette seuls sont le choix équilibré.",
+  "advancedWarmUpHelp": "Choisissez les événements qui doivent ouvrir la connexion d’une caméra dès qu’elle en signale un, pour que la vue en direct ou l’instantané juste après démarre immédiatement. Chaque caméra est indépendante : un événement n’ouvre que la caméra qui l’a signalé, et seulement pour les événements choisis ici. Une caméra sur batterie est maintenue éveillée plusieurs minutes à chaque fois, et une caméra qui signale souvent risque de ne jamais dormir ; les caméras filaires et celles derrière une HomeBase ne sont pas concernées. Les appuis sur la sonnette seuls sont le choix équilibré.",
   "advancedWarmUpLabel": "Préchauffer les connexions des caméras",
   "advancedWarmUpRemove": "Ne plus préchauffer l’événement sélectionné",
   "authBlocked": "Arrêtez la connexion Homebridge Eufy active avant de vous authentifier, puis réessayez.",

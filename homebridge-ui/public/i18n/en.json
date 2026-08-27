@@ -20,7 +20,7 @@
   "advancedWarmUpEvent_packageDelivered": "Package delivered",
   "advancedWarmUpEvent_personDetected": "Person seen",
   "advancedWarmUpEvent_petDetection": "Pet seen",
-  "advancedWarmUpHelp": "Pick the events that should open a camera’s connection as soon as it reports them, so the live view or snapshot straight afterwards starts immediately. A camera running on its own battery is kept awake for several minutes each time, and one reporting often may never sleep; wired cameras and those behind a HomeBase are unaffected. Doorbell presses alone is the balanced choice.",
+  "advancedWarmUpHelp": "Choose the events that should open a camera’s connection as soon as it reports one, so the live view or snapshot straight afterwards starts immediately. Every camera is independent: an event opens only the camera that reported it, and only for the events chosen here. A camera running on its own battery is kept awake for several minutes each time, and one reporting often may never sleep; wired cameras and those behind a HomeBase are unaffected. Doorbell presses alone is the balanced choice.",
   "advancedWarmUpLabel": "Warm up camera connections",
   "advancedWarmUpRemove": "Stop warming up the selected event",
   "authBlocked": "Stop the active Homebridge Eufy connection before authenticating, then try again.",
