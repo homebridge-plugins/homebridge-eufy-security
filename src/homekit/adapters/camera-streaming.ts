@@ -143,7 +143,18 @@ const NIGHT_VISION_MODES: ReadonlySet<number> = new Set(Object.values(NightVisio
  * confirmed, and the poll one a change made anywhere else produced. Neither carries the authority — the
  * observation is re-read, because that is the value every other decision here is made on.
  */
-const ENABLEMENT_EVENTS = new Set(['cameraEnabledChanged', 'cameraEnabled']);
+/**
+ * The announcements this bundle follows for the camera's power, and what each one means happened.
+ *
+ * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued; `cameraEnabled` is a cloud poll
+ * seeing the value move, which means something other than this plugin changed it — the vendor app, or a
+ * physical switch. Both end a session watching a camera that just went off, so both reach the same handler,
+ * but they answer opposite questions in a support case and are recorded apart.
+ */
+const ENABLEMENT_ANNOUNCEMENTS: Readonly<Record<string, 'write' | 'poll'>> = {
+  cameraEnabledChanged: 'write',
+  cameraEnabled: 'poll',
+};
 
 /** The identity-free trace one observed enablement change records. */
 const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
@@ -1202,10 +1213,11 @@ function attachment(
      * decision answered.
      */
     event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
-      if (!ENABLEMENT_EVENTS.has(event.eventName)) {
+      const announcedBy = ENABLEMENT_ANNOUNCEMENTS[event.eventName];
+      if (announcedBy === undefined) {
         return undefined;
       }
-      const trace = presentation.trace();
+      const trace = { ...presentation.trace(), announcedBy };
       delegate.observeEnablement();
       return trace;
     },

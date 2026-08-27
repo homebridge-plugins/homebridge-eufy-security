@@ -54,6 +54,15 @@ export interface AdapterDiagnostic {
 export interface AdapterEventTrace {
   event: string;
   observation: 'valid' | 'missing' | 'malformed';
+  /**
+   * What announced the change, where the adapter follows more than one announcement for the same state.
+   *
+   * `write` is the SDK reflecting a write this plugin issued; `poll` is a cloud poll seeing the value move,
+   * which means something other than this plugin changed it. Both reach the same handler and produced the same
+   * record until now, so a support case could not tell "we did this" from "the user did this in the vendor app"
+   * — the first question anyone asks about a camera that turned itself off.
+   */
+  announcedBy?: 'write' | 'poll';
 }
 
 /** An identity-free account of one live video selection made by a HomeKit controller. */

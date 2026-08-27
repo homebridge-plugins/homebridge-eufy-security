@@ -2887,25 +2887,23 @@ describe('camera streaming bundle adapter', () => {
     vi.useFakeTimers();
 
     state.value = false;
-    expect(attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never)).toEqual({
-      event: 'camera-enabled-changed',
-      observation: 'valid',
-    });
+    expect(
+      attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never),
+      'the reflection of a write this plugin issued',
+    ).toEqual({ event: 'camera-enabled-changed', observation: 'valid', announcedBy: 'write' });
     expect(trace).not.toHaveBeenCalled();
 
     state.value = true;
-    expect(attached!.event!({ eventName: 'cameraEnabled', deviceSn: SNAPSHOT_SERIAL, enabled: true } as never)).toEqual(
-      {
-        event: 'camera-enabled-changed',
-        observation: 'valid',
-      },
-    );
+    expect(
+      attached!.event!({ eventName: 'cameraEnabled', deviceSn: SNAPSHOT_SERIAL, enabled: true } as never),
+      'a cloud poll seeing it move, which means something other than this plugin changed it',
+    ).toEqual({ event: 'camera-enabled-changed', observation: 'valid', announcedBy: 'poll' });
 
     state.value = undefined;
     expect(
       attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never),
       'a reading that does not answer is reported as such rather than as a state',
-    ).toEqual({ event: 'camera-enabled-changed', observation: 'missing' });
+    ).toEqual({ event: 'camera-enabled-changed', observation: 'missing', announcedBy: 'write' });
 
     expect(attached!.event!({ eventName: 'motion', deviceSn: SNAPSHOT_SERIAL } as never)).toBeUndefined();
     vi.useRealTimers();
@@ -3053,7 +3051,7 @@ describe('camera streaming bundle adapter', () => {
       expect(
         attached!.event!({ eventName: 'cameraEnabledChanged', deviceSn: SNAPSHOT_SERIAL } as never),
         label,
-      ).toEqual({ event: 'camera-enabled-changed', observation: 'missing' });
+      ).toEqual({ event: 'camera-enabled-changed', observation: 'missing', announcedBy: 'write' });
       expect(operatingModes(target), label).toEqual([]);
     }
   });

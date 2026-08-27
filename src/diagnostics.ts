@@ -60,7 +60,7 @@ export function unconfirmedWriteCondition(property: string): HomeKitCondition | 
 }
 
 export type HomeKitEventTrace =
-  | { adapter: string; event: string; observation: string }
+  | { adapter: string; event: string; observation: string; announcedBy?: string }
   | {
       adapter: string;
       event: 'live-video-selected';
@@ -1426,6 +1426,8 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'camera.streaming': new Set(['camera-enabled-changed']),
 };
 const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
+/** What announced a change, for an adapter that follows more than one announcement for the same state. */
+const HOMEKIT_ANNOUNCEMENTS = new Set(['write', 'poll']);
 const HOMEKIT_LIVE_VIDEO_OPERATIONS = new Set(['start', 'reconfigure']);
 const HOMEKIT_LIVE_VIDEO_PROFILES = new Set(['baseline', 'main', 'high']);
 const HOMEKIT_LIVE_VIDEO_LEVELS = new Set(['3.1', '3.2', '4.0']);
@@ -1889,6 +1891,11 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
       adapter: trace.adapter,
       event: trace.event,
       observation: trace.observation,
+      // Omitted rather than guessed where the adapter states none, and refused where it states one this
+      // build does not know: a value invented here would read as fact in a support case.
+      ...(typeof trace.announcedBy === 'string' && HOMEKIT_ANNOUNCEMENTS.has(trace.announcedBy)
+        ? { announcedBy: trace.announcedBy }
+        : {}),
     }),
   );
 }

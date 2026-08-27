@@ -1187,4 +1187,53 @@ describe('diagnostic conditions', () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  it('records which announcement moved the camera power, and refuses one it does not know', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'camera.streaming',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+        announcedBy: 'poll',
+      },
+    );
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'camera.streaming',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+        announcedBy: 'write',
+      },
+    );
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'camera.streaming',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+        announcedBy: 'telepathy',
+      },
+    );
+    reportHomeKitEvent(
+      { debug },
+      {
+        adapter: 'contact.sensor',
+        event: 'contact-state',
+        observation: 'valid',
+      },
+    );
+
+    const records = debug.mock.calls.map(([message]) => JSON.parse(message as string));
+    expect(
+      records.map((record) => record.announcedBy),
+      'a support case has to tell "we did this" from "the user did this in the vendor app"',
+    ).toEqual(['poll', 'write', undefined, undefined]);
+    expect(records[2], 'an unknown announcement is dropped, never passed through as fact').not.toHaveProperty(
+      'announcedBy',
+    );
+  });
 });
