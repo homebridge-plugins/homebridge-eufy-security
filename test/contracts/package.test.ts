@@ -162,6 +162,19 @@ async function renderUi(
     reportValidity() {},
   });
   const advancedFfmpeg = interactiveElement({ value: '' });
+  /** The transfer list the warm-up setting draws into, which the shipped script builds children for. */
+  const listElement = () =>
+    interactiveElement({
+      textContent: '',
+      children: [] as unknown[],
+      append(...items: unknown[]) {
+        (this.children as unknown[]).push(...items);
+      },
+    });
+  const warmUpAvailable = listElement();
+  const warmUpChosen = listElement();
+  const warmUpAdd = interactiveElement({ disabled: false });
+  const warmUpRemove = interactiveElement({ disabled: false });
   const advancedStatus = { textContent: '' };
   const browserWindow = interactiveElement({});
   const requests: Array<{ path: string; body: unknown }> = [];
@@ -273,6 +286,10 @@ async function renderUi(
           '[data-advanced-polling]': advancedPolling,
           '[data-advanced-ffmpeg]': advancedFfmpeg,
           '[data-advanced-status]': advancedStatus,
+          '[data-warm-up-available]': warmUpAvailable,
+          '[data-warm-up-chosen]': warmUpChosen,
+          '[data-warm-up-add]': warmUpAdd,
+          '[data-warm-up-remove]': warmUpRemove,
         }[selector];
       },
       querySelectorAll(selector: string) {
@@ -281,12 +298,18 @@ async function renderUi(
       createElement() {
         return {
           children: [] as unknown[],
+          attributes: {} as Record<string, string>,
           append(...children: unknown[]) {
             this.children.push(...children);
+          },
+          addEventListener() {},
+          setAttribute(name: string, value: string) {
+            this.attributes[name] = value;
           },
           click() {},
           hidden: false,
           textContent: '',
+          type: '',
         };
       },
       body: { appendChild() {}, removeChild() {} },
@@ -975,6 +998,8 @@ describe('packed plugin', () => {
       expect(Object.values(frenchUi.translations)).not.toContain(undefined);
       expect(frenchUi.translatedLabels).toEqual({
         accountConnectionLabel: 'Informations sur la connexion du compte',
+        advancedWarmUpAdd: 'Préchauffer l’événement sélectionné',
+        advancedWarmUpRemove: 'Ne plus préchauffer l’événement sélectionné',
         closeAdvanced: 'Retour aux appareils',
         closeDiagnostics: 'Retour aux appareils',
         dashboardActionsLabel: 'Actions du tableau de bord',
