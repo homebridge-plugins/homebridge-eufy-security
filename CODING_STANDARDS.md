@@ -169,6 +169,11 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   maintainer specifies otherwise.
 - Use Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:`).
 - Run `npm run verify` before opening a pull request.
+- Run one test suite at a time on a development host. Every Vitest worker is a full Node process, so two
+  concurrent suites can exhaust the memory of a host that also runs Homebridge; it swaps instead of
+  failing, and the cost appears as an unexplained stall in unrelated software rather than as a test
+  error. Comparing two revisions is done sequentially for the same reason: concurrent runs contend for
+  the same cores, so their timings measure the contention and not the change.
 - Keep contract specifications under `test/contracts/`; do not colocate them under `src/`.
 - Pull requests are concise and state what changed, why, what was verified, and what remains deferred.
 - Release notes are written for users and put required actions before internal detail.
