@@ -160,20 +160,17 @@ describe('guided diagnostics session', () => {
     }
   });
 
-  it('persists bounded fixed-shape UI events without caller-supplied fields', async () => {
+  it('persists fixed-shape UI events without caller-supplied fields', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
     const diagnostics = new GuidedDiagnostics(root, () => Date.parse('2026-08-16T08:00:00.000Z'));
 
     try {
       const authorized = await diagnostics.authorize('dashboard-ui', 'intermittent');
       await diagnostics.startReproduction();
-      for (let index = 0; index < 1_000; index += 1) {
-        await diagnostics.recordUiEvent('dashboard-opened');
-      }
+      await diagnostics.recordUiEvent('dashboard-opened');
       await diagnostics.recordUiEvent('issue-observed');
 
       const path = join(root, 'diagnostics', 'ui-events.jsonl');
-      expect(statSync(path).size).toBeLessThanOrEqual(64 * 1_024);
       expect(statSync(path).mode & 0o777).toBe(0o600);
       expect(statSync(join(root, 'diagnostics')).mode & 0o777).toBe(0o700);
       const records = readFileSync(path, 'utf8')
@@ -188,16 +185,62 @@ describe('guided diagnostics session', () => {
         event: 'issue-observed',
       });
       expect(JSON.stringify(records)).not.toMatch(/serial|device|account|credential|answer|configuration|url/i);
-      expect(
-        records.length,
-        'the cap is in bytes, so the proof is that appending past it dropped the oldest records',
-      ).toBeLessThan(1_001);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-    // A byte cap can only be proven by crossing it, which is a thousand real appends: the cost is the test's
-    // subject, not overhead, and a 5s default made it fail on a slower runner at 5005ms.
-  }, 30_000);
+  });
+
+  /**
+   * The cap is what stops a support session filling the disk, and it is stated in bytes — so what has to be
+   * proven is that crossing it drops the oldest record, not that a thousand appends eventually do.
+   *
+   * The file is seeded to just under the cap in one write and then one event is recorded. That exercises the
+   * same branch as any volume would, and it can assert the thing volume never did: that the oldest record is
+   * the one that went.
+   */
+  it('drops the oldest UI event rather than growing past its byte cap', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    const diagnostics = new GuidedDiagnostics(root, () => Date.parse('2026-08-16T08:00:00.000Z'));
+
+    try {
+      const authorized = await diagnostics.authorize('dashboard-ui', 'intermittent');
+      await diagnostics.startReproduction();
+      await diagnostics.recordUiEvent('dashboard-opened');
+
+      const path = join(root, 'diagnostics', 'ui-events.jsonl');
+      const shape = (event: string): string =>
+        `${JSON.stringify({
+          version: 1,
+          supportCaseId: authorized.supportCaseId,
+          timestamp: '2026-08-16T08:00:00.000Z',
+          event,
+        })}\n`;
+      const filler = shape('dashboard-opened');
+      const oldest = shape('request-failed');
+      const seeded = oldest + filler.repeat(Math.floor((64 * 1_024 - oldest.length - 1) / filler.length));
+      writeFileSync(path, seeded, { encoding: 'utf8', mode: 0o600 });
+      expect(seeded.length, 'seeded just under the cap, so one more record has to cross it').toBeLessThan(64 * 1_024);
+
+      await diagnostics.recordUiEvent('issue-observed');
+
+      const records = readFileSync(path, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { event: string });
+      expect(statSync(path).size, 'the cap is the point').toBeLessThanOrEqual(64 * 1_024);
+      expect(records.at(-1)?.event, 'the newest record is kept').toBe('issue-observed');
+      expect(
+        records.map(({ event }) => event),
+        'and the oldest is the one dropped',
+      ).not.toContain('request-failed');
+      expect(
+        records.every(({ event }) => typeof event === 'string'),
+        'every retained line stays valid JSONL',
+      ).toBe(true);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it('bounds pending UI events and keeps every accepted record as valid JSONL', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
