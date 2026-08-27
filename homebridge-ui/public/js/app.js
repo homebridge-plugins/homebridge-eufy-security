@@ -76,7 +76,9 @@ const advancedFfmpeg = document.querySelector('[data-advanced-ffmpeg]');
 const warmUpAvailable = document.querySelector('[data-warm-up-available]');
 const warmUpChosen = document.querySelector('[data-warm-up-chosen]');
 const warmUpAdd = document.querySelector('[data-warm-up-add]');
+const warmUpAddAll = document.querySelector('[data-warm-up-add-all]');
 const warmUpRemove = document.querySelector('[data-warm-up-remove]');
+const warmUpRemoveAll = document.querySelector('[data-warm-up-remove-all]');
 const advancedStatus = document.querySelector('[data-advanced-status]');
 
 let messages = {};
@@ -577,14 +579,28 @@ menuDiagnostics.addEventListener('click', async () => {
     recordActiveUiEventBestEffort('request-failed');
   }
 });
-menuAdvanced.addEventListener('click', () => {
+menuAdvanced.addEventListener('click', async () => {
   const config = configuredBlock() ?? {};
   advancedPolling.value = String(config.pollingIntervalMinutes ?? 10);
   warmUpSelection = [...new Set(Array.isArray(config.warmUpEvents) ? config.warmUpEvents : ['doorbellPress'])].sort();
-  warmUpFocus = { column: 'available', event: undefined };
+  warmUpMarked = new Set();
   renderWarmUp();
   advancedFfmpeg.value = config.ffmpegPath ?? '';
   openDashboardPanel(advancedPanel, menuAdvanced);
+  /**
+   * The panel asks for its own candidates rather than relying on the devices view having been opened first.
+   * Without this a user who came straight here sees an empty left column, and clearing the right one would leave
+   * the setting with no way back. Best effort: an unanswered request leaves whatever is already chosen.
+   */
+  if (warmUpCandidates.length === 0) {
+    try {
+      const snapshot = await requestWithinDeadline('/dashboard', { representationPreferences: {} }, 12000);
+      warmUpCandidates = Array.isArray(snapshot.warmUpCandidates) ? snapshot.warmUpCandidates : [];
+      renderWarmUp();
+    } catch {
+      recordActiveUiEventBestEffort('request-failed');
+    }
+  }
 });
 diagnosticsClose.addEventListener('click', () => {
   diagnosticsStartingAnother = false;
@@ -627,11 +643,19 @@ async function updateAdvancedSettings() {
 advancedPolling.addEventListener('change', updateAdvancedSettings);
 advancedFfmpeg.addEventListener('change', updateAdvancedSettings);
 warmUpAdd.addEventListener('click', () => moveWarmUp('available'));
+warmUpAddAll.addEventListener('click', () => moveWarmUp('available', true));
 warmUpRemove.addEventListener('click', () => moveWarmUp('chosen'));
+warmUpRemoveAll.addEventListener('click', () => moveWarmUp('chosen', true));
 
 let warmUpSelection = ['doorbellPress'];
 let warmUpCandidates = [];
-let warmUpFocus = { column: 'available', event: undefined };
+/**
+ * The entries the user has marked, in whichever column they sit.
+ *
+ * One set is enough because an event is in exactly one column: the column follows from whether the selection
+ * holds it. Marking is what makes the single arrows act on a choice rather than on whatever came first.
+ */
+let warmUpMarked = new Set();
 
 /**
  * The events this interface may offer: whatever the discovered devices report, plus anything already chosen.
@@ -675,33 +699,40 @@ function renderWarmUp() {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = warmUpLabel(event);
-      button.setAttribute('aria-pressed', String(warmUpFocus.column === column && warmUpFocus.event === event));
+      button.setAttribute('aria-pressed', String(warmUpMarked.has(event)));
       button.addEventListener('click', () => {
-        warmUpFocus = { column, event };
+        if (warmUpMarked.has(event)) warmUpMarked.delete(event);
+        else warmUpMarked.add(event);
         renderWarmUp();
       });
       item.append(button);
       list.append(item);
     }
   }
-  if (warmUpAdd) warmUpAdd.disabled = warmUpSelection.length === offered.length;
-  if (warmUpRemove) warmUpRemove.disabled = warmUpSelection.length === 0;
+  const availableEvents = offered.filter((event) => !warmUpSelection.includes(event));
+  // A control that looks available and moves nothing is worse than one that says it cannot.
+  if (warmUpAdd) warmUpAdd.disabled = !availableEvents.some((event) => warmUpMarked.has(event));
+  if (warmUpAddAll) warmUpAddAll.disabled = availableEvents.length === 0;
+  if (warmUpRemove) warmUpRemove.disabled = !warmUpSelection.some((event) => warmUpMarked.has(event));
+  if (warmUpRemoveAll) warmUpRemoveAll.disabled = warmUpSelection.length === 0;
 }
 
 /**
- * Moves one event across, taking what the user selected in that column or its first entry otherwise, so the
- * arrows work without a selection.
+ * Moves every marked entry of one column across, or every entry of it when asked for all.
+ *
+ * The marks are cleared afterwards rather than carried over: the entry has visibly changed column, which is the
+ * feedback, and leaving it marked would arm the opposite arrow with what was just moved.
  */
-function moveWarmUp(from) {
+function moveWarmUp(from, all = false) {
   const offered = warmUpOffered();
   const source = from === 'available' ? offered.filter((event) => !warmUpSelection.includes(event)) : warmUpSelection;
-  const event = warmUpFocus.column === from && source.includes(warmUpFocus.event) ? warmUpFocus.event : source[0];
-  if (event === undefined) return;
+  const moving = all ? source : source.filter((event) => warmUpMarked.has(event));
+  if (moving.length === 0) return;
   warmUpSelection =
     from === 'available'
-      ? [...warmUpSelection, event].sort()
-      : warmUpSelection.filter((entry) => entry !== event);
-  warmUpFocus = { column: from === 'available' ? 'chosen' : 'available', event };
+      ? [...new Set([...warmUpSelection, ...moving])].sort()
+      : warmUpSelection.filter((event) => !moving.includes(event));
+  warmUpMarked = new Set();
   renderWarmUp();
   void updateAdvancedSettings();
 }

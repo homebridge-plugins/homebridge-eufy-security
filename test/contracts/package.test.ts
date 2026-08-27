@@ -162,19 +162,33 @@ async function renderUi(
     reportValidity() {},
   });
   const advancedFfmpeg = interactiveElement({ value: '' });
-  /** The transfer list the warm-up setting draws into, which the shipped script builds children for. */
-  const listElement = () =>
-    interactiveElement({
-      textContent: '',
-      children: [] as unknown[],
+  /**
+   * The transfer list the warm-up setting draws into.
+   *
+   * `textContent = ''` has to empty the children, as it does in a browser: without that the harness accumulates
+   * every entry ever drawn and a redraw appears to change nothing, which would let a broken redraw pass.
+   */
+  const listElement = () => {
+    const children: unknown[] = [];
+    return interactiveElement({
+      children,
+      get textContent() {
+        return '';
+      },
+      set textContent(_value: string) {
+        children.length = 0;
+      },
       append(...items: unknown[]) {
-        (this.children as unknown[]).push(...items);
+        children.push(...items);
       },
     });
+  };
   const warmUpAvailable = listElement();
   const warmUpChosen = listElement();
   const warmUpAdd = interactiveElement({ disabled: false });
+  const warmUpAddAll = interactiveElement({ disabled: false });
   const warmUpRemove = interactiveElement({ disabled: false });
+  const warmUpRemoveAll = interactiveElement({ disabled: false });
   const advancedStatus = { textContent: '' };
   const browserWindow = interactiveElement({});
   const requests: Array<{ path: string; body: unknown }> = [];
@@ -188,7 +202,9 @@ async function renderUi(
   const translatedLabels = [
     'accountConnectionLabel',
     'advancedWarmUpAdd',
+    'advancedWarmUpAddAll',
     'advancedWarmUpRemove',
+    'advancedWarmUpRemoveAll',
     'closeAdvanced',
     'closeDiagnostics',
     'dashboardActionsLabel',
@@ -289,7 +305,9 @@ async function renderUi(
           '[data-warm-up-available]': warmUpAvailable,
           '[data-warm-up-chosen]': warmUpChosen,
           '[data-warm-up-add]': warmUpAdd,
+          '[data-warm-up-add-all]': warmUpAddAll,
           '[data-warm-up-remove]': warmUpRemove,
+          '[data-warm-up-remove-all]': warmUpRemoveAll,
         }[selector];
       },
       querySelectorAll(selector: string) {
@@ -458,6 +476,12 @@ async function renderUi(
     dashboardTitle,
     deviceGroups,
     menuAdvanced,
+    warmUpAvailable,
+    warmUpChosen,
+    warmUpAdd,
+    warmUpAddAll,
+    warmUpRemove,
+    warmUpRemoveAll,
     menuDiagnostics,
     diagnosticsPanel,
     diagnosticsClose,
@@ -820,7 +844,9 @@ describe('packed plugin', () => {
       expect(translatedLabelKeys).toEqual([
         'accountConnectionLabel',
         'advancedWarmUpAdd',
+        'advancedWarmUpAddAll',
         'advancedWarmUpRemove',
+        'advancedWarmUpRemoveAll',
         'closeAdvanced',
         'closeDiagnostics',
         'dashboardActionsLabel',
@@ -998,8 +1024,10 @@ describe('packed plugin', () => {
       expect(Object.values(frenchUi.translations)).not.toContain(undefined);
       expect(frenchUi.translatedLabels).toEqual({
         accountConnectionLabel: 'Informations sur la connexion du compte',
-        advancedWarmUpAdd: 'Préchauffer l’événement sélectionné',
-        advancedWarmUpRemove: 'Ne plus préchauffer l’événement sélectionné',
+        advancedWarmUpAdd: 'Préchauffer les événements sélectionnés',
+        advancedWarmUpAddAll: 'Préchauffer tous les événements',
+        advancedWarmUpRemove: 'Ne plus préchauffer les événements sélectionnés',
+        advancedWarmUpRemoveAll: 'Ne plus préchauffer aucun événement',
         closeAdvanced: 'Retour aux appareils',
         closeDiagnostics: 'Retour aux appareils',
         dashboardActionsLabel: 'Actions du tableau de bord',
@@ -1033,6 +1061,47 @@ describe('packed plugin', () => {
         ],
         catalogs,
       );
+      const warmUpUi = await renderUi(
+        script,
+        [
+          {
+            platform: 'HomebridgeEufy',
+            username: 'guest@example.invalid',
+            warmUpEvents: ['doorbellPress', 'motion'],
+          },
+        ],
+        catalogs,
+        'en',
+        [],
+        undefined,
+        { state: 'ready', devices: [], warmUpCandidates: ['doorbellPress', 'motion', 'personDetected'] },
+      );
+      await warmUpUi.menuAdvanced.dispatch('click');
+
+      /** Both columns are drawn from the chosen list, and every entry is reachable as a button. */
+      const entries = (column: { children: unknown[] }) =>
+        column.children.map((item) => (item as { children: [{ textContent: string }] }).children[0].textContent);
+      expect(entries(warmUpUi.warmUpChosen as never)).toEqual(['Doorbell press', 'Motion']);
+      expect(
+        entries(warmUpUi.warmUpAvailable as never),
+        'the panel asks for its own candidates, so it works without the devices view being opened first',
+      ).toEqual(['Person seen']);
+      expect(warmUpUi.warmUpRemove.disabled, 'nothing is marked yet, so the single arrow moves nothing').toBe(true);
+      expect(warmUpUi.warmUpRemoveAll.disabled, 'there is something to clear, so the double arrow acts').toBe(false);
+
+      await warmUpUi.warmUpRemoveAll.dispatch('click');
+
+      expect(warmUpUi.updatedConfig?.[0]!.warmUpEvents, 'the double arrow empties the column in one move').toEqual([]);
+      expect(entries(warmUpUi.warmUpChosen as never)).toEqual([]);
+      expect(warmUpUi.warmUpRemoveAll.disabled, 'and disables itself once there is nothing left').toBe(true);
+
+      await warmUpUi.warmUpAddAll.dispatch('click');
+
+      expect(
+        warmUpUi.updatedConfig?.[0]!.warmUpEvents,
+        'and back again in one move, every candidate the devices report',
+      ).toEqual(['doorbellPress', 'motion', 'personDetected']);
+
       await menuUi.menuDiagnostics.dispatch('click');
       expect(menuUi).toMatchObject({
         dashboardState: { hidden: true },

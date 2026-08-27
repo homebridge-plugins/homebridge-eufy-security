@@ -1534,7 +1534,7 @@ button:disabled {
 
 .warm-up-controls button {
   min-width: 42px;
-  min-height: 34px;
+  min-height: 30px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--panel);
