@@ -37,14 +37,14 @@ describe('runtime pre-warm policy', () => {
     push: { load: () => null, save: vi.fn(), clear: vi.fn() } as never,
   });
 
-  const warmedBy = async (sessionWarmUp?: string): Promise<unknown> => {
+  const warmedBy = async (warmUpEvents?: string[]): Promise<unknown> => {
     constructed.length = 0;
     const client = new PersistedSdkClient(
       parseConfig({
         platform: 'HomebridgeEufy',
         username: 'runtime@example.invalid',
         password: 'synthetic',
-        ...(sessionWarmUp === undefined ? {} : { sessionWarmUp }),
+        ...(warmUpEvents === undefined ? {} : { warmUpEvents }),
       }),
       stores(),
     );
@@ -60,22 +60,19 @@ describe('runtime pre-warm policy', () => {
     ).toEqual(['doorbellPress']);
   });
 
-  it('warms nothing when the user turns it off', async () => {
-    expect(await warmedBy('off')).toEqual([]);
+  it('warms nothing when the user chose nothing', async () => {
+    expect(await warmedBy([])).toEqual([]);
   });
 
-  it('warms what a camera reports on its own when the user accepts the battery cost', async () => {
-    expect(await warmedBy('detections')).toEqual([
-      'doorbellPress',
-      'motion',
-      'personDetected',
-      'petDetection',
-      'packageDelivered',
-    ]);
+  it('hands the SDK the names the user chose, without translating them', async () => {
+    expect(
+      await warmedBy(['motion', 'personDetected', 'someLaterSdkEvent']),
+      'the SDK owns this vocabulary, so an event it gains needs no change here',
+    ).toEqual(['motion', 'personDetected', 'someLaterSdkEvent']);
   });
 
-  it('leaves both station power tiers eligible, whatever the setting', async () => {
-    await warmedBy('detections');
+  it('leaves both station power tiers eligible, whatever the choice', async () => {
+    await warmedBy(['motion']);
     expect(
       constructed[0]!.prewarmTiers,
       'sparing the battery tier would spare exactly the cameras this setting exists for',

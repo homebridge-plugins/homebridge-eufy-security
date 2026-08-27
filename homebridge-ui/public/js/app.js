@@ -73,6 +73,10 @@ const advancedPanel = document.querySelector('[data-advanced-settings]');
 const advancedClose = document.querySelector('[data-advanced-close]');
 const advancedPolling = document.querySelector('[data-advanced-polling]');
 const advancedFfmpeg = document.querySelector('[data-advanced-ffmpeg]');
+const warmUpAvailable = document.querySelector('[data-warm-up-available]');
+const warmUpChosen = document.querySelector('[data-warm-up-chosen]');
+const warmUpAdd = document.querySelector('[data-warm-up-add]');
+const warmUpRemove = document.querySelector('[data-warm-up-remove]');
 const advancedStatus = document.querySelector('[data-advanced-status]');
 
 let messages = {};
@@ -576,6 +580,9 @@ menuDiagnostics.addEventListener('click', async () => {
 menuAdvanced.addEventListener('click', () => {
   const config = configuredBlock() ?? {};
   advancedPolling.value = String(config.pollingIntervalMinutes ?? 10);
+  warmUpSelection = [...new Set(Array.isArray(config.warmUpEvents) ? config.warmUpEvents : ['doorbellPress'])].sort();
+  warmUpFocus = { column: 'available', event: undefined };
+  renderWarmUp();
   advancedFfmpeg.value = config.ffmpegPath ?? '';
   openDashboardPanel(advancedPanel, menuAdvanced);
 });
@@ -605,6 +612,9 @@ async function updateAdvancedSettings() {
   else next.pollingIntervalMinutes = pollingIntervalMinutes;
   if (ffmpegPath) next.ffmpegPath = ffmpegPath;
   else delete next.ffmpegPath;
+  // The default is what the plugin applies when the key is absent, so storing it would only pin today's default.
+  if (warmUpSelection.length === 1 && warmUpSelection[0] === 'doorbellPress') delete next.warmUpEvents;
+  else next.warmUpEvents = [...warmUpSelection];
   try {
     await updateConfig(next);
     advancedStatus.textContent = '';
@@ -616,6 +626,85 @@ async function updateAdvancedSettings() {
 
 advancedPolling.addEventListener('change', updateAdvancedSettings);
 advancedFfmpeg.addEventListener('change', updateAdvancedSettings);
+warmUpAdd.addEventListener('click', () => moveWarmUp('available'));
+warmUpRemove.addEventListener('click', () => moveWarmUp('chosen'));
+
+let warmUpSelection = ['doorbellPress'];
+let warmUpCandidates = [];
+let warmUpFocus = { column: 'available', event: undefined };
+
+/**
+ * The events this interface may offer: whatever the discovered devices report, plus anything already chosen.
+ *
+ * Keeping a chosen event that no device currently reports is deliberate — a camera may be offline, and dropping
+ * the entry would silently rewrite the user's setting on the next save.
+ */
+function warmUpOffered() {
+  return [...new Set([...warmUpCandidates, ...warmUpSelection])].sort();
+}
+
+/**
+ * A readable name for one event: the translation where this build has one, and otherwise a label derived from
+ * the reported name. Deriving it is what lets a newly reported event appear without a release here.
+ */
+function warmUpLabel(event) {
+  const translated = messages[`advancedWarmUpEvent_${event}`];
+  if (translated) return translated;
+  const spaced = event.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Draws both columns from the selection.
+ *
+ * Each entry is a button rather than an option, so a keyboard reaches it and a screen reader announces the
+ * column it belongs to. The move buttons are disabled while there is nothing to move, because a control that
+ * looks available and does nothing is worse than one that says it cannot.
+ */
+function renderWarmUp() {
+  if (!warmUpAvailable || !warmUpChosen) return;
+  const offered = warmUpOffered();
+  const columns = [
+    { list: warmUpAvailable, column: 'available', events: offered.filter((e) => !warmUpSelection.includes(e)) },
+    { list: warmUpChosen, column: 'chosen', events: offered.filter((e) => warmUpSelection.includes(e)) },
+  ];
+  for (const { list, column, events } of columns) {
+    list.textContent = '';
+    for (const event of events) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = warmUpLabel(event);
+      button.setAttribute('aria-pressed', String(warmUpFocus.column === column && warmUpFocus.event === event));
+      button.addEventListener('click', () => {
+        warmUpFocus = { column, event };
+        renderWarmUp();
+      });
+      item.append(button);
+      list.append(item);
+    }
+  }
+  if (warmUpAdd) warmUpAdd.disabled = warmUpSelection.length === offered.length;
+  if (warmUpRemove) warmUpRemove.disabled = warmUpSelection.length === 0;
+}
+
+/**
+ * Moves one event across, taking what the user selected in that column or its first entry otherwise, so the
+ * arrows work without a selection.
+ */
+function moveWarmUp(from) {
+  const offered = warmUpOffered();
+  const source = from === 'available' ? offered.filter((event) => !warmUpSelection.includes(event)) : warmUpSelection;
+  const event = warmUpFocus.column === from && source.includes(warmUpFocus.event) ? warmUpFocus.event : source[0];
+  if (event === undefined) return;
+  warmUpSelection =
+    from === 'available'
+      ? [...warmUpSelection, event].sort()
+      : warmUpSelection.filter((entry) => entry !== event);
+  warmUpFocus = { column: from === 'available' ? 'chosen' : 'available', event };
+  renderWarmUp();
+  void updateAdvancedSettings();
+}
 
 function configuredBlock() {
   return pluginConfig.find((block) => block.platform === 'HomebridgeEufy');
@@ -727,7 +816,14 @@ authForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const existing = pluginConfig.find((block) => block.platform === 'HomebridgeEufy') ?? {};
   const retained = Object.fromEntries(
-    ['pollingIntervalMinutes', 'ffmpegPath', 'entityPreferences', 'discardedV4Settings', 'discardedV4Acknowledged']
+    [
+      'pollingIntervalMinutes',
+      'sessionWarmUp',
+      'ffmpegPath',
+      'entityPreferences',
+      'discardedV4Settings',
+      'discardedV4Acknowledged',
+    ]
       .filter((key) => Object.hasOwn(existing, key))
       .map((key) => [key, existing[key]]),
   );
@@ -816,12 +912,10 @@ homebridge.addEventListener('ready', async () => {
         .map(([serial, preference]) => [serial, preference.represented]),
     );
     try {
-      dashboardView.render(
-        await requestWithinDeadline('/dashboard', { representationPreferences }, 12000),
-        configuredBlock() ?? {},
-        messages,
-        dashboardElements,
-      );
+      const snapshot = await requestWithinDeadline('/dashboard', { representationPreferences }, 12000);
+      // What the warm-up setting may offer comes from the devices themselves, so it is learnt here.
+      warmUpCandidates = Array.isArray(snapshot.warmUpCandidates) ? snapshot.warmUpCandidates : [];
+      dashboardView.render(snapshot, configuredBlock() ?? {}, messages, dashboardElements);
     } catch {
       dashboardView.render({ state: 'missing', devices: [] }, configuredBlock() ?? {}, messages, dashboardElements);
       recordActiveUiEventBestEffort('request-failed');

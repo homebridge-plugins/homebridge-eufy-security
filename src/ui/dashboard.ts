@@ -28,6 +28,14 @@ export interface DashboardSnapshot {
   state: DashboardState;
   updatedAt?: string;
   devices: DashboardDevice[];
+  /**
+   * Every event the discovered devices can report, which is what the warm-up setting may choose from.
+   *
+   * Read off the manifests rather than listed here, so an event the SDK gains appears in the interface without
+   * this plugin naming it, and an event no device reports is never offered. The names are the SDK's own,
+   * because they are what the option passed back to it takes.
+   */
+  warmUpCandidates: string[];
 }
 
 export interface DashboardTracker {
@@ -118,14 +126,19 @@ export async function readDashboard(
 ): Promise<DashboardSnapshot> {
   const record = await tracker.read();
   if (!record) {
-    return { state: 'missing', devices: [] };
+    return { state: 'missing', devices: [], warmUpCandidates: [] };
   }
   const updatedAt = Date.parse(record.updatedAt);
   const age = now() - updatedAt;
   const devices =
     record.snapshot?.devices.map((manifest) => projectDevice(manifest, representationPreferences[manifest.sn])) ?? [];
+  const warmUpCandidates = [
+    ...new Set(
+      (record.snapshot?.devices ?? []).flatMap((manifest) => manifest.details.flatMap(({ events }) => events)),
+    ),
+  ].sort();
   if (!Number.isFinite(updatedAt) || age < -5_000 || age > DASHBOARD_FRESH_THRESHOLD_MS) {
-    return { state: 'stale', updatedAt: record.updatedAt, devices };
+    return { state: 'stale', updatedAt: record.updatedAt, devices, warmUpCandidates };
   }
-  return { state: stateOf(record), updatedAt: record.updatedAt, devices };
+  return { state: stateOf(record), updatedAt: record.updatedAt, devices, warmUpCandidates };
 }

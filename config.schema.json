@@ -34,25 +34,15 @@
         "minimum": 0,
         "type": "integer"
       },
-      "sessionWarmUp": {
-        "title": "Warm up camera sessions before HomeKit asks",
-        "description": "Opens a camera’s connection as soon as it reports an event, so the first live view or snapshot afterwards starts straight away instead of waiting for a cold connection to open. The cost falls on cameras that run on their own battery: warming one up keeps it awake for several minutes, and a camera that reports often may never sleep. Cameras wired to power, or attached to a HomeBase, are unaffected either way. \"Doorbell presses\" is the balanced choice — somebody is at the door every time, so the cost is always repaid. \"Detections too\" gives the fastest live view on motion and person alerts, and is the option to pick if your cameras are wired or if you would rather have the speed than the battery life.",
-        "type": "string",
-        "default": "doorbell",
-        "oneOf": [
-          {
-            "title": "Off — never open a connection early",
-            "enum": ["off"]
-          },
-          {
-            "title": "Doorbell presses (recommended)",
-            "enum": ["doorbell"]
-          },
-          {
-            "title": "Detections too — faster live view, more battery use",
-            "enum": ["detections"]
-          }
-        ]
+      "warmUpEvents": {
+        "title": "Warm up camera connections",
+        "description": "Events that open a camera’s connection as soon as it reports them, so the live view or snapshot straight afterwards starts immediately. A camera on its own battery is kept awake for several minutes each time; wired cameras and those behind a HomeBase are unaffected. Choose these in the plugin interface, which offers whatever your devices actually report.",
+        "type": "array",
+        "default": ["doorbellPress"],
+        "uniqueItems": true,
+        "items": {
+          "type": "string"
+        }
       },
       "ffmpegPath": {
         "title": "FFmpeg path",

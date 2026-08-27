@@ -340,8 +340,18 @@ button.diagnostics-quiet-action {
 
 .advanced-fields {
   display: grid;
-  grid-template-columns: minmax(140px, 0.7fr) minmax(220px, 1.3fr);
-  gap: 14px;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+.advanced-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.advanced-field-label {
+  font-weight: 700;
 }
 
 .advanced-fields label {
@@ -1445,4 +1455,95 @@ button:disabled {
 
 .shell[data-theme='dark'] .eufy-logo .logo-dark {
   display: block;
+}
+
+/* One setting per row, so a control that needs width gets it and nothing sits half-read beside it. */
+.warm-up-transfer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 10px;
+  font-weight: 400;
+}
+
+.warm-up-column {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 6px;
+  min-width: 0;
+}
+
+.warm-up-column > p {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted, var(--ink));
+}
+
+.warm-up-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  min-height: 132px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  display: grid;
+  align-content: start;
+  gap: 2px;
+}
+
+.warm-up-column li {
+  margin: 0;
+}
+
+.warm-up-column button {
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.warm-up-column button:hover,
+.warm-up-column button:focus-visible {
+  border-color: var(--line);
+  background: var(--panel-hover, rgba(127, 127, 127, 0.12));
+}
+
+.warm-up-controls {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+}
+
+.warm-up-controls button {
+  min-width: 42px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.warm-up-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 540px) {
+  .warm-up-transfer {
+    grid-template-columns: 1fr;
+  }
+
+  .warm-up-controls {
+    grid-auto-flow: column;
+    justify-content: center;
+  }
 }

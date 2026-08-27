@@ -174,6 +174,8 @@ async function renderUi(
   const translatedNodes = translationKeys.map((key) => ({ dataset: { i18n: key }, textContent: '__untranslated__' }));
   const translatedLabels = [
     'accountConnectionLabel',
+    'advancedWarmUpAdd',
+    'advancedWarmUpRemove',
     'closeAdvanced',
     'closeDiagnostics',
     'dashboardActionsLabel',
@@ -727,6 +729,10 @@ describe('packed plugin', () => {
           'advancedPollingLabel',
           'advancedSummary',
           'advancedTitle',
+          'advancedWarmUpAvailable',
+          'advancedWarmUpChosen',
+          'advancedWarmUpHelp',
+          'advancedWarmUpLabel',
           'authenticate',
           'authReady',
           'authSummary',
@@ -790,6 +796,8 @@ describe('packed plugin', () => {
       );
       expect(translatedLabelKeys).toEqual([
         'accountConnectionLabel',
+        'advancedWarmUpAdd',
+        'advancedWarmUpRemove',
         'closeAdvanced',
         'closeDiagnostics',
         'dashboardActionsLabel',
@@ -808,6 +816,12 @@ describe('packed plugin', () => {
         'authTimedOut',
         'advancedSaveFailed',
         'advancedPollingInvalid',
+        // Read from JS, keyed by the SDK's own event name; an event without one falls back to a derived label.
+        'advancedWarmUpEvent_doorbellPress',
+        'advancedWarmUpEvent_motion',
+        'advancedWarmUpEvent_packageDelivered',
+        'advancedWarmUpEvent_personDetected',
+        'advancedWarmUpEvent_petDetection',
         'captchaLabel',
         'twoFactorLabel',
         'categoryClean',

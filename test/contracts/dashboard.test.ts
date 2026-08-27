@@ -78,7 +78,11 @@ describe('snapshot-driven dashboard', () => {
     await expect(
       readDashboard({ read: async () => record({ state: 'owner-conflict', status: 'owner-conflict' }) }, now),
     ).resolves.toMatchObject({ state: 'owner-conflict' });
-    await expect(readDashboard({ read: async () => null }, now)).resolves.toEqual({ state: 'missing', devices: [] });
+    await expect(readDashboard({ read: async () => null }, now)).resolves.toEqual({
+      state: 'missing',
+      devices: [],
+      warmUpCandidates: [],
+    });
     await expect(
       readDashboard({ read: async () => record({ updatedAt: '2026-08-13T11:57:00.000Z' }) }, now),
     ).resolves.toMatchObject({ state: 'stale' });

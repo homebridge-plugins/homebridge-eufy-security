@@ -241,6 +241,24 @@
           <input type="number" min="0" step="1" data-advanced-polling />
           <small data-i18n="advancedPollingHelp"></small>
         </label>
+        <div class="advanced-field">
+          <span class="advanced-field-label" data-i18n="advancedWarmUpLabel"></span>
+          <div class="warm-up-transfer">
+            <div class="warm-up-column">
+              <p id="warm-up-available-title" data-i18n="advancedWarmUpAvailable"></p>
+              <ul data-warm-up-available aria-labelledby="warm-up-available-title"></ul>
+            </div>
+            <div class="warm-up-controls">
+              <button type="button" data-warm-up-add data-i18n-aria-label="advancedWarmUpAdd">→</button>
+              <button type="button" data-warm-up-remove data-i18n-aria-label="advancedWarmUpRemove">←</button>
+            </div>
+            <div class="warm-up-column">
+              <p id="warm-up-chosen-title" data-i18n="advancedWarmUpChosen"></p>
+              <ul data-warm-up-chosen aria-labelledby="warm-up-chosen-title"></ul>
+            </div>
+          </div>
+          <small data-i18n="advancedWarmUpHelp"></small>
+        </div>
         <label>
           <span data-i18n="advancedFfmpegLabel"></span>
           <input type="text" data-advanced-ffmpeg />
