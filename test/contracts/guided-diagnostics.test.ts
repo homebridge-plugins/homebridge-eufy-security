@@ -188,10 +188,16 @@ describe('guided diagnostics session', () => {
         event: 'issue-observed',
       });
       expect(JSON.stringify(records)).not.toMatch(/serial|device|account|credential|answer|configuration|url/i);
+      expect(
+        records.length,
+        'the cap is in bytes, so the proof is that appending past it dropped the oldest records',
+      ).toBeLessThan(1_001);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
+    // A byte cap can only be proven by crossing it, which is a thousand real appends: the cost is the test's
+    // subject, not overhead, and a 5s default made it fail on a slower runner at 5005ms.
+  }, 30_000);
 
   it('bounds pending UI events and keeps every accepted record as valid JSONL', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
