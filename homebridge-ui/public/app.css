@@ -1484,7 +1484,10 @@ button:disabled {
   list-style: none;
   margin: 0;
   padding: 4px;
+  /* Four rows, then scroll: the list is long enough that showing all of it pushes the help text off-screen. */
   min-height: 132px;
+  max-height: 168px;
+  overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--panel);

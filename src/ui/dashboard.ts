@@ -1,6 +1,8 @@
 import type { DeviceManifest } from '@mega-yfue/eufy-sdk';
 
 import { describeHomeKitRepresentation } from '../homekit/representation.js';
+import { MOTION_EVENT_REQUIREMENTS } from '../homekit/adapters/motion.js';
+import { DOORBELL_PRESS_EVENT } from '../homekit/adapters/doorbell.js';
 import type { RuntimeTrackerRecord } from '../runtime/tracker.js';
 
 const DASHBOARD_FRESH_THRESHOLD_MS = 90_000;
@@ -132,9 +134,15 @@ export async function readDashboard(
   const age = now() - updatedAt;
   const devices =
     record.snapshot?.devices.map((manifest) => projectDevice(manifest, representationPreferences[manifest.sn])) ?? [];
+  const mediaTriggering = new Set<string>([
+    ...MOTION_EVENT_REQUIREMENTS.map(({ eventName }) => eventName),
+    DOORBELL_PRESS_EVENT,
+  ]);
   const warmUpCandidates = [
     ...new Set(
-      (record.snapshot?.devices ?? []).flatMap((manifest) => manifest.details.flatMap(({ events }) => events)),
+      (record.snapshot?.devices ?? [])
+        .flatMap((manifest) => manifest.details.flatMap(({ events }) => events))
+        .filter((event) => mediaTriggering.has(event)),
     ),
   ].sort();
   if (!Number.isFinite(updatedAt) || age < -5_000 || age > DASHBOARD_FRESH_THRESHOLD_MS) {

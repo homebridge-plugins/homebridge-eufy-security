@@ -12,6 +12,9 @@ const DOORBELL_PRESS_REQUIREMENT = {
   kind: 'event',
 } as const;
 
+/** The event name a press arrives under, named once so a consumer does not restate it. */
+export const DOORBELL_PRESS_EVENT = 'doorbellPress';
+
 /** Whether a device reports the physical press event this adapter admits. */
 export function hasAdmittedDoorbellPress(evidence: AdapterAttachmentContext['evidence']): boolean {
   return evidence.has(DOORBELL_PRESS_REQUIREMENT.id);

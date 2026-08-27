@@ -127,4 +127,39 @@ describe('snapshot-driven dashboard', () => {
       preferences: ['represented'],
     });
   });
+
+  it('offers only the events HomeKit answers by asking for media', async () => {
+    const camera = manifest('camera', 'motion');
+    camera.details = [
+      { ...camera.details[0]!, capability: 'motion', events: ['motion', 'vehicleDetected', 'cryingDetected'] },
+      { ...camera.details[0]!, capability: 'doorbell', events: ['doorbellPress', 'petDetection'] },
+      { ...camera.details[0]!, capability: 'person_detection', events: ['personDetected', 'strangerDetected'] },
+      { ...camera.details[0]!, capability: 'battery', events: ['batteryLevel', 'batteryAlert'] },
+      { ...camera.details[0]!, capability: 'arming', events: ['alarm', 'armingMode'] },
+      { ...camera.details[0]!, capability: 'contact', events: ['contactState'] },
+    ];
+
+    const snapshot = await readDashboard({ read: async () => record({ snapshot: { devices: [camera] } }) }, () =>
+      Date.parse('2026-08-13T12:00:05.000Z'),
+    );
+
+    expect(
+      snapshot.warmUpCandidates,
+      'a battery level, an arming change or a contact opening is not followed by a snapshot, so warming a connection for it only spends battery',
+    ).toEqual([
+      'cryingDetected',
+      'doorbellPress',
+      'motion',
+      'personDetected',
+      'petDetection',
+      'strangerDetected',
+      'vehicleDetected',
+    ]);
+  });
+
+  it('offers nothing for a device that reports no media-triggering event', async () => {
+    const snapshot = await readDashboard({ read: async () => record() }, () => Date.parse('2026-08-13T12:00:05.000Z'));
+
+    expect(snapshot.warmUpCandidates).toEqual([]);
+  });
 });
