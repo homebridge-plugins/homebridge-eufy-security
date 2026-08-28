@@ -13,6 +13,14 @@ import type {
 } from './contracts.js';
 
 const LIVE_REFRESH_INTERVAL_MS = 120_000;
+/**
+ * How much later than the interval a refresh may fall due, drawn independently per camera per refresh.
+ *
+ * The spread only ever delays a refresh, because the interval is a floor on what this policy is allowed to
+ * cost rather than a target. Half the interval is enough to separate the cameras of one household within a
+ * few rounds, and it can make a retained image only this much staler than the interval already allows.
+ */
+const LIVE_REFRESH_SPREAD_MS = 60_000;
 
 /** The largest image this plugin will accept or retain, which keeps one inside the Homebridge backup limit. */
 export const MAXIMUM_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -140,13 +148,14 @@ export interface LastSuccessfulImages {
 /** Applies externally distinct stored-only, fresh-live, and retained-image acquisition policies. */
 export class SnapshotAcquisition implements SnapshotMediaAdapter {
   private readonly pendingLive = new WeakMap<object, Promise<Buffer>>();
-  private readonly liveRefreshedAtMs = new Map<string, number>();
+  private readonly liveRefreshDueAtMs = new Map<string, number>();
   private readonly retentionGenerations = new Map<string, number>();
   private readonly failedLive = new Map<string, SnapshotFailure>();
 
   constructor(
     private readonly images?: LastSuccessfulImages,
     private readonly packaged: (name: PackagedImage) => Promise<Buffer | undefined> = packagedImage,
+    private readonly random: () => number = Math.random,
   ) {}
 
   /**
@@ -373,7 +382,11 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
   }
 
   /**
-   * Refresh acquires live imagery only on request, at most once every two minutes, and never polls.
+   * Refresh acquires live imagery only on request, no more than once per spread interval, and never polls.
+   *
+   * The next due time is committed when a refresh starts rather than derived when a request is decided, so
+   * the spread each camera drew holds however often that camera is asked about. Deriving it per request would
+   * take the shortest of many draws and return the busiest cameras to a shared clock.
    *
    * A refresh that fails while the camera still has nothing retained explains the placeholder that camera
    * is showing, so it is reported through the request that started it. A camera whose retained image
@@ -384,8 +397,8 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     source: SnapshotMediaSource,
     presentation: SnapshotPresentation,
   ): void {
-    const previous = this.liveRefreshedAtMs.get(scope.serial);
-    if (previous !== undefined && Date.now() - previous < LIVE_REFRESH_INTERVAL_MS) {
+    const dueAt = this.liveRefreshDueAtMs.get(scope.serial);
+    if (dueAt !== undefined && Date.now() < dueAt) {
       return;
     }
     if (this.pendingLive.has(scope.identity)) {
@@ -395,7 +408,10 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     if (!refresh) {
       return;
     }
-    this.liveRefreshedAtMs.set(scope.serial, Date.now());
+    this.liveRefreshDueAtMs.set(
+      scope.serial,
+      Date.now() + LIVE_REFRESH_INTERVAL_MS + this.random() * LIVE_REFRESH_SPREAD_MS,
+    );
     refresh.catch(async (error: unknown) => {
       if (!(await this.images?.read(scope.serial))) {
         presentation.onUnavailable?.(unansweredBy(error));
