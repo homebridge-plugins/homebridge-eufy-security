@@ -1,4 +1,4 @@
-import type { AnyDeviceEvent, Device, DeviceManifest } from '@mega-yfue/eufy-sdk';
+import { LockPushEvent, type AnyDeviceEvent, type Device, type DeviceManifest } from '@mega-yfue/eufy-sdk';
 import {
   Accessory,
   AudioStreamingCodecType,
@@ -770,9 +770,16 @@ describe('HomeKit registry reconciliation', () => {
     const accessory = recording.registerPlatformAccessories.mock.calls[0]?.[0][0] as PlatformAccessory;
     const service = accessory.getServiceById(Service.LockMechanism, 'lock.mechanism')!;
     expect(service).toBeDefined();
-    await expect(service.getCharacteristic(Characteristic.LockCurrentState).handleGetRequest()).resolves.toBe(
-      Characteristic.LockCurrentState.UNKNOWN,
-    );
+    const current = service.getCharacteristic(Characteristic.LockCurrentState);
+    await expect(current.handleGetRequest()).resolves.toBe(Characteristic.LockCurrentState.UNKNOWN);
+
+    source.publishEvent({ eventName: 'lockState', deviceSn: serial, eventType: LockPushEvent.KEYPAD_LOCK });
+    expect(
+      current.value,
+      'the state follows the announcement the SDK pushes, through the same routing every other event takes',
+    ).toBe(Characteristic.LockCurrentState.SECURED);
+    source.publishEvent({ eventName: 'lockState', deviceSn: serial, eventType: LockPushEvent.MANUAL_UNLOCK });
+    expect(current.value).toBe(Characteristic.LockCurrentState.UNSECURED);
 
     for (const [suffix, model] of [
       ['garage-family', 'T85D0'],

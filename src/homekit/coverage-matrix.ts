@@ -65,7 +65,6 @@ const BLOCKED = new Set([
   'co.coDetected.read',
   'lock.locked.read',
   'lock.locked.persistent-operation',
-  'lock.lockState.event',
   'keypad.batteryLow.read',
   'keypad.charging.read',
   'storage.sdCard.read',

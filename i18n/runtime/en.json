@@ -69,6 +69,7 @@
   "log.homekit.recognizedNotRepresented": "Some recognized devices cannot be represented in HomeKit",
   "log.homekit.sirenCapabilityUnavailable": "Siren information is unavailable",
   "log.homekit.unsupportedArmingMode": "A security system reported a mode Apple Home cannot represent",
+  "log.homekit.unusableLockAnnouncement": "A lock reported something this plugin cannot read, so its state is shown as unknown",
   "log.notice.eventSubscriberFailed": "A device event consumer failed; review Homebridge Eufy health in the dashboard.",
   "log.notice.ownershipAcquisitionFailed": "Account ownership could not be acquired; restart Homebridge before retrying.",
   "log.notice.ownershipReleaseFailed": "Account ownership release failed; restart Homebridge before retrying.",

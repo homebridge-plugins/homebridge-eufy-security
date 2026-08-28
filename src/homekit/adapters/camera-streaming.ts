@@ -1134,8 +1134,6 @@ function attachment(
   releaseOperations: () => void,
 ): AttachedAdapter {
   const presentation = operatingModePresentation(context, controller, controls);
-  /** The flat property name this device announces its power under, as its own manifest pairs it. */
-  const announcedEnabledProperty = context.evidence.get(CAMERA_ENABLED_READ.id)?.property;
   return {
     /**
      * Follows an announced enablement change: a session watching a camera which just went off is ended at
@@ -1143,7 +1141,7 @@ function attachment(
      * decision answered.
      */
     event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
-      const trace = enablementAnnouncement(event, announcedEnabledProperty, presentation.observe);
+      const trace = enablementAnnouncement(context, event, presentation.observe);
       if (trace === undefined) {
         return undefined;
       }

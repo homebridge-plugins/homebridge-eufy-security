@@ -23,26 +23,33 @@ const OPERATION_TIMEOUT = Symbol('camera-control-operation-timeout');
 /** The identity-free trace one observed enablement change records, whichever bundle records it. */
 export const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
 
+/** The row whose flat property name the generic enablement announcement is matched against. */
+const CAMERA_ENABLED_READ_ROW = 'camera.enabled.read';
+
 /**
  * The trace one enablement announcement records, or nothing for an event that is not one.
  *
  * Both camera bundles answer the same two announcements and must agree on what they are and how they are
  * recorded; what each does about it differs — one ends a session watching a camera that just went off, the
  * other keeps its switch honest — so the observation is theirs to determine and only the envelope is shared.
+ * The property pairing is resolved here for the same reason: it is the same join on the same row, and a copy
+ * beside either bundle would drift.
  *
- * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued. The other announcement is the
- * SDK's generic property announcement, which is how a change this plugin did NOT make is learned — the
- * vendor app, or a physical switch. That one names the property rather than the capability accessor, and no
- * wire id travels with it, so `announcedProperty` is the pairing the device's own manifest states for this
- * read. A device whose manifest names no property for it is left unfollowed rather than matched on the
- * accessor, because an accessor equal to some other capability's property name would end a session over a
- * value that is not this camera's power.
+ * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued, and is recorded as `write`. The
+ * other is the SDK's generic property announcement, which is how a change this plugin did NOT make is learned
+ * — the vendor app, or a physical switch — and is recorded as `poll`. That announcement names the property in
+ * the device's flat namespace rather than the capability accessor this row is keyed on, and no wire id travels
+ * with it, so the pairing the device's own manifest states is the only sound join. A device whose manifest
+ * names no property for the read is left unfollowed rather than matched on the accessor, because an accessor
+ * equal to some other capability's property name would end a session over a value that is not this camera's
+ * power.
  */
 export function enablementAnnouncement(
+  context: Pick<AdapterAttachmentContext, 'evidence'>,
   event: AnyDeviceEvent,
-  announcedProperty: string | undefined,
   observe: () => 'valid' | 'missing' | 'malformed',
 ): { event: string; observation: 'valid' | 'missing' | 'malformed'; announcedBy: 'write' | 'poll' } | undefined {
+  const announcedProperty = context.evidence.get(CAMERA_ENABLED_READ_ROW)?.property;
   const announcedBy =
     event.eventName === 'cameraEnabledChanged'
       ? 'write'

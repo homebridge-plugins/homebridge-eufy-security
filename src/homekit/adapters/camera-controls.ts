@@ -98,19 +98,21 @@ const CAMERA_CONTROL_REQUIREMENTS = [...CAMERA_CONTROL_ROWS, CAMERA_ENABLED_WRIT
 type CameraControlRequirement = (typeof CAMERA_CONTROL_REQUIREMENTS)[number];
 
 /**
- * What the camera's power reading owes HomeKit, beyond answering a read.
+ * What the camera's power reading owes HomeKit beyond answering a read, and who proves it.
  *
  * Stated on the read rather than on an event row of its own because the SDK announces this member moving
  * through its one generic property announcement, which is not a capability event and so has no row in the
- * member surface: following it is part of how this read is presented, not a second member. Both camera
- * bundles follow it — one keeps this switch honest, the other ends a session watching a camera that just
- * went off — so the verification for both is gathered here, on the row that owns the observation.
+ * member surface: following it is part of how this read is presented, not a second member. Both camera bundles
+ * follow it — this one keeps its switch honest, the streaming bundle ends a session watching a camera that just
+ * went off — so the row names both, since a member two bundles present from cannot be evidenced by one.
  */
 const CAMERA_ENABLED_READ_COVERAGE = {
   hapFit:
-    'The enablement observation is answered on demand and pushed when the SDK announces the property moved, so a camera switched off in the vendor app or by a physical switch is shown as off rather than left showing the old state; the camera streaming bundle follows the same announcement to end a session watching a camera that just went off, and to fall back to a supervision read where nothing announced the change; it is deliberately published as no HomeKit state on the operating mode service, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
+    'The enablement observation is answered on demand and pushed when the SDK announces the property moved, so a camera switched off in the vendor app or by a physical switch is shown as off rather than left showing the old state; the camera streaming bundle follows the same announcement to end a session watching a camera that just went off, and falls back to a supervision read where nothing announced the change; it is deliberately published as no HomeKit state on the operating mode service, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
+  identityEffect:
+    "Presented on the switch under the stable semantic key camera.enabled, and for session lifetime on the recording controller's own operating mode service where HomeKit Secure Video created one, otherwise one service under the stable semantic key camera.operating-mode, so an accessory carries exactly one",
   diagnostics:
-    'An absent, non-boolean, faulting, or SDK-declined enablement reading withdraws no camera and refuses no session; each announced change records one identity-free trace naming whether the observation answered and whether a write or a poll announced it',
+    'An absent, non-boolean, faulting, or SDK-declined enablement reading withdraws no camera and refuses no session; each announced change records one identity-free trace naming whether the observation answered and whether a write or the generic announcement carried it',
   verification: [
     {
       file: 'test/contracts/camera-controls-adapter.test.ts',
@@ -144,6 +146,14 @@ const CAMERA_ENABLED_READ_COVERAGE = {
       file: 'test/contracts/camera-streaming-adapter.test.ts',
       behavior: 'withdraws a published disabled state when a reconciliation leaves no observation to act on',
     },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'presents on an operating mode service the accessory restored from a run that configured recording',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'withdraws a stale operating mode service before the recording controller attaches its own',
+    },
   ],
 } as const;
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
@@ -172,28 +182,40 @@ export interface CameraControlsSdkDevice {
   audio?: () => AudioActions | undefined;
 }
 
+/** The shared policy every camera-control row states, which the enablement read then specialises. */
+const CAMERA_CONTROL_COVERAGE_DEFAULTS = {
+  hapFit: 'Official camera, light, microphone, and speaker services expose only matching SDK semantics',
+  identityEffect: 'Primary-purpose camera controls use stable service-specific semantic keys',
+  diagnostics: 'Missing or malformed typed members fail closed without shape-driven fallback mappings',
+  verification: [
+    {
+      file: 'test/contracts/camera-controls-adapter.test.ts',
+      behavior: 'keeps the physical camera light distinct from the enabled state and from mute',
+    },
+    {
+      file: 'test/contracts/homekit-reconciler.test.ts',
+      behavior: 'admits camera controls only from exact enabled-member evidence',
+    },
+  ],
+} as const;
+
 /** Complete HomeKit policy for the independent controls attached to an evidenced camera. */
 export const CAMERA_CONTROLS_ADAPTER = {
   key: CAMERA_CONTROLS_ADAPTER_KEY,
   role: 'primary-purpose',
   requires: [CAMERA_ENABLED_READ],
-  coverage: CAMERA_CONTROL_ROWS.map(({ id }) => ({
-    id,
-    hapFit: 'Official camera, light, microphone, and speaker services expose only matching SDK semantics',
-    identityEffect: 'Primary-purpose camera controls use stable service-specific semantic keys',
-    diagnostics: 'Missing or malformed typed members fail closed without shape-driven fallback mappings',
-    verification: [
-      {
-        file: 'test/contracts/camera-controls-adapter.test.ts',
-        behavior: 'keeps the physical camera light distinct from the enabled state and from mute',
-      },
-      {
-        file: 'test/contracts/homekit-reconciler.test.ts',
-        behavior: 'admits camera controls only from exact enabled-member evidence',
-      },
-    ],
-    ...(id === CAMERA_ENABLED_READ.id ? CAMERA_ENABLED_READ_COVERAGE : {}),
-  })),
+  coverage: CAMERA_CONTROL_ROWS.map(({ id }) =>
+    id === CAMERA_ENABLED_READ.id
+      ? {
+          id,
+          ...CAMERA_ENABLED_READ_COVERAGE,
+          verification: [
+            ...CAMERA_CONTROL_COVERAGE_DEFAULTS.verification,
+            ...CAMERA_ENABLED_READ_COVERAGE.verification,
+          ],
+        }
+      : { id, ...CAMERA_CONTROL_COVERAGE_DEFAULTS },
+  ),
   attach: attachCameraControls,
 } as const satisfies HomeKitAdapter;
 
@@ -270,8 +292,6 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
   );
   const enabledPower = enabledService.getCharacteristic(hap.Characteristic.On);
   const readEnabled = (): boolean => readBoolean('camera', 'enabled', () => camera.enabled);
-  /** The flat property name this device announces its power under, as its own manifest pairs it. */
-  const announcedEnabledProperty = context.evidence.get(CAMERA_ENABLED_READ.id)?.property;
   enabledPower.onGet(readEnabled);
   const previousState = CAMERA_CONTROL_STATES.get(enabledService);
   const state: DeviceOperationState = {
@@ -621,7 +641,7 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
      * guess is not.
      */
     event(event): AdapterEventTrace | undefined {
-      return enablementAnnouncement(event, announcedEnabledProperty, () => {
+      return enablementAnnouncement(context, event, () => {
         try {
           const reading = readEnabled();
           if (enabledPower.value !== reading) {

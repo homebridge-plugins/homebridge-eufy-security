@@ -1452,6 +1452,7 @@ const MEMBERS = new Set([
   'snapshotLive',
   'snapshotStored',
   'speaker',
+  'state',
   'statusLed',
   'stop',
   'talkback',
@@ -1524,6 +1525,7 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'battery.status': new Set(['battery-alert', 'battery-level']),
   'contact.sensor': new Set(['contact-state']),
   'doorbell.press': new Set(['doorbell-press']),
+  'lock.mechanism': new Set(['lock-state']),
   'motion.sensor': new Set(['motion-detection']),
   'arming.security-system': new Set(['arming-mode-changed', 'security-system-alarm']),
   'smart-light.lightbulb': new Set(['smart-light-state']),
@@ -1724,6 +1726,10 @@ const HOMEKIT_CONDITIONS = {
   },
   'lock-reconciliation-expired': {
     summaryKey: 'log.homekit.lockReconciliationExpired',
+    actionKey: 'log.action.checkPhysicalLock',
+  },
+  'unusable-lock-announcement': {
+    summaryKey: 'log.homekit.unusableLockAnnouncement',
     actionKey: 'log.action.checkPhysicalLock',
   },
   'camera-live-session-failed': {

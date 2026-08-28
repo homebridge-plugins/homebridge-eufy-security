@@ -1,8 +1,23 @@
-import { CapabilityNotSupportedError, type LockActions } from '@mega-yfue/eufy-sdk';
+import { CapabilityNotSupportedError, LockPushEvent, type AnyDeviceEvent, type LockActions } from '@mega-yfue/eufy-sdk';
 
-import type { AdapterAttachmentContext, AdapterDiagnostic, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
+import type {
+  AdapterAttachmentContext,
+  AdapterDiagnostic,
+  AdapterEventTrace,
+  AttachedAdapter,
+  HomeKitAdapter,
+} from '../adapter.js';
 
 export const LOCK_ADAPTER_KEY = 'lock.mechanism';
+
+/**
+ * The announcement this adapter presents the lock's physical state from.
+ *
+ * The lock holds no state param worth reading — the SDK's `locked` member sits on a placeholder id with
+ * `guessed` provenance and is normally not even installed — so this event is the only evidence of what the
+ * bolt did. It is required before any state is presented, so the code cannot claim a state it never receives.
+ */
+export const LOCK_STATE_EVENT_ROW = 'lock.lockState.event';
 
 const LOCK_ACTION = {
   id: 'lock.lock.momentary-action',
@@ -15,6 +30,78 @@ const UNLOCK_ACTION = {
 const OPERATION_DEADLINE_MS = 8_000;
 const RECONCILIATION_WINDOW_MS = 60_000;
 
+/** What one announcement says the bolt did, where it says anything about the bolt at all. */
+type AnnouncedLockState = 'secured' | 'unsecured' | 'jammed';
+
+/**
+ * The HomeKit meaning of each lock push code the SDK names, and only those.
+ *
+ * The SDK collapses the whole `LockPushEvent` range into one `lockState` event carrying the raw code, so the
+ * code is the only thing the announcement says. Translating a named code into a characteristic value is this
+ * plugin's own concern — the SDK states what happened, HomeKit decides how a lock is presented — and the
+ * names are the evidence being read, not the numbers: `LockPushEvent` states its provenance as cross-checked
+ * against the v6 app, so `MANUAL_LOCK` means the deadbolt was thrown by hand.
+ *
+ * `MECHANICAL_ANOMALY`, `LOCK_MECHANICAL_ANOMALY` and `DOOR_STATE_ERROR` are the jam: the lock reporting that
+ * its own mechanism did not do what it was told, which HomeKit has a state for and which must never be
+ * rounded to locked.
+ *
+ * Not verified against a physical lock: this plugin's maintainers have none. That is why every code is
+ * carried by name and an unnamed one presents no state at all rather than a plausible meaning.
+ */
+const ANNOUNCED_LOCK_STATES: ReadonlyMap<number, AnnouncedLockState> = new Map([
+  [LockPushEvent.MANUAL_LOCK, 'secured'],
+  [LockPushEvent.KEYPAD_LOCK, 'secured'],
+  [LockPushEvent.APP_LOCK, 'secured'],
+  [LockPushEvent.AUTO_LOCK, 'secured'],
+  [LockPushEvent.PW_LOCK, 'secured'],
+  [LockPushEvent.FINGER_LOCK, 'secured'],
+  [LockPushEvent.TEMPORARY_PW_LOCK, 'secured'],
+  [LockPushEvent.MANUAL_UNLOCK, 'unsecured'],
+  [LockPushEvent.AUTO_UNLOCK, 'unsecured'],
+  [LockPushEvent.PW_UNLOCK, 'unsecured'],
+  [LockPushEvent.FINGERPRINT_UNLOCK, 'unsecured'],
+  [LockPushEvent.APP_UNLOCK, 'unsecured'],
+  [LockPushEvent.TEMPORARY_PW_UNLOCK, 'unsecured'],
+  [LockPushEvent.MECHANICAL_ANOMALY, 'jammed'],
+  [LockPushEvent.LOCK_MECHANICAL_ANOMALY, 'jammed'],
+  [LockPushEvent.DOOR_STATE_ERROR, 'jammed'],
+]);
+
+/**
+ * The lock push codes this plugin has read and deliberately presents nothing for.
+ *
+ * A lock reports its battery, its radio, a tamper and its firmware through the same one event, and a lock that
+ * has gone offline or been tampered with has not thereby become unlocked, so these leave the presented state
+ * exactly as it was.
+ *
+ * Listed rather than inferred from the absence of a state mapping, so that the two sets together are exhaustive
+ * over `LockPushEvent` and a code a later SDK adds is a code this build has not read. A contract test holds
+ * that exhaustiveness, which is what makes an unlisted code a loud failure here instead of a silent decision
+ * to keep showing a state nobody checked.
+ */
+const NON_STATE_LOCK_CODES: ReadonlySet<number> = new Set([
+  LockPushEvent.LOW_POWER,
+  LockPushEvent.VERY_LOW_POWER,
+  LockPushEvent.MULTIPLE_ERRORS,
+  LockPushEvent.LOCK_OFFLINE,
+  LockPushEvent.VIOLENT_DESTRUCTION,
+  LockPushEvent.DOOR_OPEN_LEFT,
+  LockPushEvent.DOOR_TAMPER,
+  LockPushEvent.STATUS_CHANGE,
+  LockPushEvent.OTA_STATUS,
+  LockPushEvent.LOCK_ONLINE,
+]);
+
+/** Every lock push code this build has read, for the contract test that holds the two sets exhaustive. */
+export const CLASSIFIED_LOCK_CODES: ReadonlySet<number> = new Set([
+  ...ANNOUNCED_LOCK_STATES.keys(),
+  ...NON_STATE_LOCK_CODES,
+]);
+
+/** The identity-free trace one lock announcement records. */
+const LOCK_STATE_TRACE = 'lock-state';
+
 interface LockState {
   owner: symbol;
   actions: LockActions;
@@ -24,6 +111,10 @@ interface LockState {
     reason: LockDiagnostic['reason'],
   ) => void;
   writes?: LockTargetWrites;
+  /** The last state an announcement established, retained across the reconciliation that replaces a handle. */
+  announced?: AnnouncedLockState;
+  /** The target that same announcement implies, which a jam does not move. */
+  announcedTarget?: 'secured' | 'unsecured';
 }
 
 const LOCK_STATES = new WeakMap<object, LockState>();
@@ -65,6 +156,22 @@ class LockTargetWrites {
 
   read(): number | undefined {
     return this.projection;
+  }
+
+  /**
+   * Settles the window a write opened, because the device has since said what it actually did.
+   *
+   * A successful command acknowledges delivery and nothing more, so this projection exists only to answer
+   * HomeKit until the lock reports. Once it has, the projection is not merely confirmed but superseded — the
+   * announcement is authoritative even when it contradicts what was asked for, which is what happens when
+   * someone turns the key the other way — and there is nothing left unreconciled to warn about.
+   */
+  observed(): void {
+    if (this.reconciliation) {
+      clearTimeout(this.reconciliation);
+      this.reconciliation = undefined;
+    }
+    this.projection = undefined;
   }
 
   request(value: number): Promise<void> {
@@ -137,11 +244,13 @@ class LockTargetWrites {
       this.settle(request, 'resolve');
     }
     this.diagnose('lock-operation-failed', false, 'recovered');
-    this.reconciliation = setTimeout(() => {
-      this.reconciliation = undefined;
-      this.projection = undefined;
-      this.diagnose('lock-reconciliation-expired', true, 'expired');
-    }, RECONCILIATION_WINDOW_MS);
+    if (this.projection !== undefined) {
+      this.reconciliation = setTimeout(() => {
+        this.reconciliation = undefined;
+        this.projection = undefined;
+        this.diagnose('lock-reconciliation-expired', true, 'expired');
+      }, RECONCILIATION_WINDOW_MS);
+    }
     this.active = undefined;
     this.startQueued();
   }
@@ -232,30 +341,82 @@ export interface LockSdkDevice {
 
 /** Structured conditions emitted by the evidence-bounded lock adapter. */
 export interface LockDiagnostic extends AdapterDiagnostic {
-  code: 'lock-capability-unavailable' | 'lock-operation-failed' | 'lock-reconciliation-expired';
+  code:
+    | 'lock-capability-unavailable'
+    | 'lock-operation-failed'
+    | 'lock-reconciliation-expired'
+    | 'unusable-lock-announcement';
   capability: 'lock';
-  member: 'target';
+  member: 'target' | 'state';
   active: boolean;
   reason:
-    'missing' | 'sdk-fault' | 'operation-failure' | 'capability-not-supported' | 'timeout' | 'expired' | 'recovered';
+    | 'missing'
+    | 'malformed'
+    | 'missing-evidence'
+    | 'sdk-fault'
+    | 'operation-failure'
+    | 'capability-not-supported'
+    | 'timeout'
+    | 'expired'
+    | 'recovered';
 }
 
-const COVERAGE = [LOCK_ACTION, UNLOCK_ACTION].map(({ id }) => ({
-  id,
-  hapFit: 'Lock Mechanism exposes explicit secured and unsecured targets without fabricating current state',
-  identityEffect: 'Primary-purpose service uses stable semantic key lock.mechanism',
-  diagnostics: 'Fail closed for unavailable, failed, or unreconciled lock targets',
-  verification: [
-    {
-      file: 'test/contracts/lock-adapter.test.ts',
-      behavior: 'exposes lock and unlock targets while current remains unknown after command delivery',
-    },
-    {
-      file: 'test/contracts/homekit-reconciler.test.ts',
-      behavior: 'represents lock targets only for the exact evidenced T8531 boundary',
-    },
-  ],
-}));
+const COVERAGE = [
+  ...[LOCK_ACTION, UNLOCK_ACTION].map(({ id }) => ({
+    id,
+    hapFit: 'Lock Mechanism exposes explicit secured and unsecured targets, reconciled by a later announcement',
+    identityEffect: 'Primary-purpose service uses stable semantic key lock.mechanism',
+    diagnostics: 'Fail closed for unavailable, failed, or unreconciled lock targets',
+    verification: [
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'presents no lock state until the SDK announces one, and never from command delivery alone',
+      },
+      {
+        file: 'test/contracts/homekit-reconciler.test.ts',
+        behavior: 'represents lock targets only for the exact evidenced T8531 boundary',
+      },
+    ],
+  })),
+  {
+    id: LOCK_STATE_EVENT_ROW,
+    hapFit:
+      'Lock Mechanism LockCurrentState follows the pushed lockState announcement, translating only the lock push codes the SDK names: the lock codes to secured, the unlock codes to unsecured, and the mechanism faults to jammed; it is pushed rather than only answered, because HomeKit subscribes to notifications and otherwise reads only while the Home app is open',
+    identityEffect: 'Presents state on the same primary-purpose service under the stable semantic key lock.mechanism',
+    diagnostics:
+      'A code this build cannot name, an announcement carrying no code, and a lock whose manifest announces none each present no state rather than a guessed one, and say which under unusable-lock-announcement; a named code that carries no bolt state leaves the presented state untouched',
+    verification: [
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'follows the %s announcement to its HomeKit state',
+      },
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'reads every lock push code the SDK names, so a code it has not is a failure and not a guess',
+      },
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'pushes the announced state to HomeKit rather than only answering the next read',
+      },
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'withdraws the state it can no longer vouch for when %s arrives',
+      },
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'presents no state and says why for a lock whose manifest announces none',
+      },
+      {
+        file: 'test/contracts/lock-adapter.test.ts',
+        behavior: 'keeps the last requested target while presenting a jam',
+      },
+      {
+        file: 'test/contracts/homekit-reconciler.test.ts',
+        behavior: 'the state follows the announcement the SDK pushes',
+      },
+    ],
+  },
+];
 
 /** Complete HomeKit policy for the exact evidenced T8531 lock-control boundary. */
 export const LOCK_ADAPTER = {
@@ -267,7 +428,13 @@ export const LOCK_ADAPTER = {
   attach: attachLock,
 } as const satisfies HomeKitAdapter;
 
-/** Attaches target-only lock controls while physical state remains unknown without admitted evidence. */
+/**
+ * Attaches the lock's controls, and its physical state where the device announces one.
+ *
+ * The controls and the state are deliberately gated apart: a lock that reports no state announcement is still
+ * worth locking from HomeKit, so the two momentary actions admit the accessory and the announcement only
+ * decides whether a state is presented beside them.
+ */
 function attachLock(context: AdapterAttachmentContext): AttachedAdapter | undefined {
   const { accessory, hap } = context;
   const device = context.device as LockSdkDevice;
@@ -319,7 +486,39 @@ function attachLock(context: AdapterAttachmentContext): AttachedAdapter | undefi
 
   const current = service.getCharacteristic(hap.Characteristic.LockCurrentState);
   const target = service.getCharacteristic(hap.Characteristic.LockTargetState);
-  current.updateValue(hap.Characteristic.LockCurrentState.UNKNOWN);
+  const announces = context.evidence.has(LOCK_STATE_EVENT_ROW);
+  const diagnoseState = (active: boolean, reason: LockDiagnostic['reason']): void => {
+    context.diagnose({ code: 'unusable-lock-announcement', capability: 'lock', member: 'state', active, reason });
+    if (!active) {
+      context.observed('unusable-lock-announcement');
+    }
+  };
+  if (!announces) {
+    state.announced = undefined;
+    state.announcedTarget = undefined;
+    context.diagnose({
+      code: 'lock-capability-unavailable',
+      capability: 'lock',
+      member: 'state',
+      active: true,
+      reason: 'missing-evidence',
+    });
+  }
+
+  const CURRENT_STATE: Readonly<Record<AnnouncedLockState, number>> = {
+    secured: hap.Characteristic.LockCurrentState.SECURED,
+    unsecured: hap.Characteristic.LockCurrentState.UNSECURED,
+    jammed: hap.Characteristic.LockCurrentState.JAMMED,
+  };
+  const currentValue = (): number =>
+    state.announced === undefined ? hap.Characteristic.LockCurrentState.UNKNOWN : CURRENT_STATE[state.announced];
+  const targetValue = (): number | undefined =>
+    state.announcedTarget === undefined
+      ? undefined
+      : state.announcedTarget === 'secured'
+        ? hap.Characteristic.LockTargetState.SECURED
+        : hap.Characteristic.LockTargetState.UNSECURED;
+  current.updateValue(currentValue());
 
   state.diagnose = (
     code: 'lock-operation-failed' | 'lock-reconciliation-expired',
@@ -346,13 +545,21 @@ function attachLock(context: AdapterAttachmentContext): AttachedAdapter | undefi
     (code, active, reason) => state.diagnose(code, active, reason),
   );
 
-  current.onGet(() => hap.Characteristic.LockCurrentState.UNKNOWN);
+  current.onGet(currentValue);
+  /**
+   * Answers the target from the newest thing that established one: a write still in flight, else the last
+   * settled announcement.
+   *
+   * Unanswerable until one of those exists, which includes a jam announced before this plugin has seen either
+   * — HomeKit's target is what the lock was asked for, and nothing has asked. Left failing closed rather than
+   * defaulted, because a target invented here reads in the Home app as a state the user chose.
+   */
   target.onGet(() => {
-    const projection = state.writes!.read();
-    if (projection === undefined) {
+    const requested = state.writes!.read() ?? targetValue();
+    if (requested === undefined) {
       throw communicationFailure();
     }
-    return projection;
+    return requested;
   });
   target.onSet((value) => {
     if (
@@ -364,7 +571,80 @@ function attachLock(context: AdapterAttachmentContext): AttachedAdapter | undefi
     return state.writes!.request(value as number);
   });
 
+  /**
+   * Presents what one announcement established, pushing only what moved.
+   *
+   * Both characteristics are pushed because HomeKit is not told a value changed unless the accessory says so:
+   * a lock that answers reads and never notifies leaves the Home app showing what it last believed, which for
+   * a lock is a claim about whether the house is locked. The target follows a settled state as well as the
+   * current one, or the tile stays on "Locking…" after someone locks the door with a key.
+   */
+  const present = (announced: AnnouncedLockState): void => {
+    state.announced = announced;
+    if (announced !== 'jammed') {
+      state.announcedTarget = announced;
+    }
+    state.writes?.observed();
+    const nextCurrent = currentValue();
+    if (current.value !== nextCurrent) {
+      current.updateValue(nextCurrent);
+    }
+    const nextTarget = targetValue();
+    if (nextTarget !== undefined && target.value !== nextTarget) {
+      target.updateValue(nextTarget);
+    }
+  };
+
+  /**
+   * Withdraws a state this plugin can no longer vouch for.
+   *
+   * Something happened to the lock inside the announced range that this build has not read, so the last state
+   * is no longer a claim it can make: HomeKit is told the state is unknown rather than left showing a value
+   * that may now be wrong. The target is left alone — an unreadable announcement says nothing about what the
+   * lock was asked to do.
+   */
+  const withdraw = (reason: 'missing' | 'malformed'): void => {
+    state.announced = undefined;
+    if (current.value !== hap.Characteristic.LockCurrentState.UNKNOWN) {
+      current.updateValue(hap.Characteristic.LockCurrentState.UNKNOWN);
+    }
+    diagnoseState(true, reason);
+  };
+
   return {
+    /**
+     * Presents what one `lockState` announcement says about the bolt.
+     *
+     * `eventType` is read as `unknown` rather than as the number it is declared to be, because the SDK folds
+     * the raw push body into this payload: the declared type is what the event promises, not what every
+     * announcement will carry, and a lock is the wrong accessory on which to trust a shape.
+     *
+     * A code this build has read and deliberately presents nothing for — a battery warning, a tamper, a
+     * firmware update — is not this member reporting at all, so it records no trace and leaves the state
+     * alone. Anything else in the range is unread: the state is withdrawn rather than kept, because the
+     * announcement was about this lock and this build cannot say what it meant.
+     */
+    event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
+      if (event.eventName !== 'lockState' || !announces) {
+        return undefined;
+      }
+      const code: unknown = event.eventType;
+      if (code === undefined) {
+        withdraw('missing');
+        return { event: LOCK_STATE_TRACE, observation: 'missing' };
+      }
+      if (typeof code === 'number' && NON_STATE_LOCK_CODES.has(code)) {
+        return undefined;
+      }
+      const announced = typeof code === 'number' ? ANNOUNCED_LOCK_STATES.get(code) : undefined;
+      if (announced === undefined) {
+        withdraw('malformed');
+        return { event: LOCK_STATE_TRACE, observation: 'malformed' };
+      }
+      present(announced);
+      diagnoseState(false, 'recovered');
+      return { event: LOCK_STATE_TRACE, observation: 'valid' };
+    },
     detach(): void {
       if (LOCK_STATES.get(service)?.owner !== owner) {
         return;

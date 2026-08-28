@@ -57,10 +57,14 @@ export interface AdapterEventTrace {
   /**
    * What announced the change, where the adapter follows more than one announcement for the same state.
    *
-   * `write` is the SDK reflecting a write this plugin issued; `poll` is a cloud poll seeing the value move,
-   * which means something other than this plugin changed it. Both reach the same handler and produced the same
-   * record until now, so a support case could not tell "we did this" from "the user did this in the vendor app"
-   * — the first question anyone asks about a camera that turned itself off.
+   * `write` is the SDK reflecting a write this plugin issued; `poll` is the SDK's generic property
+   * announcement seeing the value move, which means something other than this plugin changed it. That
+   * announcement reaches the plugin on whichever inbound path saw the value — a cloud poll, a realtime
+   * report, or the read-through cache's own re-read — and the SDK deliberately does not distinguish them,
+   * because it cannot tell its own write's echo from a change made in the vendor app. Both reach the same
+   * handler and produced the same record until now, so a support case could not tell "we did this" from
+   * "the user did this in the vendor app" — the first question anyone asks about a camera that turned
+   * itself off.
    */
   announcedBy?: 'write' | 'poll';
 }
