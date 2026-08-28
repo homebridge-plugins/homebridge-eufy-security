@@ -1462,11 +1462,11 @@ const MEMBERS = new Set([
 ]);
 const REASONS = new Set([
   'adaptation-exited-before-output',
-  'at-capacity',
   'adaptation-exited-while-streaming',
   'adaptation-failed',
   'adaptation-spawn-failed',
   'adapter-missing',
+  'at-capacity',
   'capability-not-supported',
   'disabled',
   'disabled-mid-session',

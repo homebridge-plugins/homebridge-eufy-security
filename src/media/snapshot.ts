@@ -19,10 +19,10 @@ const LIVE_REFRESH_INTERVAL_MS = 120_000;
  * How much later than the interval a refresh may fall due, drawn independently per camera per refresh.
  *
  * The spread only ever delays a refresh, because the interval is a floor on what this policy is allowed to
- * cost rather than a target. Half the interval is enough to separate the cameras of one household within a
- * few rounds, and it can make a retained image only this much staler than the interval already allows.
+ * cost rather than a target. Half the interval separates the cameras of one household within a few rounds, and
+ * makes a retained image only that much staler than the interval already allows.
  */
-const LIVE_REFRESH_SPREAD_MS = 60_000;
+const LIVE_REFRESH_SPREAD_MS = LIVE_REFRESH_INTERVAL_MS / 2;
 
 /** The largest image this plugin will accept or retain, which keeps one inside the Homebridge backup limit. */
 export const MAXIMUM_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -141,13 +141,22 @@ function unansweredBy(error: unknown): SnapshotFailure {
 /**
  * The share held by work whose cost the declared ceiling has already admitted somewhere else.
  *
- * Two cases qualify, and both would be double-charged by a claim of their own. A request that joins an
+ * Exactly two cases qualify, and both would be charged twice by a claim of their own. A request that joins an
  * acquisition already in flight is answered by that acquisition's decoder rather than one of its own; a still
- * taken from a source a live session is already holding open adds a decode to a pull that session paid for. A
- * ceiling of one would otherwise refuse a camera a still while it was streaming, which is the case the two
- * sharing a warm source exists to serve.
+ * taken from a source a live session is holding open adds a decode to a pull that session already paid for. A
+ * ceiling of one would otherwise refuse a camera a still while it was streaming, which is the case sharing a
+ * warm source exists to serve.
  */
 const UNBILLED: MediaSessionClaim = { release: () => undefined };
+
+/**
+ * What an acquisition counts against when no ceiling was declared: nothing.
+ *
+ * Normalising the absent budget to one that admits everything keeps a single encoding of "no ceiling". Reading
+ * the absence at each decision instead would make one `undefined` mean both "nothing was declared" and "the
+ * host has no room", which are opposite answers.
+ */
+const UNBOUNDED_MEDIA: MediaSessionBudget = { claim: () => UNBILLED };
 
 /** The plugin-owned last successful image required by every snapshot acquisition policy. */
 export interface LastSuccessfulImages {
@@ -353,14 +362,14 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
   /**
    * One share of the declared ceiling for a still, or nothing when the host has no room for another.
    *
-   * A request joining an acquisition already in flight, and every request at all when no ceiling was declared,
-   * are admitted without one.
+   * A request joining an acquisition already in flight rides that acquisition's share, because it is answered
+   * by the same decoder.
    */
   private claimForLive(scope: SnapshotAcquisitionScope): MediaSessionClaim | undefined {
-    if (this.pendingLive.has(scope.identity) || !this.budget) {
+    if (this.pendingLive.has(scope.identity)) {
       return UNBILLED;
     }
-    return this.budget.claim();
+    return (this.budget ?? UNBOUNDED_MEDIA).claim();
   }
 
   private live(

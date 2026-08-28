@@ -2244,6 +2244,44 @@ describe('camera streaming bundle adapter', () => {
     expect(JSON.stringify(diagnose.mock.calls)).not.toContain(SNAPSHOT_SERIAL);
   });
 
+  it('charges one share for a session a controller prepares again under its own identifier', async () => {
+    const target = new Accessory(
+      'Synthetic re-prepared camera',
+      uuid.generate('synthetic-reprepared-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const sessions = [41000, 41002].map((videoPort) => ({
+      videoPort,
+      start: vi.fn(async () => undefined),
+      reconfigure: vi.fn(),
+      stop: vi.fn(),
+    }));
+    const prepare = vi.fn(async () => sessions[prepare.mock.calls.length - 1] as PreparedLiveMedia);
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      mediaBudget: new DeclaredMediaSessionBudget(1),
+      audioEnabled: false,
+      diagnose: vi.fn(),
+      observed: vi.fn(),
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    await callPrepare(controller.delegate, prepareRequest('repeated-session'));
+    await expect(
+      callPrepare(controller.delegate, prepareRequest('repeated-session')),
+      'one HomeKit session is one share of the host however often its endpoints are negotiated',
+    ).resolves.toMatchObject({ video: { port: 41002 } });
+    expect(sessions[0]!.stop, 'the superseded preparation is still torn down').toHaveBeenCalledOnce();
+  });
+
   it('refuses a live session while the admitted enabled observation says the camera is disabled', async () => {
     const target = new Accessory(
       'Synthetic disabled camera',

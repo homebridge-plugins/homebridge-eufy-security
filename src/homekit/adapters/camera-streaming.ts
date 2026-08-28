@@ -1209,8 +1209,9 @@ function snapshotUnavailable(active: boolean, member: 'snapshotStored' | 'snapsh
  * that had been turned off, the source accepted the start, delivered audio for the whole warm-up window and
  * reported the SDK's `audio-only` stage, which is the corroboration where a reading taken before the
  * session could have been stale. The caller decides that, because it holds the latch which decides whether
- * the same refusal has already been reported; the refusal condition itself is the one the admission gate
- * reports through, so a camera cannot have two writers for why live view is unavailable.
+ * the same refusal has already been reported; the enablement refusal condition itself is the one the admission
+ * gate reports through, so that condition cannot have two writers. A refusal for host capacity is a separate
+ * condition with a writer of its own, because the two are withdrawn by different events.
  */
 function liveSessionReporter(
   context: AdapterAttachmentContext,
@@ -1704,7 +1705,6 @@ function availabilityObservation(
 
 interface PendingSession {
   prepared: PreparedLiveMedia;
-  claim: MediaSessionClaim;
   videoSsrc: number;
   audioSsrc?: number;
   selection?: StartStreamRequest;
@@ -1724,6 +1724,15 @@ type LiveAdmissionRefusal = 'disabled' | 'disabled-mid-session' | 'disabled-no-v
 
 /** Why live view is unavailable for a camera the declared concurrent media ceiling had no room for. */
 type MediaCapacityRefusal = 'at-capacity';
+
+/**
+ * What an attachment given no budget counts against: nothing, because nothing was declared.
+ *
+ * Normalising the absent budget to one that admits everything keeps a single encoding of "no ceiling". Reading
+ * the absence at each decision instead would make one `undefined` mean both "nothing was declared" and "the
+ * host has no room", which are opposite answers.
+ */
+const UNBOUNDED_MEDIA: MediaSessionBudget = { claim: () => ({ release: () => undefined }) };
 
 /**
  * Why a snapshot request went unanswered: the acquisition the media policy names, or the snapshot
@@ -1756,6 +1765,15 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   /** Assigned once the accessory has a service to present on, which is only true after the controller is. */
   private readonly sessions = new Map<string, PendingSession>();
   private readonly prepareGenerations = new Map<string, symbol>();
+  /**
+   * The share of host capacity each HomeKit session holds, keyed by the identifier HomeKit gave it.
+   *
+   * One session is one share however often its endpoints are negotiated. A controller may answer
+   * `SetupEndpoints` again for a session it already has, and the replacement is only recorded once the new
+   * preparation succeeds, so a share held per prepared session would have that controller competing with
+   * itself and refuse it at a ceiling it is already inside.
+   */
+  private readonly claims = new Map<string, MediaSessionClaim>();
   private readonly snapshotScope: SnapshotAcquisitionScope;
   private acceptingSessions = true;
   private refused = false;
@@ -1835,57 +1853,73 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       callback(new Error('camera is disabled'));
       return;
     }
-    const claim = this.claimCapacity();
-    if (!claim) {
+    if (!this.claimCapacity(request.sessionID)) {
       callback(new Error('the declared concurrent media limit is reached'));
       return;
     }
     const generation = Symbol('camera-stream-prepare');
     this.prepareGenerations.set(request.sessionID, generation);
-    void this.prepare(request, claim).then(
+    void this.prepare(request).then(
       ({ response, session }) => {
         if (!this.acceptingSessions || this.prepareGenerations.get(request.sessionID) !== generation) {
           session.prepared.stop();
-          claim.release();
+          this.releaseUnheldClaim(request.sessionID);
           callback(new Error('live media preparation was cancelled'));
           return;
         }
-        this.release(request.sessionID);
+        const superseded = this.sessions.get(request.sessionID);
+        this.sessions.delete(request.sessionID);
+        this.prepareGenerations.delete(request.sessionID);
+        superseded?.prepared.stop();
         this.sessions.set(request.sessionID, session);
         this.admit();
-        this.admitCapacity();
+        this.withdrawCapacityRefusal();
         callback(undefined, response);
       },
       (error: unknown) => {
         if (this.prepareGenerations.get(request.sessionID) === generation) {
           this.prepareGenerations.delete(request.sessionID);
         }
-        claim.release();
+        this.releaseUnheldClaim(request.sessionID);
         callback(error instanceof Error ? error : new Error('failed to prepare live media'));
       },
     );
   }
 
   /**
-   * One share of the declared media ceiling for a session about to be prepared, or nothing when the host has
-   * no room, in which case one bounded reason is reported.
+   * Holds this session's share of the declared media ceiling, reporting one bounded reason where the host has
+   * no room for it.
    *
    * The share is taken before any await, so two cameras asked at once cannot both pass the same check. It is
-   * held for the whole prepared-session lifetime rather than only while media flows, because a prepared
-   * session holds a reserved port and HomeKit bounds it by its own connection; releasing it earlier would let
-   * a controller that prepares and waits sit outside the count it was admitted under.
+   * held for the whole session lifetime rather than only while media flows, because a prepared session holds a
+   * reserved port and HomeKit bounds it by its own connection; releasing it earlier would let a controller
+   * that prepares and waits sit outside the count it was admitted under.
    */
-  private claimCapacity(): MediaSessionClaim | undefined {
-    const claim = this.binding.budget ? this.binding.budget.claim() : { release: () => undefined };
+  private claimCapacity(sessionID: string): boolean {
+    if (this.claims.has(sessionID)) {
+      return true;
+    }
+    const claim = (this.binding.budget ?? UNBOUNDED_MEDIA).claim();
     if (!claim) {
       this.capacityRefused = true;
       this.binding.reportCapacity('at-capacity');
+      return false;
     }
-    return claim;
+    this.claims.set(sessionID, claim);
+    return true;
+  }
+
+  /** Gives back a share taken for a preparation that never became a session, and only then. */
+  private releaseUnheldClaim(sessionID: string): void {
+    if (this.sessions.has(sessionID)) {
+      return;
+    }
+    this.claims.get(sessionID)?.release();
+    this.claims.delete(sessionID);
   }
 
   /** Withdraws a latched capacity refusal once a session is admitted again, and only then. */
-  private admitCapacity(): void {
+  private withdrawCapacityRefusal(): void {
     if (!this.capacityRefused) {
       return;
     }
@@ -1893,7 +1927,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     this.binding.reportCapacity();
   }
 
-  private async prepare(request: PrepareStreamRequest, claim: MediaSessionClaim) {
+  private async prepare(request: PrepareStreamRequest) {
     const videoSsrc = this.hap.CameraController.generateSynchronisationSource();
     const audioSsrc = this.binding.audioEnabled ? this.hap.CameraController.generateSynchronisationSource() : undefined;
     let session: PendingSession | undefined;
@@ -1928,7 +1962,6 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     });
     session = {
       prepared,
-      claim,
       videoSsrc,
       ...(audioSsrc === undefined ? {} : { audioSsrc }),
       ...(this.binding.snapshotMedia ? { snapshotMedia: this.binding.snapshotMedia } : {}),
@@ -2033,6 +2066,10 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     for (const sessionID of [...this.sessions.keys()]) {
       this.release(sessionID);
     }
+    for (const claim of this.claims.values()) {
+      claim.release();
+    }
+    this.claims.clear();
     this.prepareGenerations.clear();
     this.unsupervise();
   }
@@ -2048,7 +2085,8 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     const session = this.sessions.get(sessionID);
     this.sessions.delete(sessionID);
     session?.prepared.stop();
-    session?.claim.release();
+    this.claims.get(sessionID)?.release();
+    this.claims.delete(sessionID);
     if (this.sessions.size === 0) {
       this.unsupervise();
     }
