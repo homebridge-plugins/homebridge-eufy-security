@@ -251,13 +251,19 @@ export class StagedAccountStores implements ActiveAccountStores {
   }
 }
 
-/** Owns bounded active and staging stores used by SDK owners before any runtime connection exists. */
+/**
+ * Owns bounded active and staging stores used by SDK owners before any runtime connection exists.
+ *
+ * `onAccountReplacement` is awaited, because it removes data bound to the account being replaced: reporting a
+ * replacement complete while that removal is still in flight would leave the previous account's images on disk
+ * for a restart to interrupt.
+ */
 export class AccountSessionPersistence {
   constructor(
     private readonly root: string,
     private readonly maxRecordBytes = DEFAULT_MAX_RECORD_BYTES,
     private readonly hooks?: AccountPersistenceHooks,
-    private readonly onAccountReplacement?: () => void,
+    private readonly onAccountReplacement?: () => void | Promise<void>,
   ) {
     if (!Number.isSafeInteger(maxRecordBytes) || maxRecordBytes <= 0 || maxRecordBytes > MAX_RECORD_BYTES) {
       throw new Error(`maxRecordBytes must be between 1 and ${MAX_RECORD_BYTES}`);
@@ -316,7 +322,7 @@ export class AccountSessionPersistence {
 
     if (previous && previous.account !== staging.account) {
       try {
-        this.onAccountReplacement?.();
+        await this.onAccountReplacement?.();
       } catch {}
     }
 

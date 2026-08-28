@@ -84,6 +84,23 @@ afterEach(async () => {
 });
 
 describe('atomic account replacement', () => {
+  it('does not publish a replacement before the previous account-bound cleanup has finished', async () => {
+    const root = await temporaryRoot();
+    let cleaned = false;
+    const persistence = new AccountSessionPersistence(root, undefined, undefined, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      cleaned = true;
+    });
+
+    await saveGeneration(persistence, 'first@example.invalid', 'first-device');
+    expect(cleaned).toBe(false);
+
+    await saveGeneration(persistence, 'replacement@example.invalid', 'replacement-device');
+
+    expect(cleaned).toBe(true);
+    expect((await persistence.active())?.account).toBe('replacement@example.invalid');
+  });
+
   it('publishes stores, normalized configuration, preferences, and a complete snapshot together', async () => {
     const persistence = new AccountSessionPersistence(await temporaryRoot());
 

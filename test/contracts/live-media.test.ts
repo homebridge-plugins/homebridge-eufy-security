@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 
 import type {
   LiveAudioFrame,
-  LiveStreamHandle,
+  LiveStreamConsumer,
   LiveVideoFrame,
   StreamBudgetNotice,
   TalkbackHandle,
@@ -20,6 +20,7 @@ import type {
   TalkbackOutcome,
 } from '../../src/media/contracts.js';
 import { FfmpegLiveMedia, resolveFfmpegIdentity, type MediaProcess } from '../../src/media/live-stream.js';
+import { StallingAdaptationInput } from './stalling-adaptation-input.js';
 
 const NEGOTIATED_VIDEO: NegotiatedLiveVideo = {
   width: 1280,
@@ -51,7 +52,23 @@ const KEYFRAME = {
   data: Buffer.from([0, 0, 0, 1, 0x65]),
 };
 
-class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
+class SyntheticLiveStream extends EventEmitter implements LiveStreamConsumer {
+  awaitingKeyframe = false;
+  /** Frames the source is holding, handed over in order once it is released, as a paused consumer does. */
+  private readonly queued: Array<() => void> = [];
+  private paused = false;
+
+  readonly pause = vi.fn(() => {
+    this.paused = true;
+  });
+
+  readonly resume = vi.fn(() => {
+    this.paused = false;
+    while (this.queued.length > 0 && !this.paused) {
+      this.queued.shift()!();
+    }
+  });
+
   start(): this {
     return this;
   }
@@ -59,11 +76,24 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamHandle {
   stop = vi.fn();
 
   video(frame: LiveVideoFrame): void {
-    this.emit('video', frame);
+    this.deliver(() => this.emit('video', frame));
   }
 
   audio(frame: LiveAudioFrame): void {
-    this.emit('audio', frame);
+    this.deliver(() => this.emit('audio', frame));
+  }
+
+  /** Whether the source is currently held, which is the transition each side of this contract observes. */
+  get flow(): 'held' | 'flowing' {
+    return this.paused ? 'held' : 'flowing';
+  }
+
+  private deliver(emit: () => void): void {
+    if (this.paused) {
+      this.queued.push(emit);
+      return;
+    }
+    emit();
   }
 }
 
@@ -78,13 +108,16 @@ function inputOptions(args: readonly string[]): string[] {
   return args.slice(0, args.indexOf('-i'));
 }
 
-function process(): SyntheticProcess {
+/** One adaptation process whose input is observable as `input`, whichever kind of sink it was given. */
+function process(stdin?: StallingAdaptationInput): SyntheticProcess {
   const events = new EventEmitter();
-  const stdin = new PassThrough();
-  const input: Buffer[] = [];
-  stdin.on('data', (chunk: Buffer) => input.push(Buffer.from(chunk)));
+  const sink = stdin ?? new PassThrough();
+  const input = stdin ? stdin.written : [];
+  if (sink instanceof PassThrough) {
+    sink.on('data', (chunk: Buffer) => input.push(Buffer.from(chunk)));
+  }
   return {
-    stdin,
+    stdin: sink,
     stderr: new PassThrough(),
     input,
     on: events.on.bind(events),
@@ -211,14 +244,15 @@ async function talkbackSession(talkback: () => Promise<TalkbackHandle>) {
  * reported outcome. `audio` negotiates the second output so the audio adaptation contracts share this setup.
  */
 async function liveSession(
-  source?: { live(): Promise<LiveStreamHandle> },
-  { audio }: { audio?: NegotiatedLiveAudio } = {},
+  source?: { live(): Promise<LiveStreamConsumer> },
+  { audio, stalling }: { audio?: NegotiatedLiveAudio; stalling?: boolean } = {},
 ) {
   const stream = new SyntheticLiveStream();
   const onVideoFailure = vi.fn();
   const outcomes: LiveSessionOutcome[] = [];
   const released = vi.fn();
   const children: SyntheticProcess[] = [];
+  const inputs: StallingAdaptationInput[] = [];
   const spawned: string[][] = [];
   const notices: AdaptationNotice[] = [];
   let receiverReport: (() => void) | undefined;
@@ -226,7 +260,11 @@ async function liveSession(
     '/synthetic/ffmpeg',
     { report: (notice) => notices.push(notice) },
     (_executable, args) => {
-      const child = process();
+      const stalls = stalling ? new StallingAdaptationInput() : undefined;
+      if (stalls) {
+        inputs.push(stalls);
+      }
+      const child = process(stalls);
       children.push(child);
       spawned.push([...args]);
       return child;
@@ -266,6 +304,7 @@ async function liveSession(
     prepared,
     stream,
     children,
+    inputs,
     spawned,
     onVideoFailure,
     outcomes,
@@ -278,6 +317,88 @@ async function liveSession(
 }
 
 describe('live media adaptation', () => {
+  it('holds the SDK source instead of buffering for an adaptation that stopped reading', async () => {
+    const session = await liveSession(undefined, { stalling: true });
+    await session.start();
+
+    session.stream.video(KEYFRAME);
+    const input = session.inputs[0]!;
+    input.stall();
+    for (let frame = 0; frame < 200; frame += 1) {
+      session.stream.video({ ...KEYFRAME, keyframe: false, data: Buffer.alloc(4096, frame & 0xff) });
+    }
+
+    expect(session.stream.flow).toBe('held');
+    expect(session.stream.pause).toHaveBeenCalledOnce();
+    expect(input.written).toHaveLength(2);
+
+    input.release();
+    await settle();
+
+    expect(session.stream.flow).toBe('flowing');
+    expect(session.stream.resume).toHaveBeenCalledOnce();
+    session.prepared.stop();
+  });
+
+  it('keeps the source held while a second adaptation is the one that cannot keep up', async () => {
+    const session = await liveSession(undefined, { audio: AAC_ELD_16, stalling: true });
+    await session.start();
+
+    session.stream.video(KEYFRAME);
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.alloc(64, 0x11) });
+    const [video, audio] = [session.inputs[0]!, session.inputs[1]!];
+    video.stall();
+    audio.stall();
+
+    session.stream.video({ ...KEYFRAME, keyframe: false });
+    expect(session.stream.flow).toBe('held');
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.alloc(64, 0x22) });
+    expect(audio.written).toHaveLength(1);
+
+    video.release();
+    await settle();
+
+    expect(audio.written).toHaveLength(2);
+    expect(session.stream.flow).toBe('held');
+
+    audio.release();
+    await settle();
+    expect(session.stream.flow).toBe('flowing');
+    session.prepared.stop();
+  });
+
+  it('releases a source held by an audio adaptation that exited while its input was full', async () => {
+    const session = await liveSession(undefined, { audio: AAC_ELD_16, stalling: true });
+    await session.start();
+
+    session.stream.video(KEYFRAME);
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.alloc(64, 0x11) });
+    session.inputs[1]!.stall();
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.alloc(64, 0x22) });
+    expect(session.stream.flow).toBe('held');
+
+    session.children[1]!.emit('exit', 0, null);
+    await settle();
+
+    expect(session.stream.flow).toBe('flowing');
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    session.prepared.stop();
+  });
+
+  it('does not hold the SDK source while its adaptations keep up', async () => {
+    const session = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await session.start();
+
+    session.stream.video(KEYFRAME);
+    session.stream.audio({ codec: 'aac-lc', data: Buffer.alloc(64, 0x11) });
+    session.stream.video({ ...KEYFRAME, keyframe: false });
+    await settle();
+
+    expect(session.stream.pause).not.toHaveBeenCalled();
+    expect(session.stream.resume).not.toHaveBeenCalled();
+    session.prepared.stop();
+  });
+
   it('starts adaptation for a first keyframe delivered after the SDK warm-up window', async () => {
     vi.useFakeTimers();
     const session = await liveSession();

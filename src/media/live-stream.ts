@@ -1,4 +1,4 @@
-import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
+import type { LiveAudioFrame, LiveStreamConsumer, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
 import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
 import { createSocket } from 'node:dgram';
 import { execFile, spawn } from 'node:child_process';
@@ -196,7 +196,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       throw error;
     }
 
-    let source: LiveStreamHandle | undefined;
+    let source: LiveStreamConsumer | undefined;
     let videoProcess: MediaProcess | undefined;
     let audioProcess: MediaProcess | undefined;
     let returnAudioProcess: ReturnAudioProcess | undefined;
@@ -217,7 +217,46 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     let rtcpObserved = false;
     let streaming = false;
     const stoppingProcesses = new WeakSet<object>();
+    const congested = new Set<Writable>();
     const { adaptationDiagnostics } = this;
+
+    /**
+     * Releases one adaptation input's claim on the source, whether it drained or stopped existing.
+     *
+     * An adaptation that is replaced or exits while full never emits the `drain` its claim is waiting for, so
+     * discharging the claim is part of ending the process rather than something only a successful drain does:
+     * otherwise one stalled process that a geometry change already replaced would hold the source for the
+     * rest of the session. It is idempotent and claimed from both directions — the process ending, and its
+     * input closing — because an adaptation can stop either way and neither alone covers both.
+     */
+    const releaseAdaptation = (sink: Writable): void => {
+      if (congested.delete(sink) && !stopped && congested.size === 0) {
+        source?.resume();
+      }
+    };
+
+    /**
+     * Writes one media payload to an adaptation, holding the SDK source while that input stays full.
+     *
+     * A discarded write result relocates a keyframe-aware bounded queue in the SDK into a byte-blind pipe
+     * buffer, which then grows in plugin heap for the life of the session and stalls the event loop with it.
+     * Holding the source instead arms the SDK's own drop-to-keyframe policy, so a session that cannot keep up
+     * resynchronises on decodable media rather than replaying a stale backlog.
+     *
+     * One source feeds both adaptations, so it is held while *any* of them is full and released only once
+     * every one has drained. That keeps a single source of truth for backpressure on this path: no queue,
+     * threshold, or drop rule is invented here.
+     */
+    const writeToAdaptation = (sink: Writable, data: Buffer): void => {
+      if (sink.write(data) || congested.has(sink)) {
+        return;
+      }
+      congested.add(sink);
+      if (congested.size === 1) {
+        source?.pause();
+      }
+      sink.once('drain', () => releaseAdaptation(sink));
+    };
 
     /**
      * Reports what one adaptation process did, whether or not the session it belonged to fails for it.
@@ -253,6 +292,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
       }
       stoppingProcesses.add(process);
       process.stdin.destroy();
+      releaseAdaptation(process.stdin);
       process.kill('SIGTERM');
       const killDeadline = setTimeout(() => process.kill('SIGKILL'), PROCESS_STOP_GRACE_MS);
       killDeadline.unref?.();
@@ -417,6 +457,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
             failVideo('adaptation-failed');
           }
         });
+        child.stdin.on('close', () => releaseAdaptation(child.stdin));
         child.on('error', () => {
           if (!stoppingProcesses.has(child)) {
             reportAdaptation('live-video', producedOutput ? 'exited-while-streaming' : 'spawn-failed', stderr);
@@ -438,8 +479,9 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           failVideo(producedOutput ? 'adaptation-exited-while-streaming' : 'adaptation-exited-before-output');
         });
       }
-      videoProcess.stdin.write(frame.data);
+      writeToAdaptation(videoProcess.stdin, frame.data);
     };
+
     const writeAudio = (frame: LiveAudioFrame): void => {
       if (stopped || !negotiated?.audio || !transport.audio || !audioPort) {
         return;
@@ -458,11 +500,18 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
             producedOutput = true;
           }
         });
+        /**
+         * An audio adaptation is dropped rather than failed, so its own end has to discharge whatever claim
+         * it held on the source. Nothing else would if its input outlives it: the `drain` a full input is
+         * waiting for never arrives, and the video beside it would starve.
+         */
         const clearChild = (): void => {
+          releaseAdaptation(child.stdin);
           if (audioProcess === child) {
             audioProcess = undefined;
           }
         };
+        child.stdin.on('close', () => releaseAdaptation(child.stdin));
         child.stdin.on('error', () => {
           stopProcess(child);
           clearChild();
@@ -496,7 +545,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         writeAudio(frame);
         return;
       }
-      audioProcess.stdin.write(frame.data);
+      writeToAdaptation(audioProcess.stdin, frame.data);
     };
 
     /**
@@ -648,7 +697,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         }
         negotiated = selection;
         const returnAudioReady = startReturnAudio(camera, selection.audio);
-        let sourcePromise: Promise<LiveStreamHandle>;
+        let sourcePromise: Promise<LiveStreamConsumer>;
         let acquisitionDeadline: ReturnType<typeof setTimeout> | undefined;
         try {
           sourcePromise = camera.live();

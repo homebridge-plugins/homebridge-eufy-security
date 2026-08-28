@@ -164,6 +164,18 @@ describe('source architecture', () => {
     expect(duplicates).toEqual([]);
   });
 
+  it('performs no synchronous filesystem work on a media path', () => {
+    const synchronous =
+      /\b(?:access|appendFile|chmod|chown|copyFile|cp|lstat|mkdir|mkdtemp|open|opendir|read|readdir|readFile|readlink|realpath|rename|rm|rmdir|stat|symlink|truncate|unlink|utimes|write|writeFile)Sync\b/g;
+    const violations = files
+      .filter((file) => moduleName(file) === 'media')
+      .flatMap((file) =>
+        [...readFileSync(file, 'utf8').matchAll(synchronous)].map((match) => `${sourceName(file)} calls ${match[0]}`),
+      );
+
+    expect(violations).toEqual([]);
+  });
+
   it('has no internal import cycles', () => {
     const graph = new Map<string, string[]>();
     for (const file of files) {

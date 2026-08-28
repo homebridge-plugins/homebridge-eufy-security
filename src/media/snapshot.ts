@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 import type { LiveSnapshotUnavailableReason, StoredSnapshotUnavailableReason } from '@mega-yfue/eufy-sdk';
 import { LiveSnapshotUnavailableError, StoredSnapshotUnavailableError } from '@mega-yfue/eufy-sdk';
@@ -47,18 +47,22 @@ const PACKAGED_IMAGES = {
 /** Which packaged image a presentation decision calls for. */
 export type PackagedImage = keyof typeof PACKAGED_IMAGES;
 
-const packagedImages = new Map<PackagedImage, Buffer | null>();
+const packagedImages = new Map<PackagedImage, Promise<Buffer | undefined>>();
 
-/** Reads one packaged image once, and nothing at all when this package does not carry it. */
-function packagedImage(name: PackagedImage): Buffer | undefined {
-  if (!packagedImages.has(name)) {
-    try {
-      packagedImages.set(name, readFileSync(PACKAGED_IMAGES[name]));
-    } catch {
-      packagedImages.set(name, null);
-    }
+/**
+ * Reads one packaged image at most once per process, and answers nothing at all when this package does not
+ * carry it.
+ *
+ * The read in progress is what is retained rather than its result, so concurrent requests for the same
+ * placeholder share one read instead of each starting another.
+ */
+function packagedImage(name: PackagedImage): Promise<Buffer | undefined> {
+  let pending = packagedImages.get(name);
+  if (!pending) {
+    pending = readFile(PACKAGED_IMAGES[name]).catch(() => undefined);
+    packagedImages.set(name, pending);
   }
-  return packagedImages.get(name) ?? undefined;
+  return pending;
 }
 
 /** Which acquisition produced a retained image, which decides whether a later image may replace it. */
@@ -126,11 +130,11 @@ function unansweredBy(error: unknown): SnapshotFailure {
 
 /** The plugin-owned last successful image required by every snapshot acquisition policy. */
 export interface LastSuccessfulImages {
-  read(serial: string): Buffer | undefined;
-  write(serial: string, jpeg: Buffer, provenance: SnapshotProvenance): void;
-  discard?(serial: string): void;
-  reconcile?(serials: Iterable<string>): void;
-  discardAll?(): void;
+  read(serial: string): Promise<Buffer | undefined>;
+  write(serial: string, jpeg: Buffer, provenance: SnapshotProvenance): Promise<void>;
+  discard?(serial: string): Promise<void>;
+  reconcile?(serials: Iterable<string>): Promise<void>;
+  discardAll?(): Promise<void>;
 }
 
 /** Applies externally distinct stored-only, fresh-live, and retained-image acquisition policies. */
@@ -142,7 +146,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
 
   constructor(
     private readonly images?: LastSuccessfulImages,
-    private readonly packaged: (name: PackagedImage) => Buffer | undefined = packagedImage,
+    private readonly packaged: (name: PackagedImage) => Promise<Buffer | undefined> = packagedImage,
   ) {}
 
   /**
@@ -171,25 +175,26 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     presentation: SnapshotPresentation = {},
   ): Promise<Buffer> {
     if (presentation.enabled === false) {
-      const disabled = this.presentable('disabled');
-      if (disabled) {
-        return Promise.resolve(disabled);
-      }
-      return Promise.reject(new Error('disabled camera presentation is unavailable'));
+      return this.presentable('disabled').then((disabled) => {
+        if (disabled) {
+          return disabled;
+        }
+        throw new Error('disabled camera presentation is unavailable');
+      });
     }
-    return this.acquired(scope, source, mode, presentation).catch((error: unknown) => {
-      const retained = this.images?.read(scope.serial);
+    return this.acquired(scope, source, mode, presentation).catch(async (error: unknown) => {
+      const retained = await this.images?.read(scope.serial);
       if (retained) {
         return retained;
       }
       if (presentation.availability === 'unavailable') {
-        const offline = this.presentable('offline');
+        const offline = await this.presentable('offline');
         if (offline) {
           return offline;
         }
       }
       presentation.onUnavailable?.(unansweredBy(error));
-      const unavailable = this.presentable('unavailable');
+      const unavailable = await this.presentable('unavailable');
       if (!unavailable) {
         throw error;
       }
@@ -208,7 +213,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
   discard(serial: string): void {
     this.retentionGenerations.set(serial, this.retentionGeneration(serial) + 1);
     this.failedLive.delete(serial);
-    this.images?.discard?.(serial);
+    void this.images?.discard?.(serial);
   }
 
   reconcile(serials: Iterable<string>): void {
@@ -223,7 +228,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
         this.failedLive.delete(serial);
       }
     }
-    this.images?.reconcile?.(current);
+    void this.images?.reconcile?.(current);
   }
 
   discardAll(): void {
@@ -231,12 +236,12 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       this.retentionGenerations.set(serial, this.retentionGeneration(serial) + 1);
     }
     this.failedLive.clear();
-    this.images?.discardAll?.();
+    void this.images?.discardAll?.();
   }
 
   /** One packaged image, or nothing when this package does not carry a decodable one under that name. */
-  private presentable(name: PackagedImage): Buffer | undefined {
-    const image = this.packaged(name);
+  private async presentable(name: PackagedImage): Promise<Buffer | undefined> {
+    const image = await this.packaged(name);
     return image && isBoundedJpeg(image) ? image : undefined;
   }
 
@@ -269,21 +274,22 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       if (presentation.availability !== 'unavailable') {
         this.refreshLiveWhenDue(scope, source, presentation);
       }
-      const retained = this.images?.read(scope.serial);
-      if (retained) {
-        return Promise.resolve(retained);
-      }
-      return (
-        this.stored(scope, source) ??
-        Promise.reject(
-          new UnansweredSnapshot(
-            this.pendingRefreshFailure(scope, source),
-            'no camera snapshot image is available',
-          ),
-        )
-      );
+      return this.refreshed(scope, source);
     }
     throw new TypeError(`unsupported snapshot acquisition mode: ${mode satisfies never}`);
+  }
+
+  /** What a `Refresh` camera can answer with now: its retained image, or the stored acquisition instead. */
+  private async refreshed(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<Buffer> {
+    const retained = await this.images?.read(scope.serial);
+    if (retained) {
+      return retained;
+    }
+    const stored = this.stored(scope, source);
+    if (stored) {
+      return stored;
+    }
+    throw new UnansweredSnapshot(this.pendingRefreshFailure(scope, source), 'no camera snapshot image is available');
   }
 
   /**
@@ -357,7 +363,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       throw new Error('camera snapshot is not a bounded JPEG');
     }
     if (generation === this.retentionGeneration(scope.serial)) {
-      this.images?.write(scope.serial, jpeg, provenance);
+      void this.images?.write(scope.serial, jpeg, provenance);
     }
     return jpeg;
   }
@@ -390,8 +396,8 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       return;
     }
     this.liveRefreshedAtMs.set(scope.serial, Date.now());
-    refresh.catch((error: unknown) => {
-      if (!this.images?.read(scope.serial)) {
+    refresh.catch(async (error: unknown) => {
+      if (!(await this.images?.read(scope.serial))) {
         presentation.onUnavailable?.(unansweredBy(error));
       }
     });

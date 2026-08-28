@@ -12,6 +12,7 @@ import type {
   RecordingOutcome,
 } from '../../src/media/contracts.js';
 import { FfmpegRecordingMedia } from '../../src/media/recording.js';
+import { StallingAdaptationInput } from './stalling-adaptation-input.js';
 
 const NEGOTIATED: NegotiatedRecording = {
   width: 1920,
@@ -40,14 +41,19 @@ function mediaFragment(marker: number, bytes = 32): Buffer {
   return Buffer.concat([box('moof', Buffer.alloc(12, marker)), box('mdat', Buffer.alloc(bytes, marker))]);
 }
 
-/** An adaptation process whose output, failure, and exit this specification drives directly. */
-function adaptationProcess() {
+/**
+ * An adaptation process whose output, failure, and exit this specification drives directly. Its input is
+ * observable as `written`, whichever kind of sink it was given.
+ */
+function adaptationProcess(stdin?: StallingAdaptationInput) {
   const events = new EventEmitter();
-  const stdin = new PassThrough();
-  const written: Buffer[] = [];
-  stdin.on('data', (chunk: Buffer) => written.push(chunk));
+  const sink = stdin ?? new PassThrough();
+  const written = stdin ? stdin.written : [];
+  if (sink instanceof PassThrough) {
+    sink.on('data', (chunk: Buffer) => written.push(chunk));
+  }
   return {
-    stdin,
+    stdin: sink,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     written,
@@ -77,6 +83,11 @@ class SyntheticFragmentRecording extends EventEmitter implements FragmentRecordi
       return;
     }
     this.pending.push(fragment);
+  }
+
+  /** Fragments this source is still holding because its consumer has not asked for the next one. */
+  get unpulled(): number {
+    return this.pending.length;
   }
 
   complete(): void {
@@ -152,9 +163,10 @@ const settle = async (): Promise<void> => {
  * One recording session with its source, its adaptation process, and every reported outcome recorded, so
  * each contract drives the same seam the HomeKit recording delegate drives.
  */
-function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED) {
+function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED, { stalling }: { stalling?: boolean } = {}) {
   const source = new SyntheticFragmentRecording();
   const children: ReturnType<typeof adaptationProcess>[] = [];
+  const inputs: StallingAdaptationInput[] = [];
   const spawned: string[][] = [];
   const outcomes: RecordingOutcome[] = [];
   const notices: AdaptationNotice[] = [];
@@ -162,7 +174,11 @@ function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED) {
     '/synthetic/ffmpeg',
     { report: (notice) => notices.push(notice) },
     (_executable, args) => {
-      const child = adaptationProcess();
+      const stalls = stalling ? new StallingAdaptationInput() : undefined;
+      if (stalls) {
+        inputs.push(stalls);
+      }
+      const child = adaptationProcess(stalls);
       children.push(child);
       spawned.push([...args]);
       return child;
@@ -179,7 +195,7 @@ function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED) {
     negotiated,
     { onOutcome: (outcome) => outcomes.push(outcome) },
   );
-  return { source, children, spawned, outcomes, notices, recording, requested, consumed: consume(recording) };
+  return { source, children, inputs, spawned, outcomes, notices, recording, requested, consumed: consume(recording) };
 }
 
 /** The arguments an adaptation received before its input, where FFmpeg accepts the same flag twice. */
@@ -188,6 +204,53 @@ function inputArguments(args: readonly string[]): readonly string[] {
 }
 
 describe('recording media adaptation', () => {
+  it('stops pulling source fragments while its adaptation input is full', async () => {
+    const session = recordingSession(NEGOTIATED, { stalling: true });
+    await settle();
+    const input = session.inputs[0]!;
+
+    session.source.deliver({ init: INIT_SEGMENT, data: mediaFragment(1), keyframe: true });
+    await settle();
+    const accepted = input.written.length;
+
+    input.stall();
+    session.source.deliver({ data: mediaFragment(2), keyframe: true });
+    await settle();
+    session.source.deliver({ data: mediaFragment(3), keyframe: true });
+    session.source.deliver({ data: mediaFragment(4), keyframe: true });
+    await settle();
+
+    expect(input.written).toHaveLength(accepted + 1);
+    expect(session.source.unpulled).toBe(2);
+
+    input.release();
+    await settle();
+
+    expect(input.written).toHaveLength(accepted + 3);
+    expect(session.source.unpulled).toBe(0);
+    expect(session.outcomes).not.toContainEqual({ outcome: 'failed', reason: 'adaptation-failed' });
+  });
+
+  it('does not strand a recording whose adaptation input closes while it is full', async () => {
+    const session = recordingSession(NEGOTIATED, { stalling: true });
+    await settle();
+    const input = session.inputs[0]!;
+
+    session.source.deliver({ init: INIT_SEGMENT, data: mediaFragment(1), keyframe: true });
+    await settle();
+    input.stall();
+    session.source.deliver({ data: mediaFragment(2), keyframe: true });
+    await settle();
+    session.source.deliver({ data: mediaFragment(3), keyframe: true });
+    await settle();
+    expect(session.source.unpulled).toBe(1);
+
+    session.recording.stop();
+    await settle();
+
+    expect(session.consumed.finished()).toBe(true);
+  });
+
   it('transcodes source fragments into the negotiated profile, level, geometry, and bit rate', async () => {
     const session = recordingSession();
     await settle();

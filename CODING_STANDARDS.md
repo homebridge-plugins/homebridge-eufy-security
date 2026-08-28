@@ -139,6 +139,12 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   placeholder presentation belong in the plugin.
 - Live video and audio are separate inputs. Do not concatenate raw audio and Annex-B video into one
   stream.
+- Backpressure has one source of truth. When an adaptation input refuses a write, hold the SDK source so
+  its keyframe-aware bounded queue arms; never buffer the refused media, and never invent a second queue,
+  threshold, or drop rule beside the SDK's. A pulled source is held by holding the pull.
+- `media/` performs no synchronous filesystem call. A bounded image is megabytes and a flush is an fsync, so
+  that work on the one thread the plugin shares stalls live media, recording, and motion delivery together.
+  Accepting an image is separate from persisting it, and the contract suite enforces the ban.
 - Keep recording and live-stream lifetime policies explicit. Battery budgets, cold-source prebuffer,
   long GOPs, silent cameras, and codec changes are acceptance cases, not incidental details.
 

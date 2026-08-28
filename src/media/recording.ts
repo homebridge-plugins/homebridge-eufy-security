@@ -1,6 +1,6 @@
 import type { FragmentRecordingHandle, MediaFragment } from '@mega-yfue/eufy-sdk';
 import { spawn } from 'node:child_process';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 
 import type {
   AdaptationDiagnostics,
@@ -252,7 +252,10 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
           if (stopped) {
             return;
           }
-          writeSourceFragment(adaptation, fragment);
+          await writeSourceFragment(adaptation, fragment);
+          if (stopped) {
+            return;
+          }
         }
         if (stopped) {
           return;
@@ -272,14 +275,51 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
   }
 }
 
-/** Writes one source fragment to the adaptation, leading with the initialization segment it carries. */
-function writeSourceFragment(adaptation: RecordingMediaProcess, fragment: MediaFragment): void {
+/**
+ * Writes one source fragment to the adaptation, leading with the initialization segment it carries, and
+ * does not return until that input has room for the next one.
+ *
+ * A recording is pulled rather than pushed, so holding the pull is how this path applies backpressure. An
+ * adaptation that stops reading stops the iteration instead of having every later fragment accumulate in a
+ * byte-blind pipe buffer for the life of the recording; the source then holds what it has already muxed and
+ * bounds that itself. Nothing is dropped here, because a fragment is a complete ordered unit and the
+ * recording that contains it would not survive losing one.
+ */
+async function writeSourceFragment(adaptation: RecordingMediaProcess, fragment: MediaFragment): Promise<void> {
+  let accepted = true;
   if (fragment.init) {
-    adaptation.stdin.write(fragment.init);
+    accepted = adaptation.stdin.write(fragment.init) && accepted;
   }
   if (fragment.data.length > 0) {
-    adaptation.stdin.write(fragment.data);
+    accepted = adaptation.stdin.write(fragment.data) && accepted;
   }
+  if (!accepted) {
+    await drained(adaptation.stdin);
+  }
+}
+
+/**
+ * Resolves when an adaptation input has room again, or at once when it can no longer take anything at all.
+ *
+ * A closed, failed or ended input never emits the `drain` it was waiting for, so those settle the wait too:
+ * the recording's own failure handling then owns what happens next, rather than the pull being stranded.
+ */
+function drained(stdin: Writable): Promise<void> {
+  return new Promise((resolve) => {
+    if (stdin.destroyed || stdin.writableEnded) {
+      resolve();
+      return;
+    }
+    const settle = (): void => {
+      stdin.off('drain', settle);
+      stdin.off('close', settle);
+      stdin.off('error', settle);
+      resolve();
+    };
+    stdin.on('drain', settle);
+    stdin.on('close', settle);
+    stdin.on('error', settle);
+  });
 }
 
 function recordingOf(units: RecordedFragmentQueue, stop: () => void): AdaptedRecording {

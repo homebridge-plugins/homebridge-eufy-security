@@ -1,11 +1,11 @@
-import type { FragmentRecordingHandle, LiveStreamHandle, TalkbackHandle } from '@mega-yfue/eufy-sdk';
+import type { FragmentRecordingHandle, LiveStreamConsumer, TalkbackHandle } from '@mega-yfue/eufy-sdk';
 
 import type { SnapshotMode } from '../configuration.js';
 
 export type { SnapshotMode } from '../configuration.js';
 
 export interface LiveMediaSource {
-  live(): Promise<LiveStreamHandle>;
+  live(): Promise<LiveStreamConsumer>;
   talkback?(): Promise<TalkbackHandle>;
 }
 
