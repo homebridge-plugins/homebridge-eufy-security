@@ -133,6 +133,7 @@ export class PersistedSdkClient implements SdkClient {
         prewarmEvents: [...this.config.warmUpEvents] as never,
         phoneModel: this.config.trustedDeviceName,
         pollMs: this.config.pollingIntervalMinutes * 60_000,
+        ffmpegPath: this.config.ffmpegPath,
         store: this.stores.session,
         pushStore: this.stores.push,
         logger: this.diagnostics,

@@ -149,7 +149,11 @@ Three separate mechanisms carry it, and they stay separate because they answer d
   not durable. `media/live-stream.ts` reads that binary's own version banner, because whether it answers
   at all is what separates a wrong path from a missing encoder. `diagnostics.ts` persists the result
   under its own storage root and republishes it as environment evidence, since the process that resolves
-  it is not the one that assembles an archive.
+  it is not the one that assembles an archive. `runtime/sdk-client.ts` hands the same resolved path to
+  the SDK, whose own media paths shell out to decode a live snapshot and otherwise look the bare name up
+  on `PATH`. One resolution therefore serves every media path: a host with no system FFmpeg would
+  otherwise stream and record from the resolved build while its stills failed against a binary that is
+  not there, and the reason a decoder that cannot run reports is the one the SDK declares non-retryable.
 - **What the process did.** `media/contracts.ts` owns the bounded adaptation vocabulary. A spawn
   failure, an exit before first output, and an exit after output began are separate live-session
   reasons, because the same exit status means opposite things either side of first output. A process
