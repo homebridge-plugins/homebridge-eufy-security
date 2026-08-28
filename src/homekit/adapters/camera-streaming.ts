@@ -28,6 +28,8 @@ import type {
   LiveMediaAdapter,
   LiveMediaSource,
   LiveSessionOutcome,
+  MediaSessionBudget,
+  MediaSessionClaim,
   NegotiatedLiveVideo,
   NegotiatedRecordedAudio,
   NegotiatedRecording,
@@ -65,6 +67,15 @@ export const CAMERA_OPERATING_MODE_SERVICE_KEY = 'camera.operating-mode';
 
 const CAMERA_LIVE_SESSION_CONDITION = 'camera-live-session-failed';
 const CAMERA_LIVE_REFUSED_CONDITION = 'camera-live-session-refused';
+/**
+ * Why live view is unavailable for a camera the host has no room for, kept apart from the enablement refusal.
+ *
+ * The two cannot share a condition. They are withdrawn by different events, they name different things to do
+ * about them — one is a camera to switch on, the other a ceiling to raise or a viewer to close — and a camera
+ * cannot have two writers for why live view is unavailable, so a transient capacity refusal would otherwise
+ * clear the latch a disabled camera is holding.
+ */
+const CAMERA_MEDIA_AT_CAPACITY_CONDITION = 'camera-media-at-capacity';
 const CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION = 'camera-snapshot-unavailable';
 const CAMERA_RECORDING_UNAVAILABLE_CONDITION = 'camera-recording-unavailable';
 const CAMERA_RECORDING_FAILED_CONDITION = 'camera-recording-failed';
@@ -893,6 +904,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   const readBoolean = observationReader(context, 'boolean');
   const readNumber = observationReader(context, 'number');
   const reportAdmission = cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION);
+  const reportCapacity = cameraLiveCondition(context, CAMERA_MEDIA_AT_CAPACITY_CONDITION);
   const acquireLiveSnapshot = liveAvailable ? camera.snapshotLive!.bind(camera) : undefined;
   const openTalkback = talkbackConfigured ? camera.talkback!.bind(camera) : undefined;
   const source: CameraMediaSource = {
@@ -940,6 +952,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     reportRelease: () => context.trace?.({ event: 'live-session-released' }),
     reportTalkback: talkbackReporter(context),
     reportAdmission,
+    reportCapacity,
+    ...(context.mediaBudget ? { budget: context.mediaBudget } : {}),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
     reportSelection: context.trace,
   };
@@ -1690,6 +1704,7 @@ function availabilityObservation(
 
 interface PendingSession {
   prepared: PreparedLiveMedia;
+  claim: MediaSessionClaim;
   videoSsrc: number;
   audioSsrc?: number;
   selection?: StartStreamRequest;
@@ -1706,6 +1721,9 @@ interface CameraMediaSource extends LiveMediaSource, SnapshotMediaSource, Record
  * camera did accept answered with audio and never a video frame.
  */
 type LiveAdmissionRefusal = 'disabled' | 'disabled-mid-session' | 'disabled-no-video';
+
+/** Why live view is unavailable for a camera the declared concurrent media ceiling had no room for. */
+type MediaCapacityRefusal = 'at-capacity';
 
 /**
  * Why a snapshot request went unanswered: the acquisition the media policy names, or the snapshot
@@ -1726,6 +1744,8 @@ interface LiveCameraBinding {
   readonly reportRelease: () => void;
   readonly reportTalkback: (outcome: TalkbackOutcome) => void;
   readonly reportAdmission: (refusal?: LiveAdmissionRefusal) => void;
+  readonly reportCapacity: (refusal?: MediaCapacityRefusal) => void;
+  readonly budget?: MediaSessionBudget;
   readonly reportSnapshot: (failure?: SnapshotUnavailability) => void;
   readonly reportSelection?: AdapterAttachmentContext['trace'];
 }
@@ -1739,6 +1759,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   private readonly snapshotScope: SnapshotAcquisitionScope;
   private acceptingSessions = true;
   private refused = false;
+  private capacityRefused = false;
   private supervision?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -1814,30 +1835,65 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       callback(new Error('camera is disabled'));
       return;
     }
+    const claim = this.claimCapacity();
+    if (!claim) {
+      callback(new Error('the declared concurrent media limit is reached'));
+      return;
+    }
     const generation = Symbol('camera-stream-prepare');
     this.prepareGenerations.set(request.sessionID, generation);
-    void this.prepare(request).then(
+    void this.prepare(request, claim).then(
       ({ response, session }) => {
         if (!this.acceptingSessions || this.prepareGenerations.get(request.sessionID) !== generation) {
           session.prepared.stop();
+          claim.release();
           callback(new Error('live media preparation was cancelled'));
           return;
         }
         this.release(request.sessionID);
         this.sessions.set(request.sessionID, session);
         this.admit();
+        this.admitCapacity();
         callback(undefined, response);
       },
       (error: unknown) => {
         if (this.prepareGenerations.get(request.sessionID) === generation) {
           this.prepareGenerations.delete(request.sessionID);
         }
+        claim.release();
         callback(error instanceof Error ? error : new Error('failed to prepare live media'));
       },
     );
   }
 
-  private async prepare(request: PrepareStreamRequest) {
+  /**
+   * One share of the declared media ceiling for a session about to be prepared, or nothing when the host has
+   * no room, in which case one bounded reason is reported.
+   *
+   * The share is taken before any await, so two cameras asked at once cannot both pass the same check. It is
+   * held for the whole prepared-session lifetime rather than only while media flows, because a prepared
+   * session holds a reserved port and HomeKit bounds it by its own connection; releasing it earlier would let
+   * a controller that prepares and waits sit outside the count it was admitted under.
+   */
+  private claimCapacity(): MediaSessionClaim | undefined {
+    const claim = this.binding.budget ? this.binding.budget.claim() : { release: () => undefined };
+    if (!claim) {
+      this.capacityRefused = true;
+      this.binding.reportCapacity('at-capacity');
+    }
+    return claim;
+  }
+
+  /** Withdraws a latched capacity refusal once a session is admitted again, and only then. */
+  private admitCapacity(): void {
+    if (!this.capacityRefused) {
+      return;
+    }
+    this.capacityRefused = false;
+    this.binding.reportCapacity();
+  }
+
+  private async prepare(request: PrepareStreamRequest, claim: MediaSessionClaim) {
     const videoSsrc = this.hap.CameraController.generateSynchronisationSource();
     const audioSsrc = this.binding.audioEnabled ? this.hap.CameraController.generateSynchronisationSource() : undefined;
     let session: PendingSession | undefined;
@@ -1872,6 +1928,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     });
     session = {
       prepared,
+      claim,
       videoSsrc,
       ...(audioSsrc === undefined ? {} : { audioSsrc }),
       ...(this.binding.snapshotMedia ? { snapshotMedia: this.binding.snapshotMedia } : {}),
@@ -1991,6 +2048,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     const session = this.sessions.get(sessionID);
     this.sessions.delete(sessionID);
     session?.prepared.stop();
+    session?.claim.release();
     if (this.sessions.size === 0) {
       this.unsupervise();
     }

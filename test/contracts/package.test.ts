@@ -161,6 +161,14 @@ async function renderUi(
     },
     reportValidity() {},
   });
+  const advancedConcurrentMedia = interactiveElement({
+    value: '',
+    validityMessage: '',
+    setCustomValidity(message: string) {
+      this.validityMessage = message;
+    },
+    reportValidity() {},
+  });
   const advancedFfmpeg = interactiveElement({ value: '' });
   /**
    * The transfer list the warm-up setting draws into.
@@ -300,6 +308,7 @@ async function renderUi(
           '[data-advanced-settings]': advancedPanel,
           '[data-advanced-close]': advancedClose,
           '[data-advanced-polling]': advancedPolling,
+          '[data-advanced-concurrent-media]': advancedConcurrentMedia,
           '[data-advanced-ffmpeg]': advancedFfmpeg,
           '[data-advanced-status]': advancedStatus,
           '[data-warm-up-available]': warmUpAvailable,
@@ -526,6 +535,7 @@ async function renderUi(
     advancedPanel,
     advancedClose,
     advancedPolling,
+    advancedConcurrentMedia,
     advancedFfmpeg,
     advancedStatus,
     legacyAcknowledge,
@@ -768,6 +778,8 @@ describe('packed plugin', () => {
         [
           'accountLabel',
           'acknowledge',
+          'advancedConcurrentMediaHelp',
+          'advancedConcurrentMediaLabel',
           'advancedDeviceHelp',
           'advancedEyebrow',
           'advancedFfmpegHelp',
@@ -865,6 +877,7 @@ describe('packed plugin', () => {
         'authTimedOut',
         'advancedSaveFailed',
         'advancedPollingInvalid',
+        'advancedConcurrentMediaInvalid',
         // Read from JS, keyed by the SDK's own event name; an event without one falls back to a derived label.
         'advancedWarmUpEvent_doorbellPress',
         'advancedWarmUpEvent_motion',
@@ -1202,6 +1215,22 @@ describe('packed plugin', () => {
       await menuUi.advancedPolling.dispatch('change');
       expect(menuUi.advancedPolling.validityMessage).toBe(catalogs['i18n/en.json'].advancedPollingInvalid);
       expect(menuUi.updatedConfig?.[0]).not.toHaveProperty('pollingIntervalMinutes');
+      menuUi.advancedPolling.value = '';
+      menuUi.advancedConcurrentMedia.value = '3';
+      await menuUi.advancedConcurrentMedia.dispatch('change');
+      expect(menuUi.updatedConfig?.[0]).toMatchObject({ maxConcurrentMediaSessions: 3 });
+      menuUi.advancedConcurrentMedia.value = '0';
+      await menuUi.advancedConcurrentMedia.dispatch('change');
+      expect(
+        menuUi.updatedConfig?.[0],
+        'unlimited is what an absent key already means, so storing a zero would only pin today default',
+      ).not.toHaveProperty('maxConcurrentMediaSessions');
+      menuUi.advancedConcurrentMedia.value = '1.5';
+      await menuUi.advancedConcurrentMedia.dispatch('change');
+      expect(menuUi.advancedConcurrentMedia.validityMessage).toBe(
+        catalogs['i18n/en.json'].advancedConcurrentMediaInvalid,
+      );
+      expect(menuUi.updatedConfig?.[0]).not.toHaveProperty('maxConcurrentMediaSessions');
       await menuUi.advancedClose.dispatch('click');
       expect(menuUi.advancedPanel.hidden).toBe(true);
 

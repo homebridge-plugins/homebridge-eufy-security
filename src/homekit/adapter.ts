@@ -9,6 +9,7 @@ import type {
 import type {
   LiveMediaAdapter,
   LiveSessionOutcome,
+  MediaSessionBudget,
   NegotiatedLiveVideo,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
@@ -91,6 +92,8 @@ export interface AdapterAttachmentContext {
   readonly liveMedia?: LiveMediaAdapter;
   readonly recordingMedia?: RecordingMediaAdapter;
   readonly snapshotMedia?: SnapshotMediaAdapter;
+  /** The declared ceiling on concurrent media, absent when the operator declared none. */
+  readonly mediaBudget?: MediaSessionBudget;
   readonly audioEnabled?: boolean;
   readonly snapshotMode?: SnapshotMode;
   readonly availability?: () => AvailabilityObservation | undefined;

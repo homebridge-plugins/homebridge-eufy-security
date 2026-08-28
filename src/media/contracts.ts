@@ -131,6 +131,33 @@ export interface AdaptationDiagnostics {
   report(notice: AdaptationNotice): void;
 }
 
+/**
+ * One held share of the host's declared media capacity, released exactly once however its work ended.
+ *
+ * Release is idempotent because the work it covers can end by more paths than any one of them knows about: a
+ * controller stopping a stream, a source failing, a preparation being cancelled, and an accessory being
+ * detached all tear the same session down. Counting a second release would hand the host a share it does not
+ * have, and every one of those paths has to be safe to run.
+ */
+export interface MediaSessionClaim {
+  release(): void;
+}
+
+/**
+ * The declared ceiling on concurrent media work, asked before work that would exceed it is started.
+ *
+ * A claim is refused rather than queued. HomeKit bounds a snapshot request at twenty-five seconds and cannot
+ * renegotiate a live selection at all, so waiting for capacity presents as a camera that has broken rather
+ * than one that is busy, and answering now with the older truth is worth more than answering later with the
+ * newer one.
+ *
+ * Nothing here can reach the work it admitted, which is deliberate: admission may refuse a new session but
+ * may never end an established one, because a viewer cannot tell an eviction from a failure.
+ */
+export interface MediaSessionBudget {
+  claim(): MediaSessionClaim | undefined;
+}
+
 export interface LiveMediaTransport {
   readonly addressVersion: 'ipv4' | 'ipv6';
   readonly targetAddress: string;
@@ -244,6 +271,9 @@ export interface SnapshotAcquisitionScope {
  * then either that the camera declines to offer it, the reason the SDK gave for refusing it, or that it
  * failed without a reason of its own. Naming the acquisition and its cause together is what distinguishes
  * an intermittently failing camera from a permanently unequipped one.
+ *
+ * `live-at-capacity` is the one reason that is about the host rather than the camera: the still was never
+ * attempted, because the declared ceiling on concurrent media had no room for it.
  */
 export type SnapshotFailure =
   | 'no-acquisition'
@@ -255,6 +285,7 @@ export type SnapshotFailure =
   | 'stored-download-failed'
   | 'stored-invalid-image'
   | 'live-unavailable'
+  | 'live-at-capacity'
   | 'live-failed'
   | 'live-no-keyframe'
   | 'live-source-failed'

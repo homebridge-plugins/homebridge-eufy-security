@@ -34,6 +34,13 @@
         "minimum": 0,
         "type": "integer"
       },
+      "maxConcurrentMediaSessions": {
+        "title": "Concurrent camera media limit",
+        "description": "How many cameras may stream live video or take a fresh still at the same time. Use 0 for unlimited, which is the default. A camera refused because the limit is reached is never interrupted once it has started, and a still that cannot be taken now is answered with the camera’s most recent picture instead. Set this if several cameras at once make live view stutter on this host.",
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
       "warmUpEvents": {
         "title": "Warm up camera connections",
         "description": "Events that open a camera’s connection as soon as it reports one, so the live view or snapshot straight afterwards starts immediately. Every camera is independent: an event opens only the camera that reported it, and only for the events chosen here. A camera on its own battery is kept awake for several minutes each time; wired cameras and those behind a HomeBase are unaffected. Choose these in the plugin interface, which offers whatever your devices actually report.",

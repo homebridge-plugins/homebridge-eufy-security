@@ -4,6 +4,8 @@ import type { LiveSnapshotUnavailableReason, StoredSnapshotUnavailableReason } f
 import { LiveSnapshotUnavailableError, StoredSnapshotUnavailableError } from '@mega-yfue/eufy-sdk';
 
 import type {
+  MediaSessionBudget,
+  MediaSessionClaim,
   SnapshotAcquisitionScope,
   SnapshotFailure,
   SnapshotMediaAdapter,
@@ -136,6 +138,17 @@ function unansweredBy(error: unknown): SnapshotFailure {
   return error instanceof UnansweredSnapshot ? error.failure : 'no-acquisition';
 }
 
+/**
+ * The share held by work whose cost the declared ceiling has already admitted somewhere else.
+ *
+ * Two cases qualify, and both would be double-charged by a claim of their own. A request that joins an
+ * acquisition already in flight is answered by that acquisition's decoder rather than one of its own; a still
+ * taken from a source a live session is already holding open adds a decode to a pull that session paid for. A
+ * ceiling of one would otherwise refuse a camera a still while it was streaming, which is the case the two
+ * sharing a warm source exists to serve.
+ */
+const UNBILLED: MediaSessionClaim = { release: () => undefined };
+
 /** The plugin-owned last successful image required by every snapshot acquisition policy. */
 export interface LastSuccessfulImages {
   read(serial: string): Promise<Buffer | undefined>;
@@ -154,6 +167,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
 
   constructor(
     private readonly images?: LastSuccessfulImages,
+    private readonly budget?: MediaSessionBudget,
     private readonly packaged: (name: PackagedImage) => Promise<Buffer | undefined> = packagedImage,
     private readonly random: () => number = Math.random,
   ) {}
@@ -213,7 +227,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
 
   /** Retains one real image from a source another successful HomeKit live session already holds open. */
   async captureFromWarmLive(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<void> {
-    const capture = this.live(scope, source);
+    const capture = this.live(scope, source, UNBILLED);
     if (capture) {
       await capture;
     }
@@ -274,10 +288,16 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       );
     }
     if (mode === 'Live') {
-      return (
-        this.live(scope, source) ??
-        Promise.reject(new UnansweredSnapshot('live-unavailable', 'live camera snapshot is unavailable'))
-      );
+      if (!source.snapshotLive) {
+        return Promise.reject(new UnansweredSnapshot('live-unavailable', 'live camera snapshot is unavailable'));
+      }
+      const claim = this.claimForLive(scope);
+      if (!claim) {
+        return Promise.reject(
+          new UnansweredSnapshot('live-at-capacity', 'the declared concurrent media limit is reached'),
+        );
+      }
+      return this.live(scope, source, claim)!;
     }
     if (mode === 'Refresh') {
       if (presentation.availability !== 'unavailable') {
@@ -330,13 +350,32 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       });
   }
 
-  private live(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<Buffer> | undefined {
+  /**
+   * One share of the declared ceiling for a still, or nothing when the host has no room for another.
+   *
+   * A request joining an acquisition already in flight, and every request at all when no ceiling was declared,
+   * are admitted without one.
+   */
+  private claimForLive(scope: SnapshotAcquisitionScope): MediaSessionClaim | undefined {
+    if (this.pendingLive.has(scope.identity) || !this.budget) {
+      return UNBILLED;
+    }
+    return this.budget.claim();
+  }
+
+  private live(
+    scope: SnapshotAcquisitionScope,
+    source: SnapshotMediaSource,
+    claim: MediaSessionClaim,
+  ): Promise<Buffer> | undefined {
     const snapshotLive = source.snapshotLive;
     if (!snapshotLive) {
+      claim.release();
       return undefined;
     }
     const current = this.pendingLive.get(scope.identity);
     if (current) {
+      claim.release();
       return current;
     }
     const generation = this.retentionGeneration(scope.serial);
@@ -353,6 +392,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
         throw new UnansweredSnapshot(failure, errorMessage(error));
       })
       .finally(() => {
+        claim.release();
         if (this.pendingLive.get(scope.identity) === pending) {
           this.pendingLive.delete(scope.identity);
         }
@@ -388,6 +428,10 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
    * the spread each camera drew holds however often that camera is asked about. Deriving it per request would
    * take the shortest of many draws and return the busiest cameras to a shared clock.
    *
+   * A refresh the declared ceiling had no room for never happened, so it commits no window: the camera keeps
+   * answering from its retained image and the next request tries again. Spending the window on a refusal would
+   * let a busy host push every camera's refresh further away precisely while they are all being asked for.
+   *
    * A refresh that fails while the camera still has nothing retained explains the placeholder that camera
    * is showing, so it is reported through the request that started it. A camera whose retained image
    * already answers its requests reports nothing, because a stale real image is still a camera image.
@@ -401,10 +445,14 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     if (dueAt !== undefined && Date.now() < dueAt) {
       return;
     }
-    if (this.pendingLive.has(scope.identity)) {
+    if (this.pendingLive.has(scope.identity) || !source.snapshotLive) {
       return;
     }
-    const refresh = this.live(scope, source);
+    const claim = this.claimForLive(scope);
+    if (!claim) {
+      return;
+    }
+    const refresh = this.live(scope, source, claim);
     if (!refresh) {
       return;
     }

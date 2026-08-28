@@ -1462,6 +1462,7 @@ const MEMBERS = new Set([
 ]);
 const REASONS = new Set([
   'adaptation-exited-before-output',
+  'at-capacity',
   'adaptation-exited-while-streaming',
   'adaptation-failed',
   'adaptation-spawn-failed',
@@ -1472,6 +1473,7 @@ const REASONS = new Set([
   'disabled-no-video',
   'expired',
   'hot',
+  'live-at-capacity',
   'live-decoder-unavailable',
   'live-failed',
   'live-no-keyframe',
@@ -1745,6 +1747,10 @@ const HOMEKIT_CONDITIONS = {
   'camera-live-session-refused': {
     summaryKey: 'log.homekit.cameraLiveSessionRefused',
     actionKey: 'log.action.enableCamera',
+  },
+  'camera-media-at-capacity': {
+    summaryKey: 'log.homekit.cameraMediaAtCapacity',
+    actionKey: 'log.action.reduceConcurrentMedia',
   },
   'camera-recording-unavailable': {
     summaryKey: 'log.homekit.cameraRecordingUnavailable',

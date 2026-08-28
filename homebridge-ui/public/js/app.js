@@ -72,6 +72,7 @@ const diagnosticsBackgroundAction = document.querySelector('[data-diagnostics-ba
 const advancedPanel = document.querySelector('[data-advanced-settings]');
 const advancedClose = document.querySelector('[data-advanced-close]');
 const advancedPolling = document.querySelector('[data-advanced-polling]');
+const advancedConcurrentMedia = document.querySelector('[data-advanced-concurrent-media]');
 const advancedFfmpeg = document.querySelector('[data-advanced-ffmpeg]');
 const warmUpAvailable = document.querySelector('[data-warm-up-available]');
 const warmUpChosen = document.querySelector('[data-warm-up-chosen]');
@@ -582,6 +583,7 @@ menuDiagnostics.addEventListener('click', async () => {
 menuAdvanced.addEventListener('click', async () => {
   const config = configuredBlock() ?? {};
   advancedPolling.value = String(config.pollingIntervalMinutes ?? 10);
+  advancedConcurrentMedia.value = String(config.maxConcurrentMediaSessions ?? 0);
   warmUpSelection = [...new Set(Array.isArray(config.warmUpEvents) ? config.warmUpEvents : ['doorbellPress'])].sort();
   warmUpMarked = new Set();
   renderWarmUp();
@@ -622,10 +624,20 @@ async function updateAdvancedSettings() {
     return;
   }
   advancedPolling.setCustomValidity?.('');
+  const rawConcurrentMedia = advancedConcurrentMedia.value.trim();
+  const maxConcurrentMediaSessions = rawConcurrentMedia === '' ? 0 : Number(rawConcurrentMedia);
+  if (!Number.isInteger(maxConcurrentMediaSessions) || maxConcurrentMediaSessions < 0) {
+    advancedConcurrentMedia.setCustomValidity?.(messages.advancedConcurrentMediaInvalid ?? '');
+    advancedConcurrentMedia.reportValidity?.();
+    return;
+  }
+  advancedConcurrentMedia.setCustomValidity?.('');
   const ffmpegPath = advancedFfmpeg.value.trim();
   const next = { ...existing };
   if (pollingIntervalMinutes === 10) delete next.pollingIntervalMinutes;
   else next.pollingIntervalMinutes = pollingIntervalMinutes;
+  if (maxConcurrentMediaSessions === 0) delete next.maxConcurrentMediaSessions;
+  else next.maxConcurrentMediaSessions = maxConcurrentMediaSessions;
   if (ffmpegPath) next.ffmpegPath = ffmpegPath;
   else delete next.ffmpegPath;
   // The default is what the plugin applies when the key is absent, so storing it would only pin today's default.
@@ -641,6 +653,7 @@ async function updateAdvancedSettings() {
 }
 
 advancedPolling.addEventListener('change', updateAdvancedSettings);
+advancedConcurrentMedia.addEventListener('change', updateAdvancedSettings);
 advancedFfmpeg.addEventListener('change', updateAdvancedSettings);
 warmUpAdd.addEventListener('click', () => moveWarmUp('available'));
 warmUpAddAll.addEventListener('click', () => moveWarmUp('available', true));

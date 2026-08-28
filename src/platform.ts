@@ -18,6 +18,7 @@ import { FfmpegLiveMedia, resolveFfmpegIdentity } from './media/live-stream.js';
 import { FfmpegRecordingMedia } from './media/recording.js';
 import { PersistedLastSuccessfulImages } from './media/last-successful-image.js';
 import { SnapshotAcquisition } from './media/snapshot.js';
+import { DeclaredMediaSessionBudget } from './media/session-budget.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -70,10 +71,12 @@ export function createEufyPlatform(
       const recordingMedia = configuredConfig.ffmpegPath
         ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath, adaptationDiagnostics)
         : undefined;
+      const mediaBudget = new DeclaredMediaSessionBudget(configuredConfig.maxConcurrentMediaSessions);
       const snapshotMedia = new SnapshotAcquisition(
         storageRoot
           ? new PersistedLastSuccessfulImages(storageRoot, () => reportInvalidSnapshotCache(diagnosticLog))
           : undefined,
+        mediaBudget,
       );
       if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
         reportDiscardedV4Settings(diagnosticLog);
@@ -123,6 +126,7 @@ export function createEufyPlatform(
             liveMedia,
             snapshotMedia,
             recordingMedia,
+            mediaBudget,
           );
           this.reconciler.start();
         }

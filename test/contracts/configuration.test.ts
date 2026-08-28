@@ -39,6 +39,11 @@ describe('V5 configuration', () => {
     expect(schema.schema.properties.country.default).toBe('US');
     expect(schema.schema.properties.trustedDeviceName.default).toBe('Homebridge Eufy');
     expect(schema.schema.properties.pollingIntervalMinutes.default).toBe(10);
+    expect(schema.schema.properties.maxConcurrentMediaSessions.default).toBe(0);
+    expect(
+      schema.schema.properties.maxConcurrentMediaSessions.description,
+      'zero is not an obvious way to spell unlimited, so the schema has to say so',
+    ).toMatch(/unlimited/i);
     expect(schema.schema.properties.warmUpEvents.default).toEqual(['doorbellPress']);
     expect(
       schema.schema.properties.warmUpEvents.items,
@@ -70,6 +75,7 @@ describe('V5 configuration', () => {
       country: 'US',
       trustedDeviceName: 'Homebridge Eufy',
       pollingIntervalMinutes: 10,
+      maxConcurrentMediaSessions: 0,
       warmUpEvents: ['doorbellPress'],
       ffmpegPath,
       entityPreferences: {},
@@ -85,6 +91,32 @@ describe('V5 configuration', () => {
     expect(() => parseConfig({ platform: 'EufySecurity' })).toThrowError('platform must be HomebridgeEufy');
   });
 
+  it('leaves concurrent media unlimited until an operator declares a limit', () => {
+    expect(
+      parseConfig({ platform: 'HomebridgeEufy' }).maxConcurrentMediaSessions,
+      'the plugin cannot know what a host carries, so it changes nothing until told',
+    ).toBe(0);
+    expect(parseConfig({ platform: 'HomebridgeEufy', maxConcurrentMediaSessions: 0 }).maxConcurrentMediaSessions).toBe(
+      0,
+    );
+    expect(parseConfig({ platform: 'HomebridgeEufy', maxConcurrentMediaSessions: 1 }).maxConcurrentMediaSessions).toBe(
+      1,
+    );
+  });
+
+  it('refuses a concurrent media limit that is not a whole count, rather than clamping one', () => {
+    for (const maxConcurrentMediaSessions of [-1, 1.5, '2', Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        () => parseConfig({ platform: 'HomebridgeEufy', maxConcurrentMediaSessions }),
+        `${JSON.stringify(maxConcurrentMediaSessions)} has to be refused rather than quietly repaired`,
+      ).toThrowError('maxConcurrentMediaSessions must be a non-negative integer');
+    }
+    expect(
+      parseConfig({ platform: 'HomebridgeEufy', maxConcurrentMediaSessions: null }).maxConcurrentMediaSessions,
+      'an explicit null reads as unset here, as it already does for the polling interval beside it',
+    ).toBe(0);
+  });
+
   it('round trips overrides and preferences for entities absent from discovery', () => {
     const absentSerial = 'synthetic-absent-entity';
     const input = {
@@ -95,6 +127,7 @@ describe('V5 configuration', () => {
       trustedDeviceName: 'Synthetic Bridge',
       pollingIntervalMinutes: 3,
       ffmpegPath: '/synthetic/ffmpeg',
+      maxConcurrentMediaSessions: 4,
       entityPreferences: {
         [absentSerial]: {
           represented: false,
@@ -116,6 +149,7 @@ describe('V5 configuration', () => {
       pollingIntervalMinutes: 3,
       warmUpEvents: ['doorbellPress'],
       ffmpegPath: '/synthetic/ffmpeg',
+      maxConcurrentMediaSessions: 4,
       entityPreferences: {
         [absentSerial]: {
           represented: false,
@@ -151,6 +185,7 @@ describe('V5 configuration', () => {
       country: 'CA',
       trustedDeviceName: 'V5 bridge',
       pollingIntervalMinutes: 2,
+      maxConcurrentMediaSessions: 0,
       warmUpEvents: ['doorbellPress'],
       ffmpegPath: '/legacy/ffmpeg',
       entityPreferences: {

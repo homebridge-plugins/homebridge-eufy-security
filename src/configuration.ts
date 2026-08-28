@@ -5,6 +5,8 @@ import { PLATFORM_NAME } from './settings.js';
 export const DEFAULT_COUNTRY = 'US';
 export const DEFAULT_TRUSTED_DEVICE_NAME = 'Homebridge Eufy';
 export const DEFAULT_POLLING_INTERVAL_MINUTES = 10;
+/** No declared ceiling on concurrent media, which is what the plugin has always behaved as. */
+export const DEFAULT_MAX_CONCURRENT_MEDIA_SESSIONS = 0;
 export const DEFAULT_WARM_UP_EVENTS: readonly string[] = ['doorbellPress'];
 
 export type SnapshotMode = 'Cloud' | 'Live' | 'Refresh';
@@ -28,6 +30,7 @@ export interface EufyConfig {
   country: string;
   trustedDeviceName: string;
   pollingIntervalMinutes: number;
+  maxConcurrentMediaSessions: number;
   warmUpEvents: string[];
   ffmpegPath: string | undefined;
   entityPreferences: Record<string, EntityPreference>;
@@ -49,6 +52,19 @@ export interface EufyConfig {
  * the camera that reported it and no other, so each camera is warmed only by the events it reports itself. It is
  * not free either — a camera running on its own battery is kept awake for the whole idle window that follows, so
  * a camera reporting often may never sleep. Which events earn that is the user's call.
+ */
+
+/**
+ * How many live sessions and live snapshot acquisitions this host may carry at once, or zero for no ceiling.
+ *
+ * The count is declared rather than derived, because neither input a plugin could derive it from is sound. A
+ * core count is not a capacity: on a containerised eight-core host the readable quota was 2.5 cores, so the
+ * core count overstated it more than threefold. A container quota is not a substitute either, because on a
+ * host without one the file does not exist. Only the operator knows what else that host is for.
+ *
+ * One count covers both kinds of work because both are one SDK pull and at least one adaptation process, so
+ * counting them apart would leave the operator adding two numbers to predict what the host carries. Zero is
+ * the default and means unlimited, so an installation that never sets it behaves exactly as before.
  */
 
 const ENTITY_PREFERENCE_KEYS = new Set<keyof EntityPreference>(['represented', 'audio', 'snapshotMode']);
@@ -139,6 +155,10 @@ export function parseConfig(value: unknown): EufyConfig {
   if (!Number.isInteger(pollingIntervalMinutes) || (pollingIntervalMinutes as number) < 0) {
     throw new TypeError('pollingIntervalMinutes must be a non-negative integer');
   }
+  const maxConcurrentMediaSessions = value.maxConcurrentMediaSessions ?? DEFAULT_MAX_CONCURRENT_MEDIA_SESSIONS;
+  if (!Number.isInteger(maxConcurrentMediaSessions) || (maxConcurrentMediaSessions as number) < 0) {
+    throw new TypeError('maxConcurrentMediaSessions must be a non-negative integer');
+  }
   const warmUpEvents = parseWarmUpEvents(value.warmUpEvents);
   const configuredFfmpegPath = optionalString(value, 'ffmpegPath');
   if (configuredFfmpegPath === '') {
@@ -152,6 +172,7 @@ export function parseConfig(value: unknown): EufyConfig {
     country: country.toUpperCase(),
     trustedDeviceName,
     pollingIntervalMinutes: pollingIntervalMinutes as number,
+    maxConcurrentMediaSessions: maxConcurrentMediaSessions as number,
     warmUpEvents,
     ffmpegPath: configuredFfmpegPath ?? bundledFfmpegPath,
     entityPreferences: parseEntityPreferences(value.entityPreferences),
@@ -204,6 +225,7 @@ export function serializeConfig(config: EufyConfig): Record<string, unknown> {
     country: config.country,
     trustedDeviceName: config.trustedDeviceName,
     pollingIntervalMinutes: config.pollingIntervalMinutes,
+    maxConcurrentMediaSessions: config.maxConcurrentMediaSessions,
     warmUpEvents: [...config.warmUpEvents],
     ffmpegPath: config.ffmpegPath,
     entityPreferences: Object.fromEntries(

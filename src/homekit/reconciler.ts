@@ -5,6 +5,7 @@ import type { CompleteDeviceSnapshot } from '../device/snapshot.js';
 import { indexDeviceEvidence } from '../device/member-evidence.js';
 import type {
   LiveMediaAdapter,
+  MediaSessionBudget,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
   SnapshotMode,
@@ -103,6 +104,7 @@ export class HomeKitReconciler {
     private readonly liveMedia?: LiveMediaAdapter,
     private readonly snapshotMedia?: SnapshotMediaAdapter,
     private readonly recordingMedia?: RecordingMediaAdapter,
+    private readonly mediaBudget?: MediaSessionBudget,
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -196,6 +198,7 @@ export class HomeKitReconciler {
           liveMedia: this.liveMedia,
           recordingMedia: this.recordingMedia,
           snapshotMedia: this.snapshotMedia,
+          ...(this.mediaBudget ? { mediaBudget: this.mediaBudget } : {}),
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
           snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
           availability: () => this.source.currentAvailability?.(serial),

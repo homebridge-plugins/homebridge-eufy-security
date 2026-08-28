@@ -68,6 +68,7 @@ import { CAMERA_STREAMING_ADAPTER } from '../../src/homekit/adapters/camera-stre
 import { DOORBELL_ADAPTER } from '../../src/homekit/adapters/doorbell.js';
 import { MOTION_ADAPTER } from '../../src/homekit/adapters/motion.js';
 import { SnapshotAcquisition, type LastSuccessfulImages } from '../../src/media/snapshot.js';
+import { DeclaredMediaSessionBudget } from '../../src/media/session-budget.js';
 
 const HAP = {
   Service,
@@ -497,7 +498,7 @@ describe('camera streaming bundle adapter', () => {
       accessory: target,
       hap: HAP,
       liveMedia: { prepare: vi.fn() },
-      snapshotMedia: new SnapshotAcquisition(images, () => Buffer.from('not a jpeg')),
+      snapshotMedia: new SnapshotAcquisition(images, undefined, () => Buffer.from('not a jpeg')),
       snapshotMode: 'Refresh',
       audioEnabled: false,
       diagnose: vi.fn(),
@@ -854,7 +855,7 @@ describe('camera streaming bundle adapter', () => {
         accessory: target,
         hap: HAP,
         liveMedia: { prepare: vi.fn() },
-        snapshotMedia: new SnapshotAcquisition(retainedImages(), packaged),
+        snapshotMedia: new SnapshotAcquisition(retainedImages(), undefined, packaged),
         snapshotMode: 'Refresh',
         audioEnabled: false,
         diagnose,
@@ -2177,6 +2178,70 @@ describe('camera streaming bundle adapter', () => {
       expect.objectContaining({ snapshotLive: expect.any(Function) }),
     );
     expect(prepared.stop).not.toHaveBeenCalled();
+  });
+
+  it('refuses a live session the declared media ceiling has no room for, and never ends one to make room', async () => {
+    const target = new Accessory(
+      'Synthetic bounded camera',
+      uuid.generate('synthetic-bounded-camera-stream'),
+    ) as unknown as PlatformAccessory;
+    const configureController = vi.spyOn(target, 'configureController');
+    const sessions = [41000, 41002, 41004].map((videoPort) => ({
+      videoPort,
+      start: vi.fn(async () => undefined),
+      reconfigure: vi.fn(),
+      stop: vi.fn(),
+    }));
+    const prepare = vi.fn(async () => sessions[prepare.mock.calls.length - 1] as PreparedLiveMedia);
+    const diagnose = vi.fn();
+    const observed = vi.fn();
+
+    CAMERA_STREAMING_ADAPTER.attach({
+      device: { sn: SNAPSHOT_SERIAL, camera: () => ({ live: vi.fn() }) } as never,
+      evidence: snapshotEvidence(),
+      accessory: target,
+      hap: HAP,
+      liveMedia: { prepare },
+      mediaBudget: new DeclaredMediaSessionBudget(1),
+      audioEnabled: false,
+      diagnose,
+      observed,
+      persist: vi.fn(),
+    } satisfies AdapterAttachmentContext);
+    const controller = configureController.mock.calls[0][0] as CameraController & {
+      delegate: CameraStreamingDelegate;
+    };
+
+    const established = await callPrepare(controller.delegate, prepareRequest('admitted-session'));
+    expect(established.video.port).toBe(41000);
+
+    await expect(callPrepare(controller.delegate, prepareRequest('refused-session'))).rejects.toThrow(
+      'the declared concurrent media limit is reached',
+    );
+    expect(prepare, 'a refused session opens no port, handle, or process at all').toHaveBeenCalledOnce();
+    expect(
+      sessions[0]!.stop,
+      'the established session is untouched: a viewer cannot tell an eviction from a failure',
+    ).not.toHaveBeenCalled();
+    expect(diagnose.mock.calls.map(([condition]) => condition)).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'camera-media-at-capacity',
+          capability: 'camera',
+          member: 'live',
+          active: true,
+          reason: 'at-capacity',
+        },
+      ]),
+    );
+
+    await callStream(controller.delegate, { sessionID: 'admitted-session', type: StreamRequestTypes.STOP });
+    expect(sessions[0]!.stop).toHaveBeenCalledOnce();
+
+    const readmitted = await callPrepare(controller.delegate, prepareRequest('readmitted-session'));
+    expect(readmitted.video.port, 'capacity has to come back as load falls, with no restart').toBe(41002);
+    expect(observed).toHaveBeenCalledWith('camera-media-at-capacity');
+    expect(JSON.stringify(diagnose.mock.calls)).not.toContain(SNAPSHOT_SERIAL);
   });
 
   it('refuses a live session while the admitted enabled observation says the camera is disabled', async () => {

@@ -679,8 +679,45 @@ expresses every advertised combination exactly, and a measurement on a real cons
 software encoding cannot serve the advertised concurrent-session count. The supporting evidence is in
 [hardware encoder viability](./reference/hardware-encoder-viability.md).
 
-Host capacity for concurrent adaptation is observed, never inferred. A core count is not a capacity and
-a container quota is not always readable, so the plugin admits sessions against the throughput its own
-running adaptations report and refuses a new session while an active one cannot hold real time. It never
-ends an established session to make room, because the accessory cannot renegotiate a selection and
-ending one is indistinguishable from a failure to the viewer.
+### Concurrent media capacity
+
+Concurrent media capacity is declared by whoever runs the host, and unlimited until they declare it. The
+plugin neither infers a capacity nor measures one.
+
+Inferring it is not available. A core count overstates capacity by whatever share of the host the plugin
+does not have: measured on a containerised eight-core host, the readable quota was 2.5 cores, so
+`os.cpus().length` overstated it by a factor of 3.2. A container quota is not a substitute, because on a
+host without one the cgroup file does not exist at all. Neither input is usable, so neither is read.
+
+Measuring it was considered and rejected. Each live adaptation already reports coded frames on a timer, so
+a throughput estimator is buildable, but a session coding below its negotiated rate does not identify its
+own cause: a saturated host, a stalled SDK source, a source held by backpressure, and a camera delivering
+below the negotiated rate all read the same way. Refusing a session for a cause the signal cannot
+establish presents as a broken camera, which is a worse and more visible defect than the degraded picture
+it would prevent. Backpressure already bounds what an overloaded host can damage, so what remains at stake
+is picture quality rather than plugin liveness.
+
+A declared limit carries no such ambiguity, because it states an intent rather than estimating a fact. One
+limit covers live sessions and live snapshot acquisitions together: each is one SDK pull and at least one
+adaptation process, and a still on an idle camera is routinely the call that opens the pull, so counting
+them apart would leave the operator summing two numbers to predict what the host carries. Work whose cost
+is already admitted elsewhere is not counted twice — a snapshot request that joins an acquisition already
+in flight, and a still taken from a source a live session is holding open, both ride the share that was
+already granted.
+
+The limit is applied at admission only. An established session is never ended to make room, because the
+accessory cannot renegotiate a selection and ending one is indistinguishable from a failure to whoever is
+watching it. A refused live session reports one bounded reason of its own, kept apart from the enablement
+refusal because the two are withdrawn by different events and name different things to do about them, and
+opens no port, handle, or process. A refused snapshot falls back to the camera's retained image, so a
+bounded host answers a camera list with real if older pictures rather than nothing, and a refused
+background refresh spends no part of its refresh window, since a refusal is not a refresh. Capacity
+therefore recovers as sessions end, with no restart and no reconciliation.
+
+The background live refresh of a `Refresh` camera is spread rather than run on a shared clock. Every camera
+answers its first request from its retained image and starts one refresh behind it, so a controller that
+asks about every camera at once leaves them all falling due at the same instant; a fixed interval would
+keep them there for as long as the plugin runs. Each camera therefore draws its own next due time, up to
+half an interval later, and commits it when the refresh starts. Deriving it per request instead would take
+the shortest of many draws and return the busiest cameras to the shared clock.
+

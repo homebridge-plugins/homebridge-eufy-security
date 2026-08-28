@@ -44,7 +44,7 @@ describe('live refresh spread', () => {
     try {
       const images = retainedImages(serials.map((serial) => [serial, jpeg(`retained ${serial}`)]));
       const draws = [0, 1];
-      const acquisition = new SnapshotAcquisition(images, undefined, () => draws.shift() ?? 0);
+      const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => draws.shift() ?? 0);
       const cameras = serials.map((serial) => camera(`refreshed ${serial}`));
       const scopes = serials.map((serial) => ({ identity: {}, serial }));
 
@@ -80,7 +80,7 @@ describe('live refresh spread', () => {
       const [serial] = serials;
       const images = retainedImages([[serial, jpeg('retained')]]);
       const draws = [1, 0, 0, 0, 0];
-      const acquisition = new SnapshotAcquisition(images, undefined, () => draws.shift() ?? 0);
+      const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => draws.shift() ?? 0);
       const source = camera('refreshed');
       const scope = { identity: {}, serial };
 
