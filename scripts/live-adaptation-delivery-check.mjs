@@ -517,7 +517,7 @@ async function measure({ executable, open, feed, fps, results, label }) {
       ` processes=${report.processes} fed=${fed} withheld=${report.withheld} coded=${coded}` +
       ` dup=${report.duplicated} thinned=${report.thinned} accounted=${report.accounted}` +
       ` floor=${report.codedFloor} window=${fedSeconds.toFixed(1)}s packets=${report.endpointPackets}` +
-      ` firstCoded=${report.firstCodedAfterMs ?? 'never'}ms`,
+      ` firstCoded=${report.firstCodedAfterMs ?? 'never'}ms outcomes=${JSON.stringify(reported)}`,
   );
   for (const diagnostic of report.diagnostics) {
     console.log(`    ffmpeg: ${diagnostic}`);
