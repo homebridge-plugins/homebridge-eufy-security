@@ -1,10 +1,13 @@
 import type { LiveAudioFrame, LiveStreamHandle, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
 import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
 import { createSocket } from 'node:dgram';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
 import type {
+  AdaptationDiagnostics,
+  AdaptationEvent,
+  AdaptationRole,
   LiveMediaAdapter,
   LiveMediaSource,
   LiveMediaTarget,
@@ -55,6 +58,104 @@ export interface MediaProcess {
   kill(signal?: NodeJS.Signals): boolean;
 }
 
+/** How many diagnostic lines one adaptation retains, which is what a failure is attributed from. */
+const ADAPTATION_STDERR_TAIL_LINES = 8;
+/** The longest partial line held while waiting for its terminator, so a silent process cannot grow one. */
+const ADAPTATION_STDERR_PARTIAL_BYTES = 512;
+
+/**
+ * Splits one adaptation process's stderr into whole lines and retains a bounded tail of the diagnostic
+ * ones.
+ *
+ * Both consumers of that pipe read it: `-progress pipe:2` writes the key/value block that says adaptation
+ * reached its output, and everything else on it is the only account of why a process refused or stopped.
+ * Progress lines are excluded from the tail because they are emitted on a timer and would otherwise be the
+ * whole of it by the time anything went wrong.
+ */
+export class AdaptationStderr {
+  private partial = '';
+  private readonly retained: string[] = [];
+
+  /** Consumes one chunk and returns the lines it completed, in the order they were written. */
+  observe(chunk: Buffer): readonly string[] {
+    const lines = `${this.partial}${chunk.toString()}`.split(/\r?\n/);
+    this.partial = lines.pop()?.slice(-ADAPTATION_STDERR_PARTIAL_BYTES) ?? '';
+    for (const line of lines) {
+      if (line.trim() === '' || line.startsWith('progress=')) {
+        continue;
+      }
+      this.retained.push(line);
+      if (this.retained.length > ADAPTATION_STDERR_TAIL_LINES) {
+        this.retained.shift();
+      }
+    }
+    return lines;
+  }
+
+  /** The retained diagnostic tail, oldest first. */
+  tail(): readonly string[] {
+    return [...this.retained];
+  }
+}
+
+/**
+ * Which FFmpeg an adaptation will run, so a failure can be attributed to a build rather than to FFmpeg in
+ * general.
+ *
+ * `version` is the binary's own banner and is absent when it did not answer at all, which is what a path
+ * naming nothing runnable looks like. That distinction is the whole point of resolving it before any media
+ * exists: a bundled static build and a distribution build on the same host have completely different
+ * encoder sets, and neither can be inferred from the host facts alone.
+ */
+export interface FfmpegIdentity {
+  readonly path: string;
+  readonly source: 'bundled' | 'configured';
+  readonly version?: string;
+}
+
+/** How the version banner is read: the executable's own answer, or nothing where it did not give one. */
+export type FfmpegVersionProbe = (path: string) => Promise<string | undefined>;
+
+/** How long the version probe is allowed to take before the binary counts as not having answered. */
+const FFMPEG_VERSION_PROBE_TIMEOUT_MS = 5_000;
+/** How much of the banner is kept: enough for the build and version, and no more. */
+const FFMPEG_VERSION_BANNER_LENGTH = 120;
+
+/**
+ * Runs `-version` on one path and returns its first banner line, or nothing where it produced none.
+ *
+ * Every failure answers the same way, because none of them can be told apart by a caller that only needs
+ * to know whether this binary can be asked to encode: a missing file, a file that is not executable, one
+ * that is not FFmpeg, and one that hangs all mean the same thing to the media that would have used it.
+ */
+const probeFfmpegVersion: FfmpegVersionProbe = (path) =>
+  new Promise((resolve) => {
+    execFile(
+      path,
+      ['-hide_banner', '-version'],
+      { timeout: FFMPEG_VERSION_PROBE_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true },
+      (error, stdout) => {
+        const banner = error ? undefined : stdout.split(/\r?\n/, 1)[0]?.trim().slice(0, FFMPEG_VERSION_BANNER_LENGTH);
+        resolve(banner === undefined || banner === '' ? undefined : banner);
+      },
+    );
+  });
+
+/**
+ * Resolves the complete identity of one adaptation binary, without opening any media.
+ *
+ * Reading the banner spawns the binary, so this is asked once at launch and its answer is not waited on: a
+ * support archive is worth one process at startup, and no camera is worth delaying for one.
+ */
+export async function resolveFfmpegIdentity(
+  path: string,
+  source: 'bundled' | 'configured',
+  probe: FfmpegVersionProbe = probeFfmpegVersion,
+): Promise<FfmpegIdentity> {
+  const version = await probe(path).catch(() => undefined);
+  return { path, source, ...(version === undefined ? {} : { version }) };
+}
+
 export interface ReservedMediaPort {
   readonly port: number;
   onMessage(listener: () => void): void;
@@ -72,6 +173,7 @@ export type MediaPortFactory = (addressVersion: 'ipv4' | 'ipv6') => Promise<Rese
 export class FfmpegLiveMedia implements LiveMediaAdapter {
   constructor(
     private readonly executable: string,
+    private readonly adaptationDiagnostics?: AdaptationDiagnostics,
     private readonly createProcess: LiveMediaProcessFactory = spawnLiveMediaProcess,
     private readonly reservePort: MediaPortFactory = reserveMediaPort,
     private readonly createReturnAudioProcess: ReturnAudioProcessFactory = spawnReturnAudioProcess,
@@ -115,6 +217,35 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     let rtcpObserved = false;
     let streaming = false;
     const stoppingProcesses = new WeakSet<object>();
+    const { adaptationDiagnostics } = this;
+
+    /**
+     * Reports what one adaptation process did, whether or not the session it belonged to fails for it.
+     *
+     * An audio adaptation is restarted rather than failed and a return-audio one fails only talkback, so
+     * without a report of their own those two exit with no account anywhere of why they stopped. An `output`
+     * report carries nothing but the tail, so it is made only when the process actually wrote something:
+     * a silent process that ended as intended has nothing to attribute.
+     */
+    const reportAdaptation = (
+      role: AdaptationRole,
+      event: AdaptationEvent,
+      stderr: AdaptationStderr,
+      code?: number | null,
+      signal?: NodeJS.Signals | null,
+    ): void => {
+      const tail = stderr.tail();
+      if (event === 'output' && tail.length === 0) {
+        return;
+      }
+      adaptationDiagnostics?.report({
+        role,
+        event,
+        ...(typeof code === 'number' ? { code } : {}),
+        ...(typeof signal === 'string' ? { signal } : {}),
+        ...(tail.length ? { stderr: tail } : {}),
+      });
+    };
 
     const stopProcess = (process: MediaProcess | undefined): void => {
       if (!process) {
@@ -273,11 +404,11 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           videoArguments(frame, negotiated.video, targetAddress, transport.video),
         );
         videoProcess = child;
-        let progressRemainder = '';
+        const stderr = new AdaptationStderr();
+        let producedOutput = false;
         child.stderr.on('data', (chunk: Buffer) => {
-          const lines = `${progressRemainder}${chunk.toString()}`.split(/\r?\n/);
-          progressRemainder = lines.pop()?.slice(-64) ?? '';
-          if (lines.some((line) => line.startsWith('progress='))) {
+          if (stderr.observe(chunk).some((line) => line.startsWith('progress='))) {
+            producedOutput = true;
             observeAdaptationProgress(child);
           }
         });
@@ -288,13 +419,23 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         });
         child.on('error', () => {
           if (!stoppingProcesses.has(child)) {
-            failVideo('adaptation-failed');
+            reportAdaptation('live-video', producedOutput ? 'exited-while-streaming' : 'spawn-failed', stderr);
+            failVideo(producedOutput ? 'adaptation-exited-while-streaming' : 'adaptation-spawn-failed');
           }
         });
-        child.on('exit', () => {
-          if (!stopped && !stoppingProcesses.has(child)) {
-            failVideo('adaptation-failed');
+        child.on('exit', (code, signal) => {
+          if (stopped || stoppingProcesses.has(child)) {
+            reportAdaptation('live-video', 'output', stderr, code, signal);
+            return;
           }
+          reportAdaptation(
+            'live-video',
+            producedOutput ? 'exited-while-streaming' : 'exited-before-output',
+            stderr,
+            code,
+            signal,
+          );
+          failVideo(producedOutput ? 'adaptation-exited-while-streaming' : 'adaptation-exited-before-output');
         });
       }
       videoProcess.stdin.write(frame.data);
@@ -310,7 +451,13 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           audioArguments(frame, negotiated.audio, targetAddress, transport.audio),
         );
         audioProcess = child;
-        child.stderr.resume();
+        const stderr = new AdaptationStderr();
+        let producedOutput = false;
+        child.stderr.on('data', (chunk: Buffer) => {
+          if (stderr.observe(chunk).some((line) => line.startsWith('progress='))) {
+            producedOutput = true;
+          }
+        });
         const clearChild = (): void => {
           if (audioProcess === child) {
             audioProcess = undefined;
@@ -321,10 +468,26 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           clearChild();
         });
         child.on('error', () => {
+          if (!stoppingProcesses.has(child)) {
+            reportAdaptation('live-audio', producedOutput ? 'exited-while-streaming' : 'spawn-failed', stderr);
+          }
           stopProcess(child);
           clearChild();
         });
-        child.on('exit', clearChild);
+        child.on('exit', (code, signal) => {
+          reportAdaptation(
+            'live-audio',
+            stopped || stoppingProcesses.has(child)
+              ? 'output'
+              : producedOutput
+                ? 'exited-while-streaming'
+                : 'exited-before-output',
+            stderr,
+            code,
+            signal,
+          );
+          clearChild();
+        });
       }
       if (audioInputCodec !== frame.codec) {
         stopProcess(audioProcess);
@@ -436,23 +599,38 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         }
         const child = this.createReturnAudioProcess(this.executable, returnAudioArguments());
         returnAudioProcess = child;
-        child.stderr.resume();
+        const stderr = new AdaptationStderr();
+        let producedOutput = false;
+        child.stderr.on('data', (chunk: Buffer) => stderr.observe(chunk));
         child.stdin.on('error', () => {
           if (!stoppingProcesses.has(child)) {
             failTalkback('adaptation-failed');
           }
         });
-        child.stdout.on('data', (chunk: Buffer) => writeReturnAudio(camera, child, chunk));
+        child.stdout.on('data', (chunk: Buffer) => {
+          producedOutput = true;
+          writeReturnAudio(camera, child, chunk);
+        });
         child.stdout.on('error', () => failTalkback('adaptation-failed'));
         child.on('error', () => {
           if (!stoppingProcesses.has(child)) {
+            reportAdaptation('return-audio', producedOutput ? 'exited-while-streaming' : 'spawn-failed', stderr);
             failTalkback('adaptation-failed');
           }
         });
-        child.on('exit', () => {
-          if (!stopped && !talkbackEnded && !stoppingProcesses.has(child)) {
-            failTalkback('adaptation-failed');
+        child.on('exit', (code, signal) => {
+          if (stopped || talkbackEnded || stoppingProcesses.has(child)) {
+            reportAdaptation('return-audio', 'output', stderr, code, signal);
+            return;
           }
+          reportAdaptation(
+            'return-audio',
+            producedOutput ? 'exited-while-streaming' : 'exited-before-output',
+            stderr,
+            code,
+            signal,
+          );
+          failTalkback('adaptation-failed');
         });
         child.stdin.end(returnAudioSdp(audioPort.port, selection, transport.audio, transport.addressVersion));
         await new Promise((resolve) => setTimeout(resolve, RETURN_AUDIO_BIND_GRACE_MS));

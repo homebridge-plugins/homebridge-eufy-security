@@ -9,15 +9,17 @@ import type {
   TalkbackHandle,
 } from '@mega-yfue/eufy-sdk';
 import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
+import bundledFfmpegPath from 'ffmpeg-for-homebridge';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  AdaptationNotice,
   LiveSessionOutcome,
   NegotiatedLiveAudio,
   NegotiatedLiveVideo,
   TalkbackOutcome,
 } from '../../src/media/contracts.js';
-import { FfmpegLiveMedia, type MediaProcess } from '../../src/media/live-stream.js';
+import { FfmpegLiveMedia, resolveFfmpegIdentity, type MediaProcess } from '../../src/media/live-stream.js';
 
 const NEGOTIATED_VIDEO: NegotiatedLiveVideo = {
   width: 1280,
@@ -149,8 +151,10 @@ async function talkbackSession(talkback: () => Promise<TalkbackHandle>) {
   const ports: Array<{ port: number; onMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
   const talkbackOutcomes: TalkbackOutcome[] = [];
   const onVideoFailure = vi.fn();
+  const notices: AdaptationNotice[] = [];
   const media = new FfmpegLiveMedia(
     '/synthetic/ffmpeg',
+    { report: (notice) => notices.push(notice) },
     (_executable, args) => {
       const child = process();
       children.push(child);
@@ -188,7 +192,18 @@ async function talkbackSession(talkback: () => Promise<TalkbackHandle>) {
     onTalkbackOutcome: (outcome) => talkbackOutcomes.push(outcome),
   });
   await prepared.start({ live: async () => stream, talkback }, { video: NEGOTIATED_VIDEO, audio: AAC_ELD_16 });
-  return { prepared, stream, children, spawned, returned, returnedArgs, ports, talkbackOutcomes, onVideoFailure };
+  return {
+    prepared,
+    stream,
+    children,
+    spawned,
+    returned,
+    returnedArgs,
+    ports,
+    talkbackOutcomes,
+    onVideoFailure,
+    notices,
+  };
 }
 
 /**
@@ -205,9 +220,11 @@ async function liveSession(
   const released = vi.fn();
   const children: SyntheticProcess[] = [];
   const spawned: string[][] = [];
+  const notices: AdaptationNotice[] = [];
   let receiverReport: (() => void) | undefined;
   const media = new FfmpegLiveMedia(
     '/synthetic/ffmpeg',
+    { report: (notice) => notices.push(notice) },
     (_executable, args) => {
       const child = process();
       children.push(child);
@@ -253,6 +270,7 @@ async function liveSession(
     onVideoFailure,
     outcomes,
     released,
+    notices,
     start: (): Promise<void> =>
       prepared.start(source ?? { live: async () => stream }, { video: NEGOTIATED_VIDEO, ...(audio ? { audio } : {}) }),
     receiverReport: (): void => receiverReport?.(),
@@ -399,6 +417,151 @@ describe('live media adaptation', () => {
       { outcome: 'failed', reason: 'rtcp-timeout', stage: 'controller-rtcp' },
     ]);
     vi.useRealTimers();
+  });
+
+  /**
+   * `FFmpeg exited with code: 234`, five reporters and two hours of troubleshooting is what one shared reason
+   * costs. A binary that never started names the path; one that exited before producing anything names the
+   * build's encoders, arguments or format; one that exited after it had been streaming names a run that was
+   * working. The three have different fixes, so they are reported apart, and the process's own stderr tail is
+   * reported with them because it states which of the three it actually was.
+   */
+  it('tells an adaptation that never started from one that exited before its first output', async () => {
+    const spawnFailed = await liveSession();
+    await spawnFailed.start();
+    spawnFailed.stream.video(KEYFRAME);
+    spawnFailed.children[0]!.emit('error', new Error('spawn /synthetic/ffmpeg ENOENT'));
+    await settle();
+
+    expect(spawnFailed.outcomes).toEqual([
+      { outcome: 'failed', reason: 'adaptation-spawn-failed', stage: 'first-adapted-output' },
+    ]);
+    expect(spawnFailed.notices).toEqual([{ role: 'live-video', event: 'spawn-failed' }]);
+
+    const exited = await liveSession();
+    await exited.start();
+    exited.stream.video(KEYFRAME);
+    exited.children[0]!.stderr.push("Unknown encoder 'libx264'\n");
+    await settle();
+    exited.children[0]!.emit('exit', 234, null);
+    await settle();
+
+    expect(exited.outcomes).toEqual([
+      { outcome: 'failed', reason: 'adaptation-exited-before-output', stage: 'first-adapted-output' },
+    ]);
+    expect(exited.notices).toEqual([
+      { role: 'live-video', event: 'exited-before-output', code: 234, stderr: ["Unknown encoder 'libx264'"] },
+    ]);
+  });
+
+  it('tells an adaptation that stopped mid-session from one that never produced output', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+    session.children[0]!.stderr.push('progress=continue\n');
+    await settle();
+    session.children[0]!.emit('exit', null, 'SIGSEGV');
+    await settle();
+
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'adaptation-exited-while-streaming', stage: 'first-adapted-output' },
+    ]);
+    expect(session.notices).toEqual([{ role: 'live-video', event: 'exited-while-streaming', signal: 'SIGSEGV' }]);
+  });
+
+  /**
+   * `-progress pipe:2` writes its block on a timer whether or not media reaches the process, so retaining
+   * everything on that pipe would leave the tail holding nothing but progress by the time anything went
+   * wrong. Only the diagnostic lines are kept, bounded, and a line still waiting for its terminator is not
+   * one of them.
+   */
+  it('retains only the last diagnostic lines of an adaptation, never its progress block', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+    for (let index = 0; index < 12; index += 1) {
+      session.children[0]!.stderr.push(`diagnostic line ${index}\nprogress=continue\nframe=${index}\n`);
+    }
+    session.children[0]!.stderr.push('a line with no terminator yet');
+    await settle();
+    session.children[0]!.emit('exit', 1, null);
+    await settle();
+
+    expect(session.notices).toEqual([
+      {
+        role: 'live-video',
+        event: 'exited-while-streaming',
+        code: 1,
+        stderr: [
+          'diagnostic line 8',
+          'frame=8',
+          'diagnostic line 9',
+          'frame=9',
+          'diagnostic line 10',
+          'frame=10',
+          'diagnostic line 11',
+          'frame=11',
+        ],
+      },
+    ]);
+  });
+
+  it('reports an audio adaptation that stopped without failing the video it runs beside', async () => {
+    const session = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await session.start();
+    session.stream.video(KEYFRAME);
+    session.stream.audio({ codec: 'aac', data: Buffer.alloc(4) });
+    await settle();
+    session.children[1]!.stderr.push("Unknown encoder 'libfdk_aac'\n");
+    await settle();
+    session.children[1]!.emit('exit', 1, null);
+    await settle();
+
+    expect(session.outcomes, 'a silent camera is not a broken one, so audio never fails the session').toEqual([]);
+    expect(session.onVideoFailure).not.toHaveBeenCalled();
+    expect(session.notices).toEqual([
+      {
+        role: 'live-audio',
+        event: 'exited-before-output',
+        code: 1,
+        stderr: ["Unknown encoder 'libfdk_aac'"],
+      },
+    ]);
+  });
+
+  /**
+   * A profile that declares FFmpeg output has to receive some for a session that worked, not only for one
+   * that failed: an unwatchable live view is a working session whose adaptation warned its way through it.
+   * A process that ended as the session intended is therefore reported for what it wrote, with no reason
+   * raised against the camera, and a process that wrote nothing is not reported at all.
+   */
+  it('reports what a deliberately stopped adaptation wrote, without failing the session for it', async () => {
+    const noisy = await liveSession();
+    await noisy.start();
+    noisy.stream.video(KEYFRAME);
+    noisy.children[0]!.stderr.push('progress=continue\nPast duration 0.799995 too large\n');
+    await settle();
+    noisy.prepared.stop();
+    noisy.children[0]!.emit('exit', 0, 'SIGTERM');
+    await settle();
+
+    expect(noisy.outcomes, 'a stopped session is not a failed one').toEqual([{ outcome: 'streaming' }]);
+    expect(noisy.onVideoFailure).not.toHaveBeenCalled();
+    expect(noisy.notices).toEqual([
+      { role: 'live-video', event: 'output', code: 0, signal: 'SIGTERM', stderr: ['Past duration 0.799995 too large'] },
+    ]);
+
+    const silent = await liveSession();
+    await silent.start();
+    silent.stream.video(KEYFRAME);
+    silent.children[0]!.stderr.push('progress=continue\n');
+    await settle();
+    silent.prepared.stop();
+    silent.children[0]!.emit('exit', 0, 'SIGTERM');
+    await settle();
+
+    expect(silent.notices, 'a process that said nothing has nothing to attribute').toEqual([]);
   });
 
   it('does not let an early receiver report bound a session before its media starts', async () => {
@@ -551,7 +714,7 @@ describe('live media adaptation', () => {
       spawned.push({ executable, args: [...args], process: child });
       return child;
     });
-    const media = new FfmpegLiveMedia('/synthetic/ffmpeg', spawn, async () => ({
+    const media = new FfmpegLiveMedia('/synthetic/ffmpeg', undefined, spawn, async () => ({
       port: 41000,
       onMessage: vi.fn(),
       close: vi.fn(),
@@ -641,6 +804,7 @@ describe('live media adaptation', () => {
       const spawned: string[][] = [];
       const media = new FfmpegLiveMedia(
         '/synthetic/ffmpeg',
+        undefined,
         (_executable, args) => {
           spawned.push([...args]);
           return process();
@@ -711,6 +875,7 @@ describe('live media adaptation', () => {
     const spawned: string[][] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
+      undefined,
       (_executable, args) => {
         spawned.push([...args]);
         return process();
@@ -821,6 +986,7 @@ describe('live media adaptation', () => {
     const spawned: string[][] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
+      undefined,
       (_executable, args) => {
         spawned.push([...args]);
         return process();
@@ -874,6 +1040,7 @@ describe('live media adaptation', () => {
     const children: SyntheticProcess[] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
+      undefined,
       () => {
         const child = process();
         children.push(child);
@@ -947,6 +1114,7 @@ describe('live media adaptation', () => {
     const spawnedArgs: string[][] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
+      undefined,
       (_executable, args) => {
         const child = process();
         children.push(child);
@@ -1125,6 +1293,7 @@ describe('isolated return-audio adaptation', () => {
     const returned: SyntheticReturnAudioProcess[] = [];
     const media = new FfmpegLiveMedia(
       '/synthetic/ffmpeg',
+      undefined,
       () => process(),
       async () => {
         const audio = reservations++ === 1;
@@ -1303,6 +1472,10 @@ describe('isolated return-audio adaptation', () => {
     expect(session.stream.stop).not.toHaveBeenCalled();
     expect(session.onVideoFailure).not.toHaveBeenCalled();
     expect(session.talkbackOutcomes).toEqual([{ outcome: 'failed', reason: 'adaptation-failed' }]);
+    expect(
+      session.notices,
+      'return audio fails only talkback, so without a report of its own its stderr has no account anywhere',
+    ).toEqual([{ role: 'return-audio', event: 'spawn-failed' }]);
   });
 
   it('contains a synchronous SDK talkback acquisition failure inside return audio', async () => {
@@ -1382,5 +1555,50 @@ describe('isolated return-audio adaptation', () => {
     expect(session.children[0]!.kill).toHaveBeenCalledWith('SIGTERM');
     expect(session.stream.stop).toHaveBeenCalledOnce();
     expect(session.ports.every(({ close }) => close.mock.calls.length > 0)).toBe(true);
+  });
+});
+
+describe('adaptation binary identity', () => {
+  /**
+   * A bundled static build and a distribution build on the same host advertise different encoder sets, so
+   * without the binary's own banner an adaptation failure can be attributed to FFmpeg in general and no
+   * further. A path that names nothing runnable answers with no banner at all, and that absence is what
+   * distinguishes a missing or wrong configured path from an encoder the resolved build does not have.
+   */
+  it('reports the resolved path, which build it is, and the binary\u2019s own banner', async () => {
+    const probe = vi.fn(async () => 'ffmpeg version 8.0 Copyright (c) 2000-2026 the FFmpeg developers');
+
+    await expect(resolveFfmpegIdentity('/synthetic/bin/ffmpeg', 'configured', probe)).resolves.toEqual({
+      path: '/synthetic/bin/ffmpeg',
+      source: 'configured',
+      version: 'ffmpeg version 8.0 Copyright (c) 2000-2026 the FFmpeg developers',
+    });
+    expect(probe).toHaveBeenCalledWith('/synthetic/bin/ffmpeg');
+  });
+
+  it('reports a binary that did not answer without inventing a version for it', async () => {
+    await expect(resolveFfmpegIdentity('/synthetic/absent', 'bundled', async () => undefined)).resolves.toEqual({
+      path: '/synthetic/absent',
+      source: 'bundled',
+    });
+    await expect(
+      resolveFfmpegIdentity('/synthetic/absent', 'configured', async () => {
+        throw new Error('spawn /synthetic/absent ENOENT');
+      }),
+      'a probe that throws is a binary that cannot be asked to encode, which is the same answer',
+    ).resolves.toEqual({ path: '/synthetic/absent', source: 'configured' });
+  });
+
+  it('reads the real banner off the bundled binary rather than trusting its path', async () => {
+    const bundled = await resolveFfmpegIdentity(bundledFfmpegPath!, 'bundled');
+    const absent = await resolveFfmpegIdentity(`${bundledFfmpegPath!}-synthetic-absent`, 'configured');
+
+    expect(bundled.version, 'the default probe runs the binary, so this is the build that would encode').toMatch(
+      /^ffmpeg version /,
+    );
+    expect(
+      absent.version,
+      'a path naming nothing runnable answers nothing, which is what tells it from a missing encoder',
+    ).toBeUndefined();
   });
 });

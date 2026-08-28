@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,7 @@ import {
   createSdkLogger,
   DiagnosticConditions,
   GuidedDiagnostics,
+  reportAdaptationNotice,
   reportHomeKitEvent,
   unconfirmedWriteCondition,
   reportRuntimeNotice,
@@ -391,6 +393,9 @@ describe('diagnostic conditions', () => {
       'no-video-within-backstop',
       'source-error',
       'rtcp-timeout',
+      'adaptation-spawn-failed',
+      'adaptation-exited-before-output',
+      'adaptation-exited-while-streaming',
       'adaptation-failed',
     ];
     const serial = 'T8000P0000000000';
@@ -1235,5 +1240,142 @@ describe('diagnostic conditions', () => {
     expect(records[2], 'an unknown announcement is dropped, never passed through as fact').not.toHaveProperty(
       'announcedBy',
     );
+  });
+
+  /**
+   * The stderr tail is the only place an adaptation states its own cause, and it is also the only place this
+   * plugin's own argument list can be echoed back — the output URL carries the base64 SRTP key and salt, and
+   * the controller address is beside it. Both are therefore replaced by name before the line is kept, and the
+   * record's own vocabulary is checked rather than trusted, because it is written from process exit status and
+   * operating-system strings.
+   */
+  it('records a bounded FFmpeg failure without its arguments, keys, or addresses', () => {
+    const debug = vi.fn();
+    const srtpParameters = 'zBQPjxIWMOHTsPu1FTuxIVBWjLXPMR14pJEyRJEP';
+
+    reportAdaptationNotice(
+      { debug },
+      {
+        role: 'live-video',
+        event: 'exited-before-output',
+        code: 234,
+        signal: 'SIGSEGV',
+        stderr: [
+          "Unknown encoder 'libfdk_aac'",
+          `[out#0/rtp @ 0x55f1b2] Could not write header for output file srtp://192.0.2.10:50100?srtp_out_params=${srtpParameters}`,
+          'Error opening input file /home/synthetic/.homebridge/node_modules/ffmpeg-for-homebridge/ffmpeg',
+          'Connection to udp://[2001:db8::1]:41000 failed',
+          `srtp_out_params ${srtpParameters}`,
+          'progress=continue',
+          '   ',
+        ],
+      },
+    );
+
+    const record = JSON.parse(debug.mock.calls[0]![0] as string) as Record<string, unknown>;
+    expect(record).toMatchObject({
+      scope: 'ffmpeg',
+      level: 'warn',
+      role: 'live-video',
+      event: 'exited-before-output',
+      code: 234,
+      signal: 'SIGSEGV',
+    });
+    expect(record.stderr, 'the one line naming the cause survives, and only the material beside it goes').toEqual([
+      "Unknown encoder 'libfdk_aac'",
+      '[out#0/rtp @ 0x55f1b2] Could not write header for output file <url>',
+      'Error opening input file <path>',
+      'Connection to <url> failed',
+      'srtp_out_params <redacted>',
+    ]);
+    expect(JSON.stringify(record)).not.toContain(srtpParameters);
+    expect(JSON.stringify(record)).not.toContain('192.0.2.10');
+    expect(JSON.stringify(record)).not.toContain('2001:db8');
+  });
+
+  /**
+   * Base64 includes `/`, so replacing filesystem paths before key material splits a key into sub-runs that
+   * no length threshold catches and keeps the remainder verbatim. Measured over random 30-byte keys, roughly
+   * one line in twenty then retained an eight-character fragment. A serial is shorter than any key threshold
+   * and an SDK snapshot filename is a single path segment, so neither is caught by length or by separator.
+   */
+  it('leaves no fragment of a key or a serial in a line, whatever its shape', () => {
+    const retained = (line: string): readonly string[] => {
+      const debug = vi.fn();
+      reportAdaptationNotice({ debug }, { role: 'sdk', event: 'output', stderr: [line] });
+      const record =
+        debug.mock.calls[0] === undefined
+          ? {}
+          : (JSON.parse(debug.mock.calls[0][0] as string) as { stderr?: string[] });
+      return record.stderr ?? [];
+    };
+
+    expect(retained('Cannot open T8210N2012345678.jpg')).toEqual(['Cannot open <serial>.jpg']);
+    expect(retained('Could not open C:\\Users\\eufy\\T8000P0000000000\\snap.jpg')).toEqual(['Could not open <path>']);
+    expect(retained('Station T8010P1234567890 refused the request')).toEqual(['Station <serial> refused the request']);
+
+    const leaked = Array.from({ length: 200 }, () => randomBytes(30).toString('base64')).filter((key) =>
+      retained(`srtp_out_params ${key}`).some((kept) =>
+        kept.split(/<[a-z]+>|\s/).some((fragment) => fragment.length >= 4 && key.includes(fragment)),
+      ),
+    );
+
+    expect(leaked, 'not one fragment of any key survives, however the base64 happened to fall').toEqual([]);
+  });
+
+  it('drops an FFmpeg record whose role, event, exit status, or signal it cannot name', () => {
+    const debug = vi.fn();
+
+    reportAdaptationNotice({ debug }, { role: 'invented-role', event: 'exited-before-output' });
+    reportAdaptationNotice({ debug }, { role: 'live-video', event: 'invented-event' });
+    reportAdaptationNotice({ debug }, { role: 'sdk', event: 'output', code: -7, signal: 'SIGINVENTED' });
+    reportAdaptationNotice({ debug }, { role: 'recording', event: 'spawn-failed' });
+
+    expect(debug).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(debug.mock.calls[0]![0] as string),
+      'an exit status and a signal outside the bounded sets are dropped, never passed through',
+    ).toEqual({ scope: 'ffmpeg', level: 'warn', role: 'sdk', event: 'output' });
+    expect(JSON.parse(debug.mock.calls[1]![0] as string)).toEqual({
+      scope: 'ffmpeg',
+      level: 'warn',
+      role: 'recording',
+      event: 'spawn-failed',
+    });
+  });
+
+  /**
+   * The SDK runs FFmpeg of its own for snapshot decoding, and its stderr was dropped on the way in. That is
+   * the same class of evidence as the plugin's own adaptation output, and it is kept only while a profile
+   * declaring FFmpeg output is authorized — a profile that does not declare it still keeps nothing.
+   */
+  it('keeps the SDK\u2019s own FFmpeg output as ffmpeg-log evidence only where a profile declares it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-diagnostics-'));
+    await new GuidedDiagnostics(root).authorize('live-media', 'now');
+    const logger = createDiagnosticLogger({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, root);
+
+    try {
+      createSdkLogger(logger)!.debug("[ffmpeg] Unknown decoder 'h264_synthetic'");
+      createSdkLogger(logger)!.debug('[ffmpeg] failed on srtp://192.0.2.10:50100?srtp_out_params=must-not-appear');
+      await logger.flush?.();
+
+      const records = readFileSync(join(root, 'logs', 'homebridge-eufy.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      expect(records).toHaveLength(2);
+      expect(records[0]).toMatchObject({
+        scope: 'ffmpeg',
+        level: 'debug',
+        role: 'sdk',
+        event: 'output',
+        stderr: ["Unknown decoder 'h264_synthetic'"],
+      });
+      expect(records[1]).toMatchObject({ stderr: ['failed on <url>'] });
+      expect(readFileSync(join(root, 'logs', 'homebridge-eufy.jsonl'), 'utf8')).not.toContain('must-not-appear');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 });

@@ -4,7 +4,13 @@ import { fileURLToPath } from 'node:url';
 import ffmpegPath from 'ffmpeg-for-homebridge';
 import { describe, expect, it } from 'vitest';
 
-import { parseConfig, resolveEntityPreference, serializeConfig, type EufyConfig } from '../../src/configuration.js';
+import {
+  ffmpegPathSource,
+  parseConfig,
+  resolveEntityPreference,
+  serializeConfig,
+  type EufyConfig,
+} from '../../src/configuration.js';
 
 describe('V5 configuration', () => {
   const repository = fileURLToPath(new URL('../..', import.meta.url));
@@ -203,5 +209,23 @@ describe('V5 configuration', () => {
       parseConfig({ platform: 'HomebridgeEufy', warmUpEvents: ['motion', 'doorbellPress', 'motion'] }),
     ).toMatchObject({ warmUpEvents: ['doorbellPress', 'motion'] });
     expect(parseConfig({ platform: 'HomebridgeEufy', warmUpEvents: [] })).toMatchObject({ warmUpEvents: [] });
+  });
+
+  /**
+   * The two builds have different encoder sets, so an adaptation failure cannot be attributed without knowing
+   * which one ran. It is decided by comparison rather than by remembering the branch, because `serializeConfig`
+   * writes the resolved path back as an explicit setting: a round trip would otherwise report the bundled
+   * binary as one an administrator chose.
+   */
+  it('tells the bundled adaptation binary from one an administrator configured, across a round trip', () => {
+    const bundled = parseConfig({ platform: 'HomebridgeEufy' });
+    const configured = parseConfig({ platform: 'HomebridgeEufy', ffmpegPath: '/synthetic/ffmpeg' });
+
+    expect(ffmpegPathSource(bundled.ffmpegPath!)).toBe('bundled');
+    expect(ffmpegPathSource(configured.ffmpegPath!)).toBe('configured');
+    expect(
+      ffmpegPathSource(parseConfig(serializeConfig(bundled)).ffmpegPath!),
+      'the serialized path is the bundled binary, whatever the setting it came back as',
+    ).toBe('bundled');
   });
 });

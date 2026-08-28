@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import type { Readable } from 'node:stream';
 
 import type {
+  AdaptationDiagnostics,
+  AdaptationEvent,
   AdaptedRecording,
   NegotiatedRecording,
   RecordedFragment,
@@ -11,7 +13,12 @@ import type {
   RecordingMediaAdapter,
   RecordingMediaSource,
 } from './contracts.js';
-import { type MediaProcess, PROCESS_STOP_GRACE_MS, SOURCE_START_BACKSTOP_MS } from './live-stream.js';
+import {
+  AdaptationStderr,
+  type MediaProcess,
+  PROCESS_STOP_GRACE_MS,
+  SOURCE_START_BACKSTOP_MS,
+} from './live-stream.js';
 
 /**
  * How long the adaptation is given to write out what the source already handed it, once the source has
@@ -58,6 +65,7 @@ export type RecordingMediaProcessFactory = (executable: string, args: readonly s
 export class FfmpegRecordingMedia implements RecordingMediaAdapter {
   constructor(
     private readonly executable: string,
+    private readonly adaptationDiagnostics?: AdaptationDiagnostics,
     private readonly createProcess: RecordingMediaProcessFactory = spawnRecordingMediaProcess,
   ) {}
 
@@ -178,13 +186,36 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
     try {
       child = this.createProcess(this.executable, recordingArguments(negotiated));
     } catch {
+      this.adaptationDiagnostics?.report({ role: 'recording', event: 'spawn-failed' });
       fail('adaptation-failed');
       return recordingOf(units, stop);
     }
     const adaptation = child;
     const output = new Fmp4OutputReader(emit);
-    adaptation.stderr.resume();
-    adaptation.stdout.on('data', (chunk: Buffer) => output.read(chunk));
+    const stderr = new AdaptationStderr();
+    let producedOutput = false;
+    /**
+     * Reports what this recording's adaptation did, whether or not the recording fails for it. An `output`
+     * report carries nothing but the tail, so a silent process that ended as intended is not reported.
+     */
+    const report = (event: AdaptationEvent, code?: number | null, signal?: NodeJS.Signals | null): void => {
+      const tail = stderr.tail();
+      if (event === 'output' && tail.length === 0) {
+        return;
+      }
+      this.adaptationDiagnostics?.report({
+        role: 'recording',
+        event,
+        ...(typeof code === 'number' ? { code } : {}),
+        ...(typeof signal === 'string' ? { signal } : {}),
+        ...(tail.length ? { stderr: tail } : {}),
+      });
+    };
+    adaptation.stderr.on('data', (chunk: Buffer) => stderr.observe(chunk));
+    adaptation.stdout.on('data', (chunk: Buffer) => {
+      producedOutput = true;
+      output.read(chunk);
+    });
     adaptation.stdout.on('end', () => {
       if (sourceEnded) {
         finish();
@@ -197,17 +228,19 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
     });
     adaptation.on('error', () => {
       if (!stopped) {
+        report(producedOutput ? 'exited-while-streaming' : 'spawn-failed');
         fail('adaptation-failed');
       }
     });
-    adaptation.on('exit', () => {
-      if (stopped) {
+    adaptation.on('exit', (code, signal) => {
+      if (stopped || sourceEnded) {
+        report('output', code, signal);
+        if (!stopped) {
+          finish();
+        }
         return;
       }
-      if (sourceEnded) {
-        finish();
-        return;
-      }
+      report(producedOutput ? 'exited-while-streaming' : 'exited-before-output', code, signal);
       fail('adaptation-failed');
     });
     outputBackstop = setTimeout(() => fail('no-output-within-backstop'), SOURCE_START_BACKSTOP_MS);

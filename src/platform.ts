@@ -1,9 +1,11 @@
 import type { API, DynamicPlatformPlugin, HAP, PlatformAccessory, PlatformConfig } from 'homebridge';
 
-import { parseConfig } from './configuration.js';
+import { ffmpegPathSource, parseConfig } from './configuration.js';
 import {
   createDiagnosticLogger,
   DiagnosticConditions,
+  recordFfmpegEnvironment,
+  reportAdaptationNotice,
   reportDiscardedV4Settings,
   reportHomeKitEvent,
   unconfirmedWriteCondition,
@@ -11,7 +13,8 @@ import {
   type PlatformLogger,
 } from './diagnostics.js';
 import { HomeKitReconciler, type HomeKitAccessoryStore } from './homekit/reconciler.js';
-import { FfmpegLiveMedia } from './media/live-stream.js';
+import type { AdaptationDiagnostics } from './media/contracts.js';
+import { FfmpegLiveMedia, resolveFfmpegIdentity } from './media/live-stream.js';
 import { FfmpegRecordingMedia } from './media/recording.js';
 import { PersistedLastSuccessfulImages } from './media/last-successful-image.js';
 import { SnapshotAcquisition } from './media/snapshot.js';
@@ -58,9 +61,14 @@ export function createEufyPlatform(
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       const diagnosticLog = createDiagnosticLogger(log, storageRoot);
       const diagnostics = new DiagnosticConditions(diagnosticLog);
-      const liveMedia = configuredConfig.ffmpegPath ? new FfmpegLiveMedia(configuredConfig.ffmpegPath) : undefined;
+      const adaptationDiagnostics: AdaptationDiagnostics = {
+        report: (notice) => reportAdaptationNotice(diagnosticLog, notice),
+      };
+      const liveMedia = configuredConfig.ffmpegPath
+        ? new FfmpegLiveMedia(configuredConfig.ffmpegPath, adaptationDiagnostics)
+        : undefined;
       const recordingMedia = configuredConfig.ffmpegPath
-        ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath)
+        ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath, adaptationDiagnostics)
         : undefined;
       const snapshotMedia = new SnapshotAcquisition(
         storageRoot
@@ -97,6 +105,12 @@ export function createEufyPlatform(
         }
       });
       api.on('didFinishLaunching', () => {
+        const ffmpegPath = configuredConfig.ffmpegPath;
+        if (ffmpegPath && storageRoot) {
+          void resolveFfmpegIdentity(ffmpegPath, ffmpegPathSource(ffmpegPath)).then((identity) =>
+            recordFfmpegEnvironment(storageRoot, identity),
+          );
+        }
         const accessoryStore = createAccessoryStore(api);
         if (accessoryStore) {
           this.reconciler ??= new HomeKitReconciler(

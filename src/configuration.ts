@@ -160,6 +160,19 @@ export function parseConfig(value: unknown): EufyConfig {
   };
 }
 
+/**
+ * Whether a resolved FFmpeg path names the binary bundled with the plugin or one an administrator chose.
+ *
+ * The two are different builds with different encoder sets on the same host, so an adaptation failure cannot be
+ * attributed without knowing which one ran. It is decided by comparing the resolved value with the bundled
+ * one rather than by remembering which branch produced it, because a configuration this plugin serialized
+ * carries the resolved path back as an explicit setting and would otherwise report the bundled binary as a
+ * chosen one.
+ */
+export function ffmpegPathSource(path: string): 'bundled' | 'configured' {
+  return path === bundledFfmpegPath ? 'bundled' : 'configured';
+}
+
 /** Produces a synthetic-safe Homebridge block without discovering or filtering entities. */
 /**
  * The chosen warm-up events, refusing anything unrecognised rather than dropping it.

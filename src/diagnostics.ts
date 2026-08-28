@@ -97,6 +97,9 @@ const DIAGNOSTICS_DIRECTORY = 'diagnostics';
 const GUIDED_SESSION_FILE = 'session.json';
 const REPRODUCTION_MARKERS_FILE = 'reproduction-markers.jsonl';
 const UI_EVENTS_FILE = 'ui-events.jsonl';
+const FFMPEG_ENVIRONMENT_FILE = 'ffmpeg.json';
+/** How much of an FFmpeg path or version banner is kept, which is more than either needs. */
+const MAX_FFMPEG_IDENTITY_LENGTH = 256;
 const DEBUG_AUTHORIZATION_MS = 72 * 60 * 60 * 1_000;
 const gzip = promisify(gzipCallback);
 const gunzip = promisify(gunzipCallback);
@@ -329,12 +332,90 @@ function observedEvidencePath(storageRoot: string, supportCaseId: string, eviden
   return join(storageRoot, DIAGNOSTICS_DIRECTORY, 'evidence', supportCaseId, evidence);
 }
 
+/**
+ * Collapses one supplied string to bounded printable text, or nothing where none of it survives.
+ *
+ * Every value this module accepts from outside itself passes through here first, so that a field arriving as
+ * a novel, with control characters in it, or with a terminal escape sequence cannot become a record whatever
+ * the allowlist beyond it decides.
+ */
+function boundedText(value: string, maximumLength: number): string | undefined {
+  const printable = value
+    .replace(/[^\x20-\x7e]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maximumLength)
+    .trim();
+  return printable === '' ? undefined : printable;
+}
+
+/** One resolved adaptation binary, as this module keeps and republishes it. */
+interface PersistedFfmpegEnvironment {
+  path: string;
+  source: 'bundled' | 'configured';
+  version?: string;
+}
+
+function ffmpegEnvironmentPath(storageRoot: string): string {
+  return join(storageRoot, DIAGNOSTICS_DIRECTORY, FFMPEG_ENVIRONMENT_FILE);
+}
+
+/**
+ * Records which FFmpeg this run resolved, so a support archive states the build a failure came from.
+ *
+ * It is persisted rather than held in memory because the process that resolves it is not the one that
+ * assembles an archive, and it is rewritten on every start so a path or binary that changed between runs
+ * cannot be reported as the one in use. A write that fails is dropped: the archive then declares the
+ * environment without an FFmpeg identity, which is honest, whereas failing startup over a diagnostic file
+ * would cost the user their cameras.
+ */
+export function recordFfmpegEnvironment(storageRoot: string, ffmpeg: PersistedFfmpegEnvironment): void {
+  try {
+    const path = ffmpegEnvironmentPath(storageRoot);
+    mkdirSync(dirname(path), { mode: 0o700, recursive: true });
+    writeFileSync(path, `${JSON.stringify({ version: 1, ffmpeg })}\n`, { mode: 0o600 });
+  } catch {}
+}
+
+/**
+ * Reads the recorded adaptation binary, refusing a record whose own fields do not narrow.
+ *
+ * The path and the banner are kept as written rather than pattern-replaced, because naming the binary is the
+ * entire purpose of the record and a redacted one answers nothing. Neither is device or account material: the
+ * path is this plugin's own setting or the binary it ships, and the banner is that build's public identity.
+ */
+function readFfmpegEnvironment(storageRoot: string): PersistedFfmpegEnvironment | undefined {
+  try {
+    const candidate = JSON.parse(readFileSync(ffmpegEnvironmentPath(storageRoot), 'utf8')) as Record<string, unknown>;
+    const ffmpeg = candidate.ffmpeg;
+    if (candidate.version !== 1 || !ffmpeg || typeof ffmpeg !== 'object' || Array.isArray(ffmpeg)) {
+      return undefined;
+    }
+    const recorded = ffmpeg as Record<string, unknown>;
+    if (typeof recorded.path !== 'string' || (recorded.source !== 'bundled' && recorded.source !== 'configured')) {
+      return undefined;
+    }
+    const path = boundedText(recorded.path, MAX_FFMPEG_IDENTITY_LENGTH);
+    const version =
+      typeof recorded.version === 'string' ? boundedText(recorded.version, MAX_FFMPEG_IDENTITY_LENGTH) : undefined;
+    return path === undefined
+      ? undefined
+      : { path, source: recorded.source, ...(version === undefined ? {} : { version }) };
+  } catch {
+    return undefined;
+  }
+}
+
 function evidenceForEvent(event: Readonly<Record<string, unknown>>): DiagnosticEvidence[] {
   const evidence: DiagnosticEvidence[] = ['plugin-log'];
   if (event.scope === 'sdk') evidence.push('sdk-log');
   if (event.scope === 'homekit') evidence.push('homekit-log');
+  if (event.scope === 'ffmpeg') evidence.push('ffmpeg-log');
   return evidence;
 }
+
+/** The scopes whose records are only kept while a support profile that declares them is authorized. */
+const VERBOSE_SCOPES = new Set(['sdk', 'homekit', 'ffmpeg']);
 
 /** Owns persisted, user-authorized diagnostic evidence windows and identity-free reproduction markers. */
 export class GuidedDiagnostics {
@@ -594,13 +675,22 @@ export class GuidedDiagnostics {
   }
 
   private async collectSupportEvidence(session: PersistedDiagnosticsSession): Promise<SupportArchiveEvidence[]> {
+    const ffmpeg = readFfmpegEnvironment(this.storageRoot);
     const evidence: SupportArchiveEvidence[] = [
       {
         evidence: 'environment',
         privacyClass: 'operational',
         contentType: 'application/json',
-        content: `${JSON.stringify({ version: 1, node: process.version, platform: process.platform, arch: process.arch })}\n`,
-        fields: ['version', 'node', 'platform', 'arch'].map((field) => ({ field, privacyClass: 'operational' })),
+        content: `${JSON.stringify({ version: 1, node: process.version, platform: process.platform, arch: process.arch, ...(ffmpeg ? { ffmpeg } : {}) })}\n`,
+        /**
+         * The record is operational and one field is classified above it: a resolved FFmpeg path is an
+         * environment fact, but it can carry the home directory of the account Homebridge runs as, so it is
+         * declared as diagnostic rather than presented alongside the host's own architecture.
+         */
+        fields: [
+          ...['version', 'node', 'platform', 'arch'].map((field) => ({ field, privacyClass: 'operational' as const })),
+          ...(ffmpeg ? [{ field: 'ffmpeg', privacyClass: 'diagnostic' as const }] : []),
+        ],
       },
     ];
     const markers = await this.readReproductionMarkers(session.supportCaseId);
@@ -634,16 +724,19 @@ export class GuidedDiagnostics {
       });
     }
     const log = await this.readReproductionLog(session.reproductionStartedAt!, session.reproductionEndedAt!);
-    const scopes: Readonly<Record<Extract<DiagnosticEvidence, 'plugin-log' | 'sdk-log' | 'homekit-log'>, string>> = {
+    const scopes: Readonly<
+      Record<Extract<DiagnosticEvidence, 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log'>, string>
+    > = {
       'plugin-log': 'plugin',
       'sdk-log': 'sdk',
       'homekit-log': 'homekit',
+      'ffmpeg-log': 'ffmpeg',
     };
     for (const selected of DIAGNOSTICS_PROFILES[session.profile]) {
       if (!(selected in scopes)) continue;
       const scope = scopes[selected as keyof typeof scopes];
       const selectedRecords = log.records.filter((record) =>
-        scope === 'plugin' ? record.scope !== 'sdk' && record.scope !== 'homekit' : record.scope === scope,
+        scope === 'plugin' ? !VERBOSE_SCOPES.has(String(record.scope)) : record.scope === scope,
       );
       const content = selectedRecords.map((record) => JSON.stringify(record)).join('\n');
       if (content) {
@@ -1118,7 +1211,7 @@ export function createDiagnosticLogger(
         if (!event) return;
         const session = activeDiagnosticsSession(storageRoot!, now());
         const requiredEvidence = evidenceForEvent(event);
-        const verbose = event.scope === 'sdk' || event.scope === 'homekit';
+        const verbose = VERBOSE_SCOPES.has(String(event.scope));
         if (
           verbose &&
           (!session || !requiredEvidence.every((evidence) => DIAGNOSTICS_PROFILES[session.profile].includes(evidence)))
@@ -1247,7 +1340,14 @@ function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | un
   return undefined;
 }
 
-/** Adapts SDK protocol detail to bounded debug output without preserving supplied values. */
+/**
+ * Adapts SDK protocol detail to bounded debug output without preserving supplied values.
+ *
+ * The SDK runs FFmpeg of its own for snapshot decoding and WebRTC containers and forwards that process's
+ * stderr under an `[ffmpeg]` prefix. That is the same class of evidence as this plugin's own adaptation
+ * output, so it is recorded as such, redacted line by line, rather than dropped as SDK chatter: a snapshot
+ * that never decodes has no other account anywhere of why.
+ */
 export function createSdkLogger(target: Partial<PlatformLogger> | undefined): Logger | undefined {
   if (!target?.debug) {
     return undefined;
@@ -1259,7 +1359,8 @@ export function createSdkLogger(target: Partial<PlatformLogger> | undefined): Lo
     }
     const requestedSubsystem = /^\[([a-z0-9-]+)(?:\s+[^\]]+)?\]/i.exec(message)?.[1]?.toLowerCase();
     if (requestedSubsystem === 'ffmpeg') {
-      return undefined;
+      const stderr = message.slice(message.indexOf(']') + 1).split(/\r?\n/);
+      return sanitizeAdaptationNotice({ role: 'sdk', event: 'output', stderr }, 'debug');
     }
     const subsystemAliases: Readonly<Record<string, string>> = {
       eufy: 'mega',
@@ -1359,7 +1460,10 @@ const MEMBERS = new Set([
   'volume',
 ]);
 const REASONS = new Set([
+  'adaptation-exited-before-output',
+  'adaptation-exited-while-streaming',
   'adaptation-failed',
+  'adaptation-spawn-failed',
   'adapter-missing',
   'capability-not-supported',
   'disabled',
@@ -1440,6 +1544,40 @@ const HOMEKIT_LIVE_SESSION_STAGES = new Set([
   'first-adapted-output',
   'controller-rtcp',
 ]);
+/**
+ * Which adaptation process an FFmpeg record came from.
+ *
+ * A superset of what the media domain can report, because the SDK runs FFmpeg of its own for snapshot
+ * decoding and WebRTC containers and forwards its output here under the same evidence class.
+ */
+const ADAPTATION_ROLES = new Set(['live-video', 'live-audio', 'return-audio', 'recording', 'sdk']);
+/** What that process did. `output` is a process reported for what it wrote rather than for how it ended. */
+const ADAPTATION_EVENTS = new Set(['spawn-failed', 'exited-before-output', 'exited-while-streaming', 'output']);
+/**
+ * The signals a terminated adaptation is reported under.
+ *
+ * A signal this build cannot name is dropped rather than passed through, because the field is written from
+ * an operating-system string and an allowlist is the only thing that keeps it one.
+ */
+const ADAPTATION_SIGNALS = new Set([
+  'SIGABRT',
+  'SIGBUS',
+  'SIGFPE',
+  'SIGILL',
+  'SIGINT',
+  'SIGKILL',
+  'SIGPIPE',
+  'SIGSEGV',
+  'SIGTERM',
+]);
+/**
+ * How many stderr lines one record keeps.
+ *
+ * A producer bounds its own retention too, and this bound is applied again rather than trusted, because a
+ * record's size is this module's to answer for however many lines it was offered.
+ */
+const MAX_ADAPTATION_STDERR_LINES = 8;
+const MAX_ADAPTATION_STDERR_LINE_LENGTH = 200;
 const RUNTIME_NOTICES = {
   'status-publication-failed': {
     level: 'warn',
@@ -1751,6 +1889,10 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
     return { scope: 'runtime', level: 'info', event: value.event, messageKey: 'log.runtime.state' };
   }
 
+  if (value.scope === 'ffmpeg') {
+    return sanitizeAdaptationNotice(value, level);
+  }
+
   if (value.scope === 'diagnostic-condition') {
     const homeKitDefinition =
       typeof value.code === 'string' && Object.hasOwn(HOMEKIT_CONDITIONS, value.code)
@@ -1899,6 +2041,100 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
         : {}),
     }),
   );
+}
+
+/**
+ * One FFmpeg fact a caller offers for the record, in the loose terms it arrives in.
+ *
+ * Nothing here is trusted: `role`, `event` and `signal` are checked against this module's own allowlists and
+ * `stderr` is redacted line by line, because a value that reached a support archive unexamined would be one
+ * this module claimed to have gated and did not.
+ */
+export interface AdaptationTrace {
+  role: string;
+  event: string;
+  code?: number;
+  signal?: string;
+  stderr?: readonly string[];
+}
+
+/**
+ * Records one FFmpeg adaptation fact as the `ffmpeg-log` evidence the media support profiles declare.
+ *
+ * Nothing is written to the human console: an adaptation failure already reaches the user as the bounded
+ * HomeKit condition its camera reports, and repeating each process's own exit there would say the same thing
+ * a second time in a vocabulary only a maintainer can read.
+ */
+export function reportAdaptationNotice(target: Pick<PlatformLogger, 'debug'>, trace: AdaptationTrace): void {
+  if (!target.debug) {
+    return;
+  }
+  const notice = sanitizeAdaptationNotice({ ...trace, level: 'warn' }, 'warn');
+  if (notice) {
+    target.debug(JSON.stringify(notice));
+  }
+}
+
+/**
+ * Reduces one FFmpeg stderr line to what a support case may keep, or nothing where nothing is left of it.
+ *
+ * The line is the only place an encoder-level cause is stated outright, and it is also the only place this
+ * plugin's own argument list can be echoed back: the output URL carries base64 SRTP key material, the
+ * controller address sits beside it, and an SDK snapshot filename carries a device serial. Each of those is
+ * replaced by what it is rather than searched for afterwards, because a redaction that depends on
+ * recognising a secret fails on the first message shape nobody predicted.
+ *
+ * The key material is replaced before the path rules run, and not after. Base64 includes `/`, so a path rule
+ * applied first splits a key into sub-runs too short for any length threshold to catch — measured on random
+ * 30-byte keys, roughly one line in twenty then kept an eight-character fragment verbatim. The cost of this
+ * order is that a long path made only of letters and separators is labelled as redacted rather than as a
+ * path, which loses a label and never a secret.
+ */
+function redactAdaptationStderr(line: string): string | undefined {
+  const printable = boundedText(line, MAX_ADAPTATION_STDERR_LINE_LENGTH);
+  if (printable === undefined || printable.startsWith('progress=')) {
+    return undefined;
+  }
+  const redacted = printable
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, '<url>')
+    .replace(/\[[0-9a-f:]{2,}\]/gi, '<address>')
+    .replace(/[A-Za-z0-9+/]{20,}={0,2}/g, '<redacted>')
+    .replace(/[A-Za-z]:\\[^\s]*/g, '<path>')
+    .replace(/(?:\/[\w.@-]+){2,}\/?/g, '<path>')
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '<address>')
+    .replace(/\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){2,}\b/gi, '<address>')
+    .replace(/\bT\d[0-9A-Z]{9,}\b/g, '<serial>')
+    .trim();
+  return redacted === '' ? undefined : redacted;
+}
+
+/** Narrows one offered FFmpeg record against the adaptation allowlists, dropping it whole where it fails. */
+function sanitizeAdaptationNotice(value: Record<string, unknown>, level: string): Record<string, unknown> | undefined {
+  if (typeof value.role !== 'string' || !ADAPTATION_ROLES.has(value.role)) {
+    return undefined;
+  }
+  if (typeof value.event !== 'string' || !ADAPTATION_EVENTS.has(value.event)) {
+    return undefined;
+  }
+  const code =
+    Number.isSafeInteger(value.code) && Number(value.code) >= 0 && Number(value.code) <= 255
+      ? Number(value.code)
+      : undefined;
+  const signal = typeof value.signal === 'string' && ADAPTATION_SIGNALS.has(value.signal) ? value.signal : undefined;
+  const stderr = (Array.isArray(value.stderr) ? value.stderr : [])
+    .filter((line): line is string => typeof line === 'string')
+    .map(redactAdaptationStderr)
+    .filter((line): line is string => line !== undefined)
+    .slice(-MAX_ADAPTATION_STDERR_LINES);
+  return {
+    scope: 'ffmpeg',
+    level,
+    role: value.role,
+    event: value.event,
+    ...(code === undefined ? {} : { code }),
+    ...(signal === undefined ? {} : { signal }),
+    ...(stderr.length ? { stderr } : {}),
+  };
 }
 
 function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string, unknown> | undefined {

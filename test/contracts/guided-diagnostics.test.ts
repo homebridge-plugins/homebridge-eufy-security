@@ -17,7 +17,13 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createDiagnosticLogger, GuidedDiagnostics, reportRuntimeNotice } from '../../src/diagnostics.js';
+import {
+  createDiagnosticLogger,
+  GuidedDiagnostics,
+  recordFfmpegEnvironment,
+  reportAdaptationNotice,
+  reportRuntimeNotice,
+} from '../../src/diagnostics.js';
 
 const HOUR_MS = 60 * 60 * 1_000;
 
@@ -765,6 +771,159 @@ describe('guided diagnostics session', () => {
       await expect(invalidKeyDiagnostics.exportSupportArchive(invalidKeyReview.reviewId)).rejects.toThrow(
         'key integrity',
       );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  /**
+   * The whole point of a profile is that a maintainer receives what it declares. `live-media` declared FFmpeg
+   * output and had no producer for it, so a live-media archive arrived a third short of itself and the one
+   * line naming the missing encoder was never in it.
+   */
+  it('collects every evidence class the live-media profile declares, including FFmpeg output', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    let now = Date.parse('2026-08-17T08:00:00.000Z');
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+
+    try {
+      await diagnostics.authorize('live-media', 'now');
+      await diagnostics.startReproduction();
+      const logger = createDiagnosticLogger(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        root,
+        undefined,
+        () => now,
+      );
+      reportRuntimeNotice(logger, 'status-publication-failed');
+      logger.debug?.(JSON.stringify({ scope: 'sdk', level: 'warn', subsystem: 'p2p', event: 'media-error' }));
+      logger.debug?.(
+        JSON.stringify({
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-session-failed',
+          outcome: 'failed',
+          reason: 'adaptation-exited-before-output',
+          stage: 'first-adapted-output',
+        }),
+      );
+      reportAdaptationNotice(logger, {
+        role: 'live-video',
+        event: 'exited-before-output',
+        code: 234,
+        stderr: ["Unknown encoder 'libx264'"],
+      });
+      await logger.flush?.();
+      now += 5_000;
+      const complete = await diagnostics.endReproduction();
+
+      expect(complete).toMatchObject({ status: 'complete', missingEvidence: [] });
+      const review = await diagnostics.reviewSupportArchive();
+      expect(review.manifest.evidence.map(({ evidence }) => evidence)).toEqual([
+        'environment',
+        'reproduction-markers',
+        'plugin-log',
+        'sdk-log',
+        'homekit-log',
+        'ffmpeg-log',
+      ]);
+      expect(review.manifest.evidence.every(({ status }) => status === 'included')).toBe(true);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  /**
+   * The class has to be present for a session that worked as well as for one that failed, because a report of
+   * unwatchable live video is a working session. A process reported for what it wrote rather than for how it
+   * ended supplies it, so an archive is complete without anything having gone wrong.
+   */
+  it('collects FFmpeg output for a live session that streamed rather than failed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    let now = Date.parse('2026-08-17T08:00:00.000Z');
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+
+    try {
+      await diagnostics.authorize('live-media', 'now');
+      await diagnostics.startReproduction();
+      const logger = createDiagnosticLogger(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        root,
+        undefined,
+        () => now,
+      );
+      reportAdaptationNotice(logger, {
+        role: 'live-video',
+        event: 'output',
+        code: 0,
+        signal: 'SIGTERM',
+        stderr: ['Past duration 0.799995 too large'],
+      });
+      await logger.flush?.();
+      now += 5_000;
+      await diagnostics.endReproduction();
+
+      expect(
+        (await diagnostics.reviewSupportArchive()).manifest.evidence,
+        'nothing failed, and the profile still received the class it declares',
+      ).toContainEqual(
+        expect.objectContaining({ evidence: 'ffmpeg-log', status: 'included', privacyClass: 'diagnostic' }),
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  /**
+   * A bundled static build and a distribution build on the same host have entirely different encoder sets, so
+   * without the resolved binary in the record an adaptation failure can be attributed to FFmpeg in general
+   * and to nothing more precise. A path that names nothing runnable answers with no version at all, which is
+   * what tells a missing or wrong `ffmpegPath` apart from an encoder the build does not have.
+   */
+  it('reports the resolved FFmpeg identity as environment evidence and declares its privacy class', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    let now = Date.parse('2026-08-17T08:00:00.000Z');
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+
+    try {
+      recordFfmpegEnvironment(root, {
+        path: '/synthetic/bin/ffmpeg',
+        source: 'configured',
+        version: 'ffmpeg version 8.0 Copyright (c) 2000-2026 the FFmpeg developers',
+      });
+      await diagnostics.authorize('live-media', 'now');
+      await diagnostics.startReproduction();
+      now += 5_000;
+      await diagnostics.endReproduction();
+      const environment = (await diagnostics.reviewSupportArchive()).manifest.evidence[0]!;
+
+      expect(environment).toMatchObject({
+        evidence: 'environment',
+        privacyClass: 'operational',
+        status: 'included',
+        fields: [
+          { field: 'version', privacyClass: 'operational' },
+          { field: 'node', privacyClass: 'operational' },
+          { field: 'platform', privacyClass: 'operational' },
+          { field: 'arch', privacyClass: 'operational' },
+          { field: 'ffmpeg', privacyClass: 'diagnostic' },
+        ],
+      });
+      expect(statSync(join(root, 'diagnostics', 'ffmpeg.json')).mode & 0o777).toBe(0o600);
+
+      recordFfmpegEnvironment(root, { path: '/synthetic/bin/ffmpeg', source: 'bundled' });
+      const rerecorded = (await diagnostics.reviewSupportArchive()).manifest.evidence[0]!;
+      expect(
+        rerecorded.fields,
+        'a binary that answered no version banner is reported without one rather than with a guess',
+      ).toHaveLength(5);
+
+      writeFileSync(join(root, 'diagnostics', 'ffmpeg.json'), '{"version":1,"ffmpeg":{"source":"invented"}}\n');
+      expect(
+        (await diagnostics.reviewSupportArchive()).manifest.evidence[0]!.fields,
+        'a record whose own fields do not narrow is dropped rather than partly reported',
+      ).toHaveLength(4);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

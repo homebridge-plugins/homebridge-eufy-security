@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FragmentRecordingHandle, MediaFragment, StreamBudgetNotice } from '@mega-yfue/eufy-sdk';
 
 import type {
+  AdaptationNotice,
   AdaptedRecording,
   NegotiatedRecording,
   RecordedFragment,
@@ -156,12 +157,17 @@ function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED) {
   const children: ReturnType<typeof adaptationProcess>[] = [];
   const spawned: string[][] = [];
   const outcomes: RecordingOutcome[] = [];
-  const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', (_executable, args) => {
-    const child = adaptationProcess();
-    children.push(child);
-    spawned.push([...args]);
-    return child;
-  });
+  const notices: AdaptationNotice[] = [];
+  const media = new FfmpegRecordingMedia(
+    '/synthetic/ffmpeg',
+    { report: (notice) => notices.push(notice) },
+    (_executable, args) => {
+      const child = adaptationProcess();
+      children.push(child);
+      spawned.push([...args]);
+      return child;
+    },
+  );
   const requested: { fragmentSeconds?: number; preBufferSeconds?: number }[] = [];
   const recording = media.record(
     {
@@ -173,7 +179,7 @@ function recordingSession(negotiated: NegotiatedRecording = NEGOTIATED) {
     negotiated,
     { onOutcome: (outcome) => outcomes.push(outcome) },
   );
-  return { source, children, spawned, outcomes, recording, requested, consumed: consume(recording) };
+  return { source, children, spawned, outcomes, notices, recording, requested, consumed: consume(recording) };
 }
 
 /** The arguments an adaptation received before its input, where FFmpeg accepts the same flag twice. */
@@ -407,7 +413,7 @@ describe('recording media adaptation', () => {
   it('stops the source and its adaptation when its consumer stops iterating', async () => {
     const source = new SyntheticFragmentRecording();
     const children: ReturnType<typeof adaptationProcess>[] = [];
-    const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', () => {
+    const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', undefined, () => {
       const child = adaptationProcess();
       children.push(child);
       return child;
@@ -466,6 +472,39 @@ describe('recording media adaptation', () => {
     expect(session.consumed.failed()).toBe(true);
   });
 
+  /**
+   * A recording carries its own FFmpeg process, and the `hksv-recording` support profile declares its output,
+   * so an exit status and the stderr that explains it are reported apart from the failure the HomeKit
+   * controller is told about. Whether output had already been produced is reported with it, because the same
+   * exit status means opposite things either side of the first fragment.
+   */
+  it('reports what its adaptation did, and whether it had produced output, apart from the failure', async () => {
+    const before = recordingSession();
+    await settle();
+    before.children[0].stderr.write("Unrecognized option 'movflags'\n");
+    await settle();
+    before.children[0].emit('exit', 234, null);
+    await before.consumed.iteration;
+
+    expect(before.notices).toEqual([
+      {
+        role: 'recording',
+        event: 'exited-before-output',
+        code: 234,
+        stderr: ["Unrecognized option 'movflags'"],
+      },
+    ]);
+
+    const during = recordingSession();
+    await settle();
+    during.children[0].stdout.write(INIT_SEGMENT);
+    await settle();
+    during.children[0].emit('exit', null, 'SIGKILL');
+    await during.consumed.iteration;
+
+    expect(during.notices).toEqual([{ role: 'recording', event: 'exited-while-streaming', signal: 'SIGKILL' }]);
+  });
+
   it('fails a recording whose source reports an error', async () => {
     const session = recordingSession();
     await settle();
@@ -477,7 +516,7 @@ describe('recording media adaptation', () => {
 
   it('fails a recording the source exposes no fragment recording for', async () => {
     const outcomes: RecordingOutcome[] = [];
-    const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', () => {
+    const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', undefined, () => {
       throw new Error('no adaptation may be spawned');
     });
     const recording = media.record({}, NEGOTIATED, { onOutcome: (outcome) => outcomes.push(outcome) });

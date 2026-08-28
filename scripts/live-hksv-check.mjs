@@ -407,7 +407,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
     const outcomes = [];
     const sourceFragments = [];
-    const recording = new FfmpegRecordingMedia(ffmpeg).record(
+    const recording = new FfmpegRecordingMedia(ffmpeg, {
+      report: (notice) => console.log(`  adaptation: ${JSON.stringify(notice)}`),
+    }).record(
       { recordFragments: (opts) => observedSource(actions.recordFragments(opts), sourceFragments) },
       negotiated,
       { onOutcome: (outcome) => outcomes.push(outcome) },

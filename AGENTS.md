@@ -40,7 +40,8 @@ Internal dependencies follow a closed graph enforced by the contract suite. Addi
 or dependency edge requires updating this section and the architecture contract deliberately.
 
 - `settings.ts` and `diagnostics.ts` have no internal dependencies. `diagnostics.ts` owns bounded,
-  allowlisted human console output, rotating JSONL plugin/SDK logs, and support-case accessory aliases.
+  allowlisted human console output, rotating JSONL plugin/SDK logs, the resolved FFmpeg identity record,
+  and support-case accessory aliases.
   `storage.ts` owns the `homebridge-eufy` persistence root, imports only account-owner liveness, and
   atomically migrates the pre-rename V5 path.
   `configuration.ts` may import `settings.ts`.

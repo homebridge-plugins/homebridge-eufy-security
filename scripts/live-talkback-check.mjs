@@ -85,7 +85,9 @@ try {
       return handle;
     },
   };
-  const prepared = await new FfmpegLiveMedia(ffmpeg).prepare({
+  const prepared = await new FfmpegLiveMedia(ffmpeg, {
+    report: (notice) => console.log(`  adaptation: ${JSON.stringify(notice)}`),
+  }).prepare({
     addressVersion: 'ipv4',
     targetAddress: '127.0.0.1',
     video: {

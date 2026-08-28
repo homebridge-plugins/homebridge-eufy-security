@@ -135,6 +135,40 @@ reproduction-marker paths, snapshots the exact evidence shown in a versioned rev
 permits one export of that reviewed snapshot. The UI receives evidence only as an RSA-OAEP-wrapped,
 AES-256-GCM encrypted envelope; it has no plaintext evidence export or upload route.
 
+### FFmpeg attribution
+
+An adaptation failure names the build it came from and what that build did, because neither is inferable
+from the host facts alone: a bundled static build and a distribution build on the same host advertise
+entirely different encoder sets, and one shared failure reason makes every cause read as the same fault.
+
+Three separate mechanisms carry it, and they stay separate because they answer different questions.
+
+- **Which binary.** `configuration.ts` decides whether a resolved path is the bundled build or one an
+  administrator configured, by comparing it with the bundled one rather than remembering which branch
+  produced it — the plugin serializes the resolved path back as an explicit setting, so the branch is
+  not durable. `media/live-stream.ts` reads that binary's own version banner, because whether it answers
+  at all is what separates a wrong path from a missing encoder. `diagnostics.ts` persists the result
+  under its own storage root and republishes it as environment evidence, since the process that resolves
+  it is not the one that assembles an archive.
+- **What the process did.** `media/contracts.ts` owns the bounded adaptation vocabulary. A spawn
+  failure, an exit before first output, and an exit after output began are separate live-session
+  reasons, because the same exit status means opposite things either side of first output. A process
+  that ended as its session intended is reported too, without a reason, when it wrote diagnostics of its
+  own — a build that warns its way through a working session is what an unwatchable-live-view report
+  needs.
+- **What it said.** Every adaptation process retains a bounded tail of its own stderr, which is the
+  only place an encoder-level cause is stated. `diagnostics.ts` is the sole gate on that text: the
+  record's role, event, exit status, and signal are checked against its own allowlists, and each line
+  has URLs, key material, filesystem paths, addresses, and device serials replaced before it is kept,
+  because this plugin's argument list carries the SRTP key and the controller address and an SDK
+  snapshot filename carries a serial. Key material is replaced before the path rules run: base64
+  includes `/`, so a path rule applied first splits a key into fragments too short for any length
+  threshold to catch. The SDK's own FFmpeg output, forwarded under an `[ffmpeg]` prefix, is recorded
+  through the same gate.
+
+Those records are the `ffmpeg-log` evidence class the `live-media` and `hksv-recording` profiles
+declare, so they are retained only while a profile declaring them is authorized.
+
 ## Ownership boundaries
 
 - The SDK owns verified device capabilities, observations, operations, events, and transport behavior.

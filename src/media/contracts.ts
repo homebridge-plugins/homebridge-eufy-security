@@ -50,6 +50,12 @@ export interface NegotiatedLiveMedia {
  * audio, and never a video frame. That is a switched-off camera's signature, and also that of a camera
  * whose video this build cannot read, so the reason states the observation and leaves the diagnosis to
  * whatever else is known about the camera.
+ *
+ * The three adaptation reasons are distinct because they have distinct causes and distinct fixes. A process
+ * that never started names a binary that is missing, unreadable or not executable; one that exited before
+ * producing output names an encoder, argument or format the resolved build does not have; one that exited
+ * mid-session names a run that was working and stopped. `adaptation-failed` is what remains when none of
+ * those describes it, which is the output pipe failing while the process itself is still reported as alive.
  */
 export type LiveSessionFailure =
   | 'source-acquisition-timeout'
@@ -58,6 +64,9 @@ export type LiveSessionFailure =
   | 'source-error'
   | 'source-stopped'
   | 'rtcp-timeout'
+  | 'adaptation-spawn-failed'
+  | 'adaptation-exited-before-output'
+  | 'adaptation-exited-while-streaming'
   | 'adaptation-failed';
 
 /** The live-start boundary at which a bounded session failure became observable. */
@@ -79,6 +88,48 @@ export type TalkbackFailure = 'source-unavailable' | 'unsupported-selection' | '
 export type TalkbackOutcome =
   | { readonly outcome: 'talking' }
   | { readonly outcome: 'failed'; readonly reason: TalkbackFailure };
+
+/**
+ * Which adaptation process one bounded FFmpeg notice came from.
+ *
+ * These are the processes this domain owns. Whoever records a notice may recognise more — the SDK runs FFmpeg
+ * of its own — so its allowlist is a superset of this one, and nothing here may claim a role it does not own.
+ */
+export type AdaptationRole = 'live-video' | 'live-audio' | 'return-audio' | 'recording';
+
+/**
+ * What one adaptation process did, at the granularity that decides where to look next.
+ *
+ * `exited-before-output` and `exited-while-streaming` are separated because the process's own exit status
+ * means opposite things either side of first output: before it, the run never worked and the exit names a
+ * build that cannot satisfy the arguments it was given; after it, the run did work and something ended it.
+ *
+ * `output` is a process that ended as its session intended, reported only because it had written diagnostics
+ * of its own. A build that warns its way through a working session is what a "live view is unwatchable"
+ * report needs, and it is not a failure, so no reason is raised for it.
+ */
+export type AdaptationEvent = 'spawn-failed' | 'exited-before-output' | 'exited-while-streaming' | 'output';
+
+/**
+ * One bounded FFmpeg fact a media session observed, in the terms a support archive may keep.
+ *
+ * `stderr` is the tail the process last wrote, which is the only place an encoder-level cause is stated
+ * outright. It is passed on verbatim and reduced by whoever records it, because the argument list this
+ * domain builds carries SRTP key material and an output address, and either can be echoed back on that
+ * same pipe.
+ */
+export interface AdaptationNotice {
+  readonly role: AdaptationRole;
+  readonly event: AdaptationEvent;
+  readonly code?: number;
+  readonly signal?: string;
+  readonly stderr?: readonly string[];
+}
+
+/** Where a media adaptation reports what its FFmpeg process did, without owning how it is recorded. */
+export interface AdaptationDiagnostics {
+  report(notice: AdaptationNotice): void;
+}
 
 export interface LiveMediaTransport {
   readonly addressVersion: 'ipv4' | 'ipv6';

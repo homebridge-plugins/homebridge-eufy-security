@@ -446,11 +446,18 @@ async function measure({ executable, open, feed, fps, results, label }) {
   });
   const { adaptations, factory } = adaptationRecorder(executable);
   const outcomes = [];
+  const notices = [];
   const source = sourceObservation();
   let reported = [];
   const endpoint = await homeKitEndpoint();
   try {
-    const prepared = await new FfmpegLiveMedia(executable, factory).prepare({
+    const prepared = await new FfmpegLiveMedia(
+      executable,
+      {
+        report: (notice) => notices.push(notice),
+      },
+      factory,
+    ).prepare({
       addressVersion: 'ipv4',
       targetAddress: '127.0.0.1',
       video: endpoint.target,
@@ -501,6 +508,7 @@ async function measure({ executable, open, feed, fps, results, label }) {
     processes: adaptations.length,
     endpointPackets: endpoint.packets,
     diagnostics: adaptations.flatMap(({ diagnostics: lines }) => lines),
+    notices: [...notices],
     outcomes: reported,
   };
   console.log(
@@ -513,6 +521,9 @@ async function measure({ executable, open, feed, fps, results, label }) {
   );
   for (const diagnostic of report.diagnostics) {
     console.log(`    ffmpeg: ${diagnostic}`);
+  }
+  for (const notice of report.notices) {
+    console.log(`    adaptation: ${JSON.stringify(notice)}`);
   }
   console.log(
     `    source inputs: ${observed.inputs.map(({ codec, width, height, frames }) => `${codec} ${width}x${height} frames=${frames}`).join(' -> ')}`,
