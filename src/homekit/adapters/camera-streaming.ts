@@ -109,14 +109,6 @@ const RECORDING_SAMPLE_RATES = (
 const CAMERA_ENABLED_READ = { id: 'camera.enabled.read', kind: 'read', type: 'bool' } as const;
 
 /**
- * The enablement change the SDK reports between cloud polls, which is how a camera switched off in the
- * vendor app is learned. It is not required to attach, because a camera that reports the observation
- * without announcing its changes is still presented; it is named so the manifest row this bundle consumes
- * is covered.
- */
-const CAMERA_ENABLED_EVENT_ROW = 'camera.cameraEnabled.event';
-
-/**
  * The indicator LED this bundle presents on the same service, and the operation that moves it. HomeKit
  * calls it the camera operating mode indicator, which is what the Home app shows as the camera's status
  * light, so it belongs on that service rather than on a switch of its own.
@@ -818,61 +810,6 @@ export const CAMERA_STREAMING_ADAPTER = {
         },
       ],
     },
-    {
-      id: CAMERA_ENABLED_EVENT_ROW,
-      hapFit:
-        'The enablement observation ends a session watching a camera that just went off, from this poll event, from the SDK observation event a landed write announces, which the manifest does not describe, and from a supervision read where nothing announced the change; the camera controls bundle follows the same two announcements to push its Camera Enabled switch, since HomeKit reads a characteristic only while the Home app is open and is otherwise told or shows the old state for good; it is deliberately published as no HomeKit state on the operating mode service, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
-      identityEffect:
-        "Session lifetime only: the operating mode service is the recording controller's own where HomeKit Secure Video created one, and otherwise one service under the stable semantic key camera.operating-mode, so an accessory carries exactly one",
-      diagnostics:
-        'An absent, non-boolean, faulting, or SDK-declined enablement reading withdraws no camera and refuses no session; each announced change records one identity-free trace naming whether the observation answered',
-      verification: [
-        {
-          file: 'test/contracts/camera-controls-adapter.test.ts',
-          behavior: 'announces the camera power to HomeKit when something else changed it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'withdraws the disabled state an earlier version published, and the record it kept for it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'ends the session from the supervision read when nothing announced the change',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'follows the enablement change event rather than a timer',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'ends an active session on the enablement change event instead of waiting for the next read',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents no operating mode state without an exactly evidenced boolean enablement observation',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'declines an enablement observation the SDK names as unreflected',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'withdraws a published disabled state when a reconciliation leaves no observation to act on',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents on an operating mode service the accessory restored from a run that configured recording',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'withdraws a stale operating mode service before the recording controller attaches its own',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'withdraws a stale operating mode service before the recording controller attaches its own',
-        },
-      ],
-    },
   ],
   attach: attachCameraStreaming,
 } as const satisfies HomeKitAdapter;
@@ -1197,6 +1134,8 @@ function attachment(
   releaseOperations: () => void,
 ): AttachedAdapter {
   const presentation = operatingModePresentation(context, controller, controls);
+  /** The flat property name this device announces its power under, as its own manifest pairs it. */
+  const announcedEnabledProperty = context.evidence.get(CAMERA_ENABLED_READ.id)?.property;
   return {
     /**
      * Follows an announced enablement change: a session watching a camera which just went off is ended at
@@ -1204,7 +1143,7 @@ function attachment(
      * decision answered.
      */
     event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
-      const trace = enablementAnnouncement(event.eventName, presentation.observe);
+      const trace = enablementAnnouncement(event, announcedEnabledProperty, presentation.observe);
       if (trace === undefined) {
         return undefined;
       }

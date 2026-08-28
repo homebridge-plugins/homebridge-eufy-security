@@ -11,14 +11,31 @@ import {
 } from '../../src/homekit/adapters/battery.js';
 
 const HAP = { Service, Characteristic, HAPStatus, HapStatusError };
+/**
+ * The flat property name this synthetic manifest announces the level under.
+ *
+ * Deliberately not `level`: the SDK's generic announcement names the property while the coverage row and
+ * the adapter requirement name the accessor, so a test that used one string for both would pass against
+ * an adapter that had simply hardcoded the accessor.
+ */
+const ANNOUNCED_LEVEL_PROPERTY = 'synthetic_battery_level';
+const LEVEL_EVIDENCE = { ...BATTERY_ADAPTER.requires[0], property: ANNOUNCED_LEVEL_PROPERTY };
 const ALL_BATTERY_EVIDENCE = new Map(BATTERY_ADAPTER.coverage.map(({ id }) => [id, { id, kind: 'event' as const }]));
-ALL_BATTERY_EVIDENCE.set('battery.level.read', BATTERY_ADAPTER.requires[0]);
+ALL_BATTERY_EVIDENCE.set('battery.level.read', LEVEL_EVIDENCE);
 ALL_BATTERY_EVIDENCE.set('battery.charging.read', {
   id: 'battery.charging.read',
   kind: 'read',
   type: 'bool',
   writable: false,
 });
+
+function levelAnnouncement(value?: number | string): AnyDeviceEvent {
+  return {
+    eventName: 'propertyChanged',
+    property: ANNOUNCED_LEVEL_PROPERTY,
+    ...(value === undefined ? {} : { value }),
+  } as AnyDeviceEvent;
+}
 
 function accessory(): PlatformAccessory {
   return new Accessory('Synthetic battery device', uuid.generate('synthetic-battery')) as unknown as PlatformAccessory;
@@ -100,13 +117,35 @@ describe('battery capability adapter', () => {
 
     expect(adapter.event?.({ eventName: 'batteryAlert', state: 'full' } as AnyDeviceEvent)?.observation).toBe('valid');
     expect(lowBattery.value).toBe(Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);
-    expect(adapter.event?.({ eventName: 'batteryLevel', to: '20' } as AnyDeviceEvent)?.observation).toBe('valid');
+    expect(adapter.event?.(levelAnnouncement(20))?.observation).toBe('valid');
     expect(lowBattery.value).toBe(Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);
 
     level = 21;
-    expect(adapter.event?.({ eventName: 'batteryLevel', to: '21' } as AnyDeviceEvent)?.observation).toBe('valid');
+    expect(adapter.event?.(levelAnnouncement(21))?.observation).toBe('valid');
     expect(batteryLevel.value).toBe(21);
     expect(lowBattery.value).toBe(Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL);
+  });
+
+  it('follows the announcement for the property the manifest pairs with this read, and no other', () => {
+    const target = accessory();
+    const adapter = attach(
+      batteryDevice(() => 80),
+      target,
+    )!;
+    const batteryLevel = target
+      .getServiceById(Service.Battery, BATTERY_ADAPTER_KEY)!
+      .getCharacteristic(Characteristic.BatteryLevel);
+
+    expect(adapter.event?.(levelAnnouncement(44))?.observation).toBe('valid');
+    expect(batteryLevel.value).toBe(44);
+
+    expect(
+      adapter.event?.({ eventName: 'propertyChanged', property: 'level', value: 7 } as AnyDeviceEvent),
+    ).toBeUndefined();
+    expect(
+      adapter.event?.({ eventName: 'propertyChanged', property: 'rssi', value: -60 } as AnyDeviceEvent),
+    ).toBeUndefined();
+    expect(batteryLevel.value).toBe(44);
   });
 
   it('keeps hot alerts diagnostic-only', async () => {
@@ -156,7 +195,7 @@ describe('battery capability adapter', () => {
 
   it('rejects malformed events and ignores events absent from manifest evidence', () => {
     const target = accessory();
-    const levelEvidence = new Map([['battery.level.read', BATTERY_ADAPTER.requires[0]]]);
+    const levelEvidence = new Map([['battery.level.read', LEVEL_EVIDENCE]]);
     const adapter = attach(
       batteryDevice(() => 60),
       target,
@@ -165,17 +204,23 @@ describe('battery capability adapter', () => {
     const service = target.getServiceById(Service.Battery, BATTERY_ADAPTER_KEY)!;
 
     expect(service.testCharacteristic(Characteristic.ChargingState)).toBe(false);
-    expect(adapter.event?.({ eventName: 'batteryLevel', to: '10' } as AnyDeviceEvent)).toBeUndefined();
     expect(adapter.event?.({ eventName: 'batteryAlert', state: 'low' } as AnyDeviceEvent)).toBeUndefined();
+
+    const unnamedTarget = accessory();
+    const unnamed = attach(
+      batteryDevice(() => 60),
+      unnamedTarget,
+      new Map([['battery.level.read', BATTERY_ADAPTER.requires[0]]]),
+    )!;
+    expect(unnamed.event?.(levelAnnouncement(30))).toBeUndefined();
 
     const eventAdapter = attach(
       batteryDevice(() => 60),
       target,
     )!;
-    expect(eventAdapter.event?.({ eventName: 'batteryLevel' } as AnyDeviceEvent)?.observation).toBe('missing');
-    expect(eventAdapter.event?.({ eventName: 'batteryLevel', to: 'invalid' } as AnyDeviceEvent)?.observation).toBe(
-      'malformed',
-    );
+    expect(eventAdapter.event?.(levelAnnouncement())?.observation).toBe('missing');
+    expect(eventAdapter.event?.(levelAnnouncement('invalid'))?.observation).toBe('malformed');
+    expect(eventAdapter.event?.(levelAnnouncement(101))?.observation).toBe('malformed');
     expect(
       eventAdapter.event?.({ eventName: 'batteryAlert', state: 'unknown' } as unknown as AnyDeviceEvent)?.observation,
     ).toBe('malformed');

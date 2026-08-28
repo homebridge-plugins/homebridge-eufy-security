@@ -134,7 +134,7 @@ describe('snapshot-driven dashboard', () => {
       { ...camera.details[0]!, capability: 'motion', events: ['motion', 'vehicleDetected', 'cryingDetected'] },
       { ...camera.details[0]!, capability: 'doorbell', events: ['doorbellPress', 'petDetection'] },
       { ...camera.details[0]!, capability: 'person_detection', events: ['personDetected', 'strangerDetected'] },
-      { ...camera.details[0]!, capability: 'battery', events: ['batteryLevel', 'batteryAlert'] },
+      { ...camera.details[0]!, capability: 'battery', events: ['batteryAlert'] },
       { ...camera.details[0]!, capability: 'arming', events: ['alarm', 'armingMode'] },
       { ...camera.details[0]!, capability: 'contact', events: ['contactState'] },
     ];
@@ -145,7 +145,7 @@ describe('snapshot-driven dashboard', () => {
 
     expect(
       snapshot.warmUpCandidates,
-      'a battery level, an arming change or a contact opening is not followed by a snapshot, so warming a connection for it only spends battery',
+      'a battery alert, an arming change or a contact opening is not followed by a snapshot, so warming a connection for it only spends battery',
     ).toEqual([
       'cryingDetected',
       'doorbellPress',

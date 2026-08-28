@@ -18,7 +18,6 @@ const BATTERY_LEVEL_REQUIREMENT = {
   writable: false,
 } as const;
 const BATTERY_CHARGING_EVIDENCE = 'battery.charging.read';
-const BATTERY_LEVEL_EVENT_EVIDENCE = 'battery.batteryLevel.event';
 const BATTERY_ALERT_EVENT_EVIDENCE = 'battery.batteryAlert.event';
 const LOW_BATTERY_THRESHOLD = 20;
 
@@ -66,7 +65,9 @@ export const BATTERY_ADAPTER = {
   coverage: [
     {
       id: BATTERY_LEVEL_REQUIREMENT.id,
-      hapFit: 'Battery Service BatteryLevel and StatusLowBattery at 20 percent or below',
+      hapFit:
+        'Battery Service BatteryLevel and StatusLowBattery at 20 percent or below, followed from the SDK ' +
+        'property announcement for this read as well as answered on demand',
       identityEffect:
         'Supplemental service uses stable semantic key battery.status and cannot establish representation',
       diagnostics: 'Fail closed for missing, malformed, or faulting battery observations',
@@ -76,12 +77,6 @@ export const BATTERY_ADAPTER = {
       hapFit: 'Battery Service ChargingState from the SDK charging boolean',
       identityEffect: 'Supplemental characteristic has no accessory identity effect',
       diagnostics: 'Fail closed for missing, malformed, or faulting charging observations',
-    },
-    {
-      id: BATTERY_LEVEL_EVENT_EVIDENCE,
-      hapFit: 'Battery Service BatteryLevel and StatusLowBattery from later level evidence',
-      identityEffect: 'Supplemental event has no accessory identity effect',
-      diagnostics: 'Trace missing or malformed level events without fabricated state',
     },
     {
       id: BATTERY_ALERT_EVENT_EVIDENCE,
@@ -147,6 +142,16 @@ function attachBattery(context: AdapterAttachmentContext): AttachedAdapter | und
   BATTERY_STATES.set(service, state);
   const owner = Symbol('battery-owner');
   state.owner = owner;
+  /**
+   * The flat property name this device announces its level under, as its own manifest pairs it.
+   *
+   * The SDK announces a property moving by that name rather than by the capability accessor this row is
+   * keyed on, and it is the announcement's only identifier — no wire id travels with it. A device whose
+   * manifest names no property for the read is left unfollowed rather than matched on the accessor,
+   * because an accessor that happened to equal some other capability's property name would apply a
+   * foreign value to this battery.
+   */
+  const announcedLevelProperty = context.evidence.get(BATTERY_LEVEL_REQUIREMENT.id)?.property;
 
   const fail = (member: 'level' | 'charging', reason: BatteryDiagnosticReason): never => {
     context.diagnose({
@@ -222,18 +227,17 @@ function attachBattery(context: AdapterAttachmentContext): AttachedAdapter | und
 
   return {
     event(event: AnyDeviceEvent): AdapterEventTrace | undefined {
-      if (event.eventName === 'batteryLevel') {
-        if (!context.evidence.has(BATTERY_LEVEL_EVENT_EVIDENCE)) {
+      if (event.eventName === 'propertyChanged') {
+        if (announcedLevelProperty === undefined || event.property !== announcedLevelProperty) {
           return undefined;
         }
-        if (event.to === undefined) {
+        if (event.value === undefined) {
           return { event: 'battery-level', observation: 'missing' };
         }
-        const level = Number(event.to);
-        if (!validLevel(level) || event.to.trim() === '') {
+        if (!validLevel(event.value)) {
           return { event: 'battery-level', observation: 'malformed' };
         }
-        updateLevel(level);
+        updateLevel(event.value);
         recover('level');
         return { event: 'battery-level', observation: 'valid' };
       }

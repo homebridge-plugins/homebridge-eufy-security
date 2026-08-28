@@ -81,7 +81,7 @@ function batteryManifest(serial: string, primary = false): DeviceManifest {
     ],
     actions: [],
     undescribedActions: [],
-    events: ['batteryLevel', 'batteryAlert'],
+    events: ['batteryAlert'],
   });
   return manifest;
 }
@@ -529,7 +529,12 @@ describe('HomeKit registry reconciliation', () => {
     expect(battery.getCharacteristic(Characteristic.StatusLowBattery).value).toBe(
       Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW,
     );
-    source.publishEvent({ eventName: 'batteryLevel', deviceSn: serial, to: '30' });
+    source.publishEvent({
+      eventName: 'propertyChanged',
+      deviceSn: serial,
+      property: 'synthetic_battery_level',
+      value: 30,
+    });
     expect(battery.getCharacteristic(Characteristic.BatteryLevel).value).toBe(30);
     expect(battery.getCharacteristic(Characteristic.StatusLowBattery).value).toBe(
       Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL,

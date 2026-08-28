@@ -1,4 +1,4 @@
-import { CapabilityNotSupportedError } from '@mega-yfue/eufy-sdk';
+import { CapabilityNotSupportedError, type AnyDeviceEvent } from '@mega-yfue/eufy-sdk';
 
 import type { AdapterAttachmentContext } from './adapter.js';
 
@@ -20,19 +20,6 @@ export const INVALID_OBSERVATION_CONDITION = 'invalid-camera-control-observation
 
 const OPERATION_TIMEOUT = Symbol('camera-control-operation-timeout');
 
-/**
- * The announcements both camera bundles follow for the camera's power, and what each one means happened.
- *
- * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued; `cameraEnabled` is a cloud poll
- * seeing the value move, which means something other than this plugin changed it — the vendor app, or a
- * physical switch. Declared here because both bundles act on the same two events: one ends a session watching
- * a camera that just went off, the other keeps its switch honest, and a copy beside either would drift.
- */
-const ENABLEMENT_ANNOUNCEMENTS: Readonly<Record<string, 'write' | 'poll'>> = {
-  cameraEnabledChanged: 'write',
-  cameraEnabled: 'poll',
-};
-
 /** The identity-free trace one observed enablement change records, whichever bundle records it. */
 export const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
 
@@ -42,12 +29,26 @@ export const ENABLEMENT_EVENT_TRACE = 'camera-enabled-changed';
  * Both camera bundles answer the same two announcements and must agree on what they are and how they are
  * recorded; what each does about it differs — one ends a session watching a camera that just went off, the
  * other keeps its switch honest — so the observation is theirs to determine and only the envelope is shared.
+ *
+ * `cameraEnabledChanged` is the SDK reflecting a write this plugin issued. The other announcement is the
+ * SDK's generic property announcement, which is how a change this plugin did NOT make is learned — the
+ * vendor app, or a physical switch. That one names the property rather than the capability accessor, and no
+ * wire id travels with it, so `announcedProperty` is the pairing the device's own manifest states for this
+ * read. A device whose manifest names no property for it is left unfollowed rather than matched on the
+ * accessor, because an accessor equal to some other capability's property name would end a session over a
+ * value that is not this camera's power.
  */
 export function enablementAnnouncement(
-  eventName: string,
+  event: AnyDeviceEvent,
+  announcedProperty: string | undefined,
   observe: () => 'valid' | 'missing' | 'malformed',
 ): { event: string; observation: 'valid' | 'missing' | 'malformed'; announcedBy: 'write' | 'poll' } | undefined {
-  const announcedBy = ENABLEMENT_ANNOUNCEMENTS[eventName];
+  const announcedBy =
+    event.eventName === 'cameraEnabledChanged'
+      ? 'write'
+      : event.eventName === 'propertyChanged' && announcedProperty !== undefined && event.property === announcedProperty
+        ? 'poll'
+        : undefined;
   return announcedBy === undefined ? undefined : { event: ENABLEMENT_EVENT_TRACE, observation: observe(), announcedBy };
 }
 

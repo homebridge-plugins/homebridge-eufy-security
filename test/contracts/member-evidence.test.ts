@@ -37,7 +37,13 @@ describe('device member evidence', () => {
     const evidence = indexDeviceMemberEvidence(manifest([contactDetail()]));
 
     expect([...evidence.values()]).toEqual([
-      { id: 'contact.open.read', kind: 'read', type: 'bool', writable: false },
+      {
+        id: 'contact.open.read',
+        kind: 'read',
+        type: 'bool',
+        writable: false,
+        property: 'synthetic_contact_open',
+      },
       { id: 'contact.contactState.event', kind: 'event' },
     ]);
     expect(
@@ -49,6 +55,22 @@ describe('device member evidence', () => {
     expect(() => indexDeviceMemberEvidence(manifest([contactDetail(), contactDetail(true)]))).toThrow(
       'device manifest contains conflicting member evidence: contact.open.read',
     );
+  });
+
+  it('rejects one accessor the manifest maps to two flat property names', () => {
+    const renamed = contactDetail();
+    renamed.reads = [{ accessor: 'open', property: 'synthetic_contact_state', type: 'bool', writable: false }];
+
+    expect(() => indexDeviceMemberEvidence(manifest([contactDetail(), renamed]))).toThrow(
+      'device manifest contains conflicting member evidence: contact.open.read',
+    );
+  });
+
+  it('matches a required member without constraining the flat property name it is announced under', () => {
+    const evidence = indexDeviceMemberEvidence(manifest([contactDetail()]));
+
+    expect(satisfiesMemberRequirements(evidence, [{ id: 'contact.open.read', kind: 'read', type: 'bool' }])).toBe(true);
+    expect(evidence.get('contact.open.read')?.property).toBe('synthetic_contact_open');
   });
 
   it('rejects an SDK action form the plugin has not reviewed', () => {

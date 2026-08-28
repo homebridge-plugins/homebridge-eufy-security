@@ -87,12 +87,7 @@ describe('SDK/HAP coverage matrix', () => {
 
     const representedBattery = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'battery.status');
     expect(representedBattery.map(({ id }) => id).sort()).toEqual(
-      [
-        'battery.level.read',
-        'battery.charging.read',
-        'battery.batteryLevel.event',
-        'battery.batteryAlert.event',
-      ].sort(),
+      ['battery.level.read', 'battery.charging.read', 'battery.batteryAlert.event'].sort(),
     );
 
     const representedSiren = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'siren.test');
@@ -147,7 +142,6 @@ describe('SDK/HAP coverage matrix', () => {
         'camera.snapshotLive.momentary-action',
         'camera.talkback.momentary-action',
         'camera.recordFragments.momentary-action',
-        'camera.cameraEnabled.event',
         'camera.statusLed.read',
         'camera.statusLed.persistent-operation',
         'camera.nightVision.read',

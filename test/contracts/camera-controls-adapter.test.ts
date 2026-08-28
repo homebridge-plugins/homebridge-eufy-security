@@ -23,14 +23,33 @@ import {
 } from '../../src/homekit/adapters/camera-controls.js';
 
 const HAP = { Service, Characteristic, HAPStatus, HapStatusError };
+/**
+ * The flat property name this synthetic manifest announces the camera's power under.
+ *
+ * Deliberately not `enabled`: the SDK's generic announcement names the property while the coverage row and
+ * the requirement name the accessor, so a test reusing one string for both would pass against a bundle that
+ * had simply hardcoded the accessor.
+ */
+const ANNOUNCED_ENABLED_PROPERTY = 'synthetic_camera_enabled';
 const EVIDENCE = new Map(CAMERA_CONTROLS_ADAPTER.coverage.map(({ id }) => [id, requirement(id)]));
 
 function requirement(id: string) {
   const [capability, member, suffix] = id.split('.');
   const type = member === 'volume' || member === 'brightness' ? 'number' : 'bool';
   return suffix === 'read'
-    ? { id, kind: 'read' as const, type: type as 'bool' | 'number', writable: true }
+    ? {
+        id,
+        kind: 'read' as const,
+        type: type as 'bool' | 'number',
+        writable: true,
+        ...(id === 'camera.enabled.read' ? { property: ANNOUNCED_ENABLED_PROPERTY } : {}),
+      }
     : { id, kind: 'persistent-operation' as const };
+}
+
+/** One generic SDK announcement that the camera's own power property moved. */
+function enablementAnnounced(property = ANNOUNCED_ENABLED_PROPERTY) {
+  return { eventName: 'propertyChanged', deviceSn: 'T8000P0000000000', property } as never;
 }
 
 /**
@@ -399,11 +418,7 @@ describe('camera controls capability adapter', () => {
     on.on('change', ({ newValue }) => announced.push(newValue));
 
     state.enabled = false;
-    const trace = attached!.event!({
-      eventName: 'cameraEnabled',
-      deviceSn: 'T8000P0000000000',
-      enabled: false,
-    } as never);
+    const trace = attached!.event!(enablementAnnounced());
 
     expect(
       announced,
@@ -411,8 +426,15 @@ describe('camera controls capability adapter', () => {
     ).toEqual([false]);
     expect(trace).toEqual({ event: 'camera-enabled-changed', observation: 'valid', announcedBy: 'poll' });
 
-    attached!.event!({ eventName: 'cameraEnabled', deviceSn: 'T8000P0000000000', enabled: false } as never);
+    attached!.event!(enablementAnnounced());
     expect(announced, 'a repeated announcement is not a change, so it is not a notification').toEqual([false]);
+
+    state.enabled = true;
+    expect(
+      attached!.event!(enablementAnnounced('synthetic_camera_status_led')),
+      'an announcement about another property of the same device is not this one moving',
+    ).toBeUndefined();
+    expect(announced).toEqual([false]);
   });
 
   it('leaves the announced switch alone when the reading faults, and says the reading was missing', () => {

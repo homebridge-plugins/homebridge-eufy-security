@@ -142,6 +142,14 @@ function prepareRequest(sessionID = 'synthetic-session'): PrepareStreamRequest {
 }
 
 const SNAPSHOT_SERIAL = 'SYNTHETIC0000000001';
+/**
+ * The flat property name this synthetic manifest announces the camera's power under.
+ *
+ * Deliberately not `enabled`: the SDK's generic announcement names the property while the requirement names
+ * the accessor, so a test reusing one string for both would pass against a bundle that had simply hardcoded
+ * the accessor.
+ */
+const ANNOUNCED_ENABLED_PROPERTY = 'synthetic_camera_enabled';
 
 /** The images this package ships for a camera that cannot be photographed, and for one that is off. */
 const PACKAGED_PLACEHOLDER = readFileSync(new URL('../../media/Snapshot-Unavailable.jpg', import.meta.url));
@@ -302,7 +310,14 @@ function enabledEvidence(
     ...evidence,
     [
       'camera.enabled.read',
-      { id: 'camera.enabled.read', kind: 'read' as const, type: 'bool' as const, writable: true, ...overrides },
+      {
+        id: 'camera.enabled.read',
+        kind: 'read' as const,
+        type: 'bool' as const,
+        writable: true,
+        property: ANNOUNCED_ENABLED_PROPERTY,
+        ...overrides,
+      },
     ],
   ]);
 }
@@ -2895,7 +2910,11 @@ describe('camera streaming bundle adapter', () => {
 
     state.value = true;
     expect(
-      attached!.event!({ eventName: 'cameraEnabled', deviceSn: SNAPSHOT_SERIAL, enabled: true } as never),
+      attached!.event!({
+        eventName: 'propertyChanged',
+        deviceSn: SNAPSHOT_SERIAL,
+        property: ANNOUNCED_ENABLED_PROPERTY,
+      } as never),
       'a cloud poll seeing it move, which means something other than this plugin changed it',
     ).toEqual({ event: 'camera-enabled-changed', observation: 'valid', announcedBy: 'poll' });
 

@@ -96,6 +96,56 @@ const CAMERA_CONTROL_ROWS = [
 const CAMERA_ENABLED_WRITE = { id: 'camera.enabled.persistent-operation', kind: 'persistent-operation' } as const;
 const CAMERA_CONTROL_REQUIREMENTS = [...CAMERA_CONTROL_ROWS, CAMERA_ENABLED_WRITE] as const;
 type CameraControlRequirement = (typeof CAMERA_CONTROL_REQUIREMENTS)[number];
+
+/**
+ * What the camera's power reading owes HomeKit, beyond answering a read.
+ *
+ * Stated on the read rather than on an event row of its own because the SDK announces this member moving
+ * through its one generic property announcement, which is not a capability event and so has no row in the
+ * member surface: following it is part of how this read is presented, not a second member. Both camera
+ * bundles follow it — one keeps this switch honest, the other ends a session watching a camera that just
+ * went off — so the verification for both is gathered here, on the row that owns the observation.
+ */
+const CAMERA_ENABLED_READ_COVERAGE = {
+  hapFit:
+    'The enablement observation is answered on demand and pushed when the SDK announces the property moved, so a camera switched off in the vendor app or by a physical switch is shown as off rather than left showing the old state; the camera streaming bundle follows the same announcement to end a session watching a camera that just went off, and to fall back to a supervision read where nothing announced the change; it is deliberately published as no HomeKit state on the operating mode service, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
+  diagnostics:
+    'An absent, non-boolean, faulting, or SDK-declined enablement reading withdraws no camera and refuses no session; each announced change records one identity-free trace naming whether the observation answered and whether a write or a poll announced it',
+  verification: [
+    {
+      file: 'test/contracts/camera-controls-adapter.test.ts',
+      behavior: 'announces the camera power to HomeKit when something else changed it',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'withdraws the disabled state an earlier version published, and the record it kept for it',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'ends the session from the supervision read when nothing announced the change',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'follows the enablement change event rather than a timer',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'ends an active session on the enablement change event instead of waiting for the next read',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'presents no operating mode state without an exactly evidenced boolean enablement observation',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'declines an enablement observation the SDK names as unreflected',
+    },
+    {
+      file: 'test/contracts/camera-streaming-adapter.test.ts',
+      behavior: 'withdraws a published disabled state when a reconciliation leaves no observation to act on',
+    },
+  ],
+} as const;
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
 
 const CAMERA_CONTROL_STATES = new WeakMap<object, DeviceOperationState>();
@@ -142,6 +192,7 @@ export const CAMERA_CONTROLS_ADAPTER = {
         behavior: 'admits camera controls only from exact enabled-member evidence',
       },
     ],
+    ...(id === CAMERA_ENABLED_READ.id ? CAMERA_ENABLED_READ_COVERAGE : {}),
   })),
   attach: attachCameraControls,
 } as const satisfies HomeKitAdapter;
@@ -219,6 +270,8 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
   );
   const enabledPower = enabledService.getCharacteristic(hap.Characteristic.On);
   const readEnabled = (): boolean => readBoolean('camera', 'enabled', () => camera.enabled);
+  /** The flat property name this device announces its power under, as its own manifest pairs it. */
+  const announcedEnabledProperty = context.evidence.get(CAMERA_ENABLED_READ.id)?.property;
   enabledPower.onGet(readEnabled);
   const previousState = CAMERA_CONTROL_STATES.get(enabledService);
   const state: DeviceOperationState = {
@@ -568,7 +621,7 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
      * guess is not.
      */
     event(event): AdapterEventTrace | undefined {
-      return enablementAnnouncement(event.eventName, () => {
+      return enablementAnnouncement(event, announcedEnabledProperty, () => {
         try {
           const reading = readEnabled();
           if (enabledPower.value !== reading) {

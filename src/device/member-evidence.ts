@@ -8,6 +8,15 @@ export interface DeviceMemberEvidence {
   readonly kind: DeviceMemberKind;
   readonly type?: PropertyValueType;
   readonly writable?: boolean;
+  /**
+   * The name this read carries in the device's flat property namespace, for a read that has one.
+   *
+   * Retained because it is the join key for the SDK's generic property announcement: that announcement
+   * names the property, while a row id and an adapter requirement name the capability accessor, and the
+   * two are not always the same string. Keeping the manifest's own pairing here is what lets an adapter
+   * follow an announcement for a member it already declares without matching on a guessed name.
+   */
+  readonly property?: string;
 }
 
 /** Exact SDK evidence an adapter requires before it may attach. */
@@ -32,7 +41,12 @@ export interface DeviceEvidenceIndex {
 function addEvidence(evidence: Map<string, DeviceMemberEvidence>, member: DeviceMemberEvidence): void {
   const previous = evidence.get(member.id);
   if (previous) {
-    if (previous.kind !== member.kind || previous.type !== member.type || previous.writable !== member.writable) {
+    if (
+      previous.kind !== member.kind ||
+      previous.type !== member.type ||
+      previous.writable !== member.writable ||
+      previous.property !== member.property
+    ) {
       throw new TypeError(`device manifest contains conflicting member evidence: ${member.id}`);
     }
     return;
@@ -46,7 +60,7 @@ export function indexDeviceMemberEvidence(manifest: DeviceManifest): ReadonlyMap
   for (const detail of manifest.details) {
     for (const read of detail.reads) {
       const id = `${detail.capability}.${read.accessor}.read`;
-      addEvidence(evidence, { id, kind: 'read', type: read.type, writable: read.writable });
+      addEvidence(evidence, { id, kind: 'read', type: read.type, writable: read.writable, property: read.property });
     }
     for (const action of detail.actions) {
       let kind: 'persistent-operation' | 'momentary-action';
