@@ -74,11 +74,27 @@ export class PersistedSdkClient implements SdkClient {
   private inventoryReady = false;
   private readonly diagnostics?: Logger;
   private isSessionExpired: (error: unknown) => boolean = () => false;
+  /**
+   * Records one transport fault without changing runtime state.
+   *
+   * A reported fault is not an authentication failure and not a loss of the registry: the SDK announces a
+   * kicked session on its own event, and connectivity through `disconnect`, so treating this bus as evidence
+   * of either would degrade a runtime that is still serving.
+   */
   private readonly handleError = (error: Error): void => {
     this.diagnostics?.error('[client] error event', error);
-    if (this.isSessionExpired(error)) {
-      this.inventoryListener?.({ state: 'authentication-required' });
-    }
+  };
+  /**
+   * Requires authentication again after the account's session was kicked or expired.
+   *
+   * The SDK clears the persisted session before announcing this and announces it nowhere else, so it is the
+   * only way a passive expiry becomes observable — another client logging into the same account, or a token
+   * lapsing, arrives on a fire-and-forget path with no call of this plugin's to reject. An expiry that
+   * surfaces as a throw from a direct call is handled where that call is made.
+   */
+  private readonly handleSessionExpired = (error: Error): void => {
+    this.diagnostics?.error('[client] session expired', error);
+    this.inventoryListener?.({ state: 'authentication-required' });
   };
   private readonly handleEvent = (event: AnyDeviceEvent): void => this.eventListener?.(event);
   /**
@@ -142,6 +158,7 @@ export class PersistedSdkClient implements SdkClient {
     this.connected = true;
     this.client = client;
     client.on('error', this.handleError);
+    client.on('sessionExpired', this.handleSessionExpired);
     client.on('event', this.handleEvent);
     client.on('commandUnconfirmed', this.handleUnconfirmed);
     client.on('connect', this.handleConnect);
@@ -187,6 +204,7 @@ export class PersistedSdkClient implements SdkClient {
     this.eventListener = undefined;
     this.unconfirmedListener = undefined;
     client?.off('error', this.handleError);
+    client?.off('sessionExpired', this.handleSessionExpired);
     client?.off('event', this.handleEvent);
     client?.off('commandUnconfirmed', this.handleUnconfirmed);
     client?.off('connect', this.handleConnect);

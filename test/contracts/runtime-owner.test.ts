@@ -614,8 +614,9 @@ describe('persisted runtime owner', () => {
       state: 'ready',
       snapshot: snapshot('synthetic-current'),
     });
-    expect(calls.slice(0, 8)).toEqual([
+    expect(calls.slice(0, 9)).toEqual([
       'on:error',
+      'on:sessionExpired',
       'on:event',
       'on:commandUnconfirmed',
       'on:connect',
@@ -793,6 +794,7 @@ describe('persisted runtime owner', () => {
     await expect(runtime.start()).resolves.toMatchObject({ state: 'ready' });
     expect([...listeners.keys()]).toEqual([
       'error',
+      'sessionExpired',
       'event',
       'commandUnconfirmed',
       'connect',
@@ -819,10 +821,19 @@ describe('persisted runtime owner', () => {
     expect(inventory).toHaveBeenLastCalledWith(
       expect.objectContaining({ state: 'ready', snapshot: snapshot('synthetic-current') }),
     );
+    listeners.get('error')?.forEach((listener) => listener(new Error('synthetic transport fault') as never));
+    expect(
+      inventory,
+      'a transport fault is not an authentication failure; the session is still the one the account granted',
+    ).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'ready' }));
+
     listeners
-      .get('error')
+      .get('sessionExpired')
       ?.forEach((listener) => listener(new SessionExpiredError('synthetic persisted session expired') as never));
-    expect(inventory).toHaveBeenLastCalledWith({ state: 'authentication-required' });
+    expect(
+      inventory,
+      'the SDK announces a kicked session only here, so this is the only place a passive expiry can be observed',
+    ).toHaveBeenLastCalledWith({ state: 'authentication-required' });
 
     const installedListeners = [...listeners.entries()].flatMap(([event, eventListeners]) =>
       [...eventListeners].map((listener) => [event, listener] as const),
