@@ -1243,6 +1243,55 @@ describe('diagnostic conditions', () => {
   });
 
   /**
+   * The same field, followed to the file rather than to the reporter's sink.
+   *
+   * Every record crosses `sanitizeStructuredEvent` on its way into the log, and that rebuilds a homekit record
+   * from an allowlist rather than forwarding it — so a field the reporter adds and the allowlist does not name
+   * is dropped between the two, silently and only in the artifact a support case actually reads. Asserting on
+   * the reporter's sink cannot see that, which is how the field came to be produced by one half and discarded
+   * by the other.
+   */
+  it('keeps the announcement in the record that reaches the log file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-announcement-'));
+    await new GuidedDiagnostics(root).authorize('control-state', 'now');
+    const logger = createDiagnosticLogger({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }, root);
+
+    try {
+      reportHomeKitEvent(logger, {
+        adapter: 'camera.controls',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+        announcedBy: 'poll',
+      });
+      reportHomeKitEvent(logger, {
+        adapter: 'camera.streaming',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+        announcedBy: 'write',
+      });
+      reportHomeKitEvent(logger, {
+        adapter: 'camera.streaming',
+        event: 'camera-enabled-changed',
+        observation: 'valid',
+        announcedBy: 'telepathy',
+      });
+      await logger.flush?.();
+
+      const records = readFileSync(join(root, 'logs', 'homebridge-eufy.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+
+      expect(
+        records.map((record) => record.announcedBy),
+        'the field is useless if it does not survive into the artifact a support case reads',
+      ).toEqual(['poll', 'write', undefined]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  /**
    * The stderr tail is the only place an adaptation states its own cause, and it is also the only place this
    * plugin's own argument list can be echoed back — the output URL carries the base64 SRTP key and salt, and
    * the controller address is beside it. Both are therefore replaced by name before the line is kept, and the

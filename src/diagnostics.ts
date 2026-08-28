@@ -1533,7 +1533,13 @@ const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'camera.controls': new Set(['camera-enabled-changed']),
 };
 const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
-/** What announced a change, for an adapter that follows more than one announcement for the same state. */
+/**
+ * What announced a change, for an adapter that follows more than one announcement for the same state.
+ *
+ * Consulted by both halves of the write path, and it has to be: the reporter builds the record, and the file
+ * sink then rebuilds a homekit record from its own allowlist rather than forwarding what it was given. A field
+ * only one half names is produced and then discarded, silently, and only in the artifact a support case reads.
+ */
 const HOMEKIT_ANNOUNCEMENTS = new Set(['write', 'poll']);
 const HOMEKIT_LIVE_VIDEO_OPERATIONS = new Set(['start', 'reconfigure']);
 const HOMEKIT_LIVE_VIDEO_PROFILES = new Set(['baseline', 'main', 'high']);
@@ -1887,6 +1893,9 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       adapter: value.adapter,
       event: value.event,
       observation: value.observation,
+      ...(typeof value.announcedBy === 'string' && HOMEKIT_ANNOUNCEMENTS.has(value.announcedBy)
+        ? { announcedBy: value.announcedBy }
+        : {}),
     };
   }
 
