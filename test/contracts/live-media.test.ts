@@ -81,6 +81,12 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamConsumer {
   /**
    * Deliver one frame, announcing its coded configuration first where that has changed.
    *
+   * The announcement travels WITH the frame and is compared at delivery, as the real consumer does: it
+   * resolves the configuration when a frame arrives, carries it on the queued item, and announces inside the
+   * single hand-over every path traverses. Deciding at enqueue time instead would let a held backlog lose an
+   * announcement, and would let `resume` stop between an announcement and the frame it precedes — an
+   * interleaving the real consumer cannot produce.
+   *
    * `announced` defaults to the frame's own header because these frames carry no real parameter sets, which
    * is the SDK's documented fallback. Passing it explicitly models the case that matters: the SDK reads the
    * configuration from the parameter sets, so it can differ from the header a station reported, and a
@@ -88,16 +94,18 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamConsumer {
    */
   video(frame: LiveVideoFrame, announced?: LiveVideoConfig): void {
     const config = announced ?? { codec: frame.codec, width: frame.width, height: frame.height };
-    if (
-      this.config === undefined ||
-      this.config.codec !== config.codec ||
-      this.config.width !== config.width ||
-      this.config.height !== config.height
-    ) {
-      this.config = config;
-      this.deliver(() => this.emit('video-config', config));
-    }
-    this.deliver(() => this.emit('video', frame));
+    this.deliver(() => {
+      if (
+        this.config === undefined ||
+        this.config.codec !== config.codec ||
+        this.config.width !== config.width ||
+        this.config.height !== config.height
+      ) {
+        this.config = config;
+        this.emit('video-config', config);
+      }
+      this.emit('video', frame);
+    });
   }
 
   audio(frame: LiveAudioFrame): void {
@@ -897,6 +905,68 @@ describe('live media adaptation', () => {
 
     expect(session.children).toHaveLength(1);
     expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(gop.map(({ data }) => data)));
+    session.prepared.stop();
+  });
+
+  /**
+   * A session opens its adaptation on the configuration in force when the first keyframe arrives, so
+   * announcements made before then have nothing to replace and must not schedule a replacement.
+   *
+   * A cold source announces from each frame's own header until its parameter sets state a geometry, and a
+   * camera's ladder ramps during exactly that window — so several announcements before the first keyframe is
+   * the ordinary case, not an edge. Counting them instead of comparing them tore down the adaptation at the
+   * following keyframe and discarded every access unit up to it.
+   */
+  it('opens one adaptation despite configurations announced before any keyframe', async () => {
+    const session = await liveSession();
+    await session.start();
+    const ramp = [
+      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) },
+      { ...KEYFRAME, width: 960, height: 540, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 2]) },
+    ];
+    const coded = [
+      KEYFRAME,
+      { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
+      { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 4]) },
+    ];
+    for (const frame of [...ramp, ...coded]) {
+      session.stream.video(frame);
+    }
+
+    expect(session.children).toHaveLength(1);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(coded.map(({ data }) => data)));
+    session.prepared.stop();
+  });
+
+  /**
+   * A configuration that returns to the one the running adaptation was opened for leaves nothing to replace,
+   * however many announcements it took to get back. Rebuilding would spend an encoder lifetime, and discard
+   * the frames in flight, to arrive at the encoder already running.
+   *
+   * The access units announced under the other configuration are still withheld, because that is media the
+   * running process cannot code — not rebuilding is separate from feeding it anything.
+   */
+  it('keeps one adaptation when an announced configuration reverts before a keyframe', async () => {
+    const session = await liveSession();
+    await session.start();
+    const opened = { codec: 'h264' as const, width: 1280, height: 720 };
+    const away = { codec: 'h264' as const, width: 960, height: 540 };
+    const first = KEYFRAME;
+    const foreign = { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) };
+    const resumed = [
+      { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 2]) },
+      { ...KEYFRAME, data: Buffer.from([0, 0, 0, 1, 0x65, 3]) },
+    ];
+    session.stream.video(first, opened);
+    session.stream.video(foreign, away);
+    for (const frame of resumed) {
+      session.stream.video(frame, opened);
+    }
+
+    expect(session.children).toHaveLength(1);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(
+      Buffer.concat([first, ...resumed].map(({ data }) => data)),
+    );
     session.prepared.stop();
   });
 

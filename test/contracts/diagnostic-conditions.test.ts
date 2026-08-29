@@ -360,9 +360,9 @@ describe('diagnostic conditions', () => {
    * because a phase the sanitizer does not recognise is dropped entirely rather than reduced.
    *
    * One table keyed by the published `LiveTrace` union, so each entry must carry exactly the fields its
-   * phase declares and none can be exercised twice or missed. What FAILS when the SDK widens the union is
-   * the sanitizer's own table in `diagnostics.ts` — this file is stripped rather than typechecked, so its
-   * `satisfies` documents the shape rather than guarding it.
+   * phase declares and none can be exercised twice or missed. The `satisfies` documents that shape rather
+   * than guarding it — this repository typechecks `src` only, so what fails when the SDK widens the union is
+   * the sanitizer's own table.
    */
   it('records every phase the SDK live trace vocabulary carries', () => {
     const debug = vi.fn();

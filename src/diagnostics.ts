@@ -1297,59 +1297,64 @@ function classifySdkEvent(message: string): string {
   return 'sdk-diagnostic';
 }
 
-/** A bounded byte from an SDK trace: a data-type id or a sign code, or nothing when out of range. */
-function traceByte(value: unknown, max: number): number | undefined {
+/** A non-negative integer no larger than `max`, or nothing — a data-type id, a sign code, an exit status. */
+function boundedInteger(value: unknown, max: number): number | undefined {
   return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max ? Number(value) : undefined;
 }
 
-/** One of a fixed set of labels, or nothing — the only string form a trace field is retained in. */
-function traceLabel(value: unknown, allowed: readonly string[]): string | undefined {
+/**
+ * One of a fixed set of labels, or nothing.
+ *
+ * The only string form any value crossing this boundary is retained in: a label that is not on the list is
+ * dropped rather than truncated or escaped, so no supplied text is ever carried through.
+ */
+function allowlistedLabel(value: unknown, allowed: readonly string[]): string | undefined {
   return allowed.includes(String(value)) ? String(value) : undefined;
 }
 
 /**
  * What each phase of the SDK's live trace vocabulary retains, keyed by the phase itself.
  *
- * Typed against the published `LiveTrace` union, so a phase the SDK adds fails to compile here instead of
- * falling through to a content-free record. That is not hypothetical: `sequence-restart` was added beside
- * ten already handled, a hand-copied list of ten kept compiling, and the phase was reduced to an
- * unstructured line for as long as it existed — losing the one piece of evidence a data channel whose
- * numbering restarts mid-connection produces.
+ * Typed against the published `LiveTrace` union, so a phase the SDK adds fails to compile here rather than
+ * falling through to a content-free record. A phase this table does not name is dropped entirely, which is
+ * why the vocabulary is taken from the type that owns it instead of restated.
  *
- * Each entry validates the fields its own phase declares and returns nothing when they are not the shape
- * claimed, because this reads a value that crossed a process boundary. A field is retained only as a fixed
- * label, a boolean, or a bounded integer; the SDK states that its traces carry no serial, address or key
- * material, and validating rather than copying is what keeps that true here whatever it sends.
+ * Each entry validates the fields its own phase declares, by name, and returns nothing when they are not the
+ * shape claimed, because this reads a value that crossed a process boundary. A field is retained only as a
+ * fixed label, a boolean, or a bounded integer; the SDK states that its traces carry no serial, address or
+ * key material, and validating rather than copying is what keeps that true here whatever it sends. The field
+ * shapes themselves are not checked against the union, so a field the SDK renames within an existing phase
+ * is dropped silently.
  */
 const LIVE_TRACE_PHASES = {
   'media-command': (c) => {
-    const topology = traceLabel(c.topology, ['attached', 'own']);
-    const action = traceLabel(c.action, ['keepalive', 'start']);
+    const topology = allowlistedLabel(c.topology, ['attached', 'own']);
+    const action = allowlistedLabel(c.action, ['keepalive', 'start']);
     return topology && action && typeof c.level2 === 'boolean' ? { topology, action, level2: c.level2 } : undefined;
   },
   'media-command-ack': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
   'media-command-retry': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
   'media-command-unacknowledged': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
   'first-video-command': (c) => {
-    const signCode = traceByte(c.signCode, 255);
+    const signCode = boundedInteger(c.signCode, 255);
     return signCode !== undefined && typeof c.accepted === 'boolean' ? { signCode, accepted: c.accepted } : undefined;
   },
   'first-video-unit': (c) => (typeof c.keyframe === 'boolean' ? { keyframe: c.keyframe } : undefined),
   'first-keyframe': () => ({}),
   'first-foreign-media-command': (c) => {
-    const media = traceLabel(c.media, ['audio', 'video']);
+    const media = allowlistedLabel(c.media, ['audio', 'video']);
     return media ? { media } : undefined;
   },
   'video-decode-empty': (c) => {
-    const signCode = traceByte(c.signCode, 255);
+    const signCode = boundedInteger(c.signCode, 255);
     return signCode === undefined ? undefined : { signCode };
   },
   'datagram-gap': (c) => {
-    const dataType = traceByte(c.dataType, 3);
+    const dataType = boundedInteger(c.dataType, 3);
     return dataType === undefined ? undefined : { dataType };
   },
   'sequence-restart': (c) => {
-    const dataType = traceByte(c.dataType, 3);
+    const dataType = boundedInteger(c.dataType, 3);
     return dataType === undefined ? undefined : { dataType };
   },
 } satisfies Record<LiveTrace['phase'], (candidate: Record<string, unknown>) => Record<string, unknown> | undefined>;
@@ -1833,7 +1838,7 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
   } catch {
     return undefined;
   }
-  const level = ['debug', 'info', 'warn', 'error'].includes(String(value.level)) ? String(value.level) : undefined;
+  const level = allowlistedLabel(value.level, ['debug', 'info', 'warn', 'error']);
   if (!level || typeof value.scope !== 'string') return undefined;
 
   if (value.scope === 'sdk') {
@@ -1854,14 +1859,21 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
     for (const detail of Array.isArray(value.details) ? value.details.slice(0, MAX_SDK_DETAILS) : []) {
       if (!detail || typeof detail !== 'object' || Array.isArray(detail)) continue;
       const candidate = detail as Record<string, unknown>;
-      if (['Error', 'RangeError', 'SessionExpiredError', 'TypeError'].includes(String(candidate.errorType))) {
-        details.push({ errorType: String(candidate.errorType) });
+      const errorType = allowlistedLabel(candidate.errorType, [
+        'Error',
+        'RangeError',
+        'SessionExpiredError',
+        'TypeError',
+      ]);
+      if (errorType) {
+        details.push({ errorType });
         continue;
       }
-      if (!['boolean', 'number', 'object', 'string', 'undefined'].includes(String(candidate.type))) continue;
+      const type = allowlistedLabel(candidate.type, ['boolean', 'number', 'object', 'string', 'undefined']);
+      if (!type) continue;
       const length =
         Number.isSafeInteger(candidate.length) && Number(candidate.length) >= 0 ? Number(candidate.length) : undefined;
-      details.push({ type: String(candidate.type), ...(length === undefined ? {} : { length }) });
+      details.push({ type, ...(length === undefined ? {} : { length }) });
     }
     return {
       scope: 'sdk',
@@ -1930,8 +1942,9 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
   }
 
   if (value.scope === 'runtime') {
-    if (!['ready', 'stopped'].includes(String(value.event))) return undefined;
-    return { scope: 'runtime', level: 'info', event: value.event, messageKey: 'log.runtime.state' };
+    const event = allowlistedLabel(value.event, ['ready', 'stopped']);
+    if (!event) return undefined;
+    return { scope: 'runtime', level: 'info', event, messageKey: 'log.runtime.state' };
   }
 
   if (value.scope === 'ffmpeg') {
@@ -2161,10 +2174,7 @@ function sanitizeAdaptationNotice(value: Record<string, unknown>, level: string)
   if (typeof value.event !== 'string' || !ADAPTATION_EVENTS.has(value.event)) {
     return undefined;
   }
-  const code =
-    Number.isSafeInteger(value.code) && Number(value.code) >= 0 && Number(value.code) <= 255
-      ? Number(value.code)
-      : undefined;
+  const code = boundedInteger(value.code, 255);
   const signal = typeof value.signal === 'string' && ADAPTATION_SIGNALS.has(value.signal) ? value.signal : undefined;
   const stderr = (Array.isArray(value.stderr) ? value.stderr : [])
     .filter((line): line is string => typeof line === 'string')

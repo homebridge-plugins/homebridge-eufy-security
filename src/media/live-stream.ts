@@ -23,6 +23,17 @@ import type {
 
 /** How long a deliberately stopped adaptation process is given to exit before it is killed. */
 export const PROCESS_STOP_GRACE_MS = 2_000;
+
+/**
+ * Whether one coded source configuration can be adapted by a process opened for the other.
+ *
+ * Compared by value, because the SDK resolves a configuration per frame: an unchanged source produces an
+ * equal object rather than the same one, and identity would replace an adaptation on every frame.
+ */
+function sameConfiguration(a: LiveVideoConfig, b: LiveVideoConfig): boolean {
+  return a.codec === b.codec && a.width === b.width && a.height === b.height;
+}
+
 const INITIAL_RTCP_GRACE_MS = 15_000;
 const SOURCE_ACQUISITION_DEADLINE_MS = 10_000;
 const RETURN_AUDIO_BIND_GRACE_MS = 250;
@@ -209,16 +220,20 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     let receivedVideoKeyframe = false;
     let reconfigurationPending = false;
     /**
-     * The source configuration the running adaptation was opened for, and whether the source has since
-     * announced a different one.
+     * The coded configuration the source last announced, and the one the running adaptation was opened for.
      *
      * The SDK announces a coded configuration once per change, immediately before the first frame carrying
-     * it, so this session neither retains frame dimensions nor compares them: a frame header is the
-     * station's report, while the announcement carries the picture size a decoder will produce. A camera
-     * reconfigures repeatedly within one session, so this is not a rare path.
+     * it, so this session neither retains frame dimensions nor compares them: a frame header is the station's
+     * report, while the announcement carries the picture size a decoder will produce.
+     *
+     * Two values rather than a flag, because an announcement is not by itself a reason to replace anything.
+     * A cold source announces from each frame's own header until its parameter sets state a geometry, and a
+     * camera's ladder ramps during exactly that window, so several arrive before the first keyframe opens any
+     * adaptation at all; and a configuration that moves away and back leaves the running adaptation still
+     * correct. Only a difference between these two is a reason to rebuild.
      */
     let videoConfig: LiveVideoConfig | undefined;
-    let sourceReconfigured = false;
+    let adaptationConfig: LiveVideoConfig | undefined;
     let audioInputCodec: LiveAudioFrame['codec'] | undefined;
     let rtcpDeadline: ReturnType<typeof setTimeout> | undefined;
     let initialRtcpGrace: ReturnType<typeof setTimeout> | undefined;
@@ -420,24 +435,21 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     /**
      * Records the coded configuration the source is about to deliver.
      *
-     * The SDK announces only on a change, so any announcement after the first says the running adaptation
-     * can no longer code what is coming. It is not torn down here: the replacement has to start on a
-     * keyframe, and this arrives ahead of the frame that carries the new configuration rather than at a
-     * point where one is in hand.
+     * Nothing is torn down here. A replacement adaptation can only start on a keyframe, and this arrives
+     * ahead of the frame carrying the new configuration rather than at a point where one is in hand.
      */
     const observeVideoConfig = (config: LiveVideoConfig): void => {
-      sourceReconfigured ||= videoConfig !== undefined;
       videoConfig = config;
     };
 
     /**
      * Writes one source access unit to the adaptation that is entitled to code it.
      *
-     * A changed source codec or geometry cannot be coded by the current process at all, so those frames wait
-     * for the keyframe that lets a replacement start. A reconfigured HomeKit selection changes only the
-     * output, so the current process keeps coding and keeps the previous selection on the wire until that
-     * same keyframe arrives; a controller reconfigures precisely when it is unhappy with what it receives,
-     * and the source is then often the very thing not producing keyframes.
+     * A source configuration the running adaptation was not opened for cannot be coded by it at all, so those
+     * frames wait for the keyframe that lets a replacement start. A reconfigured HomeKit selection changes
+     * only the output, so the current process keeps coding and keeps the previous selection on the wire until
+     * that same keyframe arrives; a controller reconfigures precisely when it is unhappy with what it
+     * receives, and the source is then often the very thing not producing keyframes.
      */
     const writeVideo = (frame: LiveVideoFrame): void => {
       if (stopped || !negotiated || !videoConfig) {
@@ -449,16 +461,17 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         }
         receivedVideoKeyframe = true;
       }
-      if (videoProcess && sourceReconfigured && !frame.keyframe) {
+      const inputChanged = adaptationConfig !== undefined && !sameConfiguration(adaptationConfig, videoConfig);
+      if (videoProcess && inputChanged && !frame.keyframe) {
         return;
       }
-      if (videoProcess && frame.keyframe && (sourceReconfigured || reconfigurationPending)) {
-        sourceReconfigured = false;
+      if (videoProcess && frame.keyframe && (inputChanged || reconfigurationPending)) {
         reconfigurationPending = false;
         stopProcess(videoProcess);
         videoProcess = undefined;
       }
       if (!videoProcess) {
+        adaptationConfig = videoConfig;
         const child = this.createProcess(
           this.executable,
           videoArguments(videoConfig, negotiated.video, targetAddress, transport.video),
