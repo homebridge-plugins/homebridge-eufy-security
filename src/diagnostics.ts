@@ -1330,7 +1330,7 @@ function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | un
     return ['audio', 'video'].includes(String(candidate.media)) ? { phase, media: String(candidate.media) } : undefined;
   }
   if (phase === 'video-decode-empty') return signCode === undefined ? undefined : { phase, signCode };
-  if (phase === 'datagram-gap') {
+  if (phase === 'datagram-gap' || phase === 'sequence-restart') {
     return Number.isSafeInteger(candidate.dataType) &&
       Number(candidate.dataType) >= 0 &&
       Number(candidate.dataType) <= 3
