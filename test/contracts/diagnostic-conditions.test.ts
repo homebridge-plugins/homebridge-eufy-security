@@ -774,6 +774,234 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
   });
 
+  /**
+   * Every reason a camera omitted from HomeKit Secure Video can carry. The allowlist discards a record whose
+   * reason it does not know, so a reason that never reaches this seam is a camera that never explains itself.
+   */
+  it('attributes every reason a camera is unavailable for recording', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    const reasons = ['missing-evidence', 'missing', 'adapter-missing', 'missing-trigger'];
+    const serial = 'T8000P0000000000';
+
+    for (const reason of reasons) {
+      conditions.reportHomeKit(
+        {
+          code: 'camera-recording-unavailable',
+          capability: 'camera',
+          member: 'recordFragments',
+          active: true,
+          reason,
+        },
+        [serial],
+      );
+    }
+    conditions.reportHomeKit(
+      {
+        code: 'camera-recording-unavailable',
+        capability: 'camera',
+        member: 'recordFragments',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledTimes(reasons.length);
+    expect(warn.mock.calls[0]![0]).toContain(
+      '[camera-recording-unavailable] HomeKit Secure Video recording is unavailable for this camera',
+    );
+    expect(warn.mock.calls[0]![0]).toContain('Check that HomeKit Secure Video is set up for this camera');
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-recording-unavailable',
+      capability: 'camera',
+      member: 'recordFragments',
+      active: true,
+      reason: 'missing-evidence',
+      summaryKey: 'log.homekit.cameraRecordingUnavailable',
+      actionKey: 'log.action.checkCameraRecording',
+      affectedAccessoryCount: 1,
+    });
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual([...reasons, 'recovered']);
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
+  /**
+   * A camera control is withdrawn per member across three capabilities, so both the reason vocabulary and
+   * every capability and member it fans out across have to survive the allowlist. The bundle reports its
+   * spotlight and audio members under capability ids distinct from the standalone light adapter's.
+   *
+   * Reasons and members are counted on separate reporters, because one reporter suppresses a repeat of the
+   * state a member is already in and the two loops would otherwise overlap on whichever member they share.
+   */
+  it('attributes every unavailable camera control to its own capability and member', () => {
+    const serial = 'T8000P0000000000';
+    const reasons = ['missing', 'malformed', 'sdk-fault'];
+    const members = [
+      ['camera', 'enabled'],
+      ['camera', 'statusLed'],
+      ['light', 'isOn'],
+      ['light', 'brightness'],
+      ['audio', 'microphone'],
+      ['audio', 'speaker'],
+      ['audio', 'volume'],
+    ] as const;
+
+    const byReason = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const reasoned = new DiagnosticConditions(byReason);
+    for (const reason of reasons) {
+      reasoned.reportHomeKit(
+        { code: 'camera-controls-capability-unavailable', capability: 'light', member: 'isOn', active: true, reason },
+        [serial],
+      );
+    }
+
+    const byMember = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const membered = new DiagnosticConditions(byMember);
+    for (const [capability, member] of members) {
+      membered.reportHomeKit(
+        { code: 'camera-controls-capability-unavailable', capability, member, active: true, reason: 'missing' },
+        [serial],
+      );
+    }
+    membered.reportHomeKit(
+      {
+        code: 'camera-controls-capability-unavailable',
+        capability: 'audio',
+        member: 'volume',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(byReason.warn).toHaveBeenCalledTimes(reasons.length);
+    expect(byReason.warn.mock.calls[0]![0]).toContain(
+      '[camera-controls-capability-unavailable] A camera control is unavailable',
+    );
+    expect(byReason.warn.mock.calls[0]![0]).toContain(
+      'No action is needed; the control returns when the camera reports it',
+    );
+    expect(byReason.debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual(reasons);
+    expect(byReason.debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'camera-controls-capability-unavailable',
+      capability: 'light',
+      member: 'isOn',
+      active: true,
+      reason: 'missing',
+      summaryKey: 'log.homekit.cameraControlsCapabilityUnavailable',
+      actionKey: 'log.action.waitCameraControl',
+      affectedAccessoryCount: 1,
+    });
+
+    expect(byMember.warn).toHaveBeenCalledTimes(members.length);
+    expect(byMember.info).toHaveBeenCalledOnce();
+    const records = byMember.debug.mock.calls.map(([message]) => JSON.parse(message));
+    expect(records.slice(0, members.length).map(({ capability, member }) => [capability, member])).toEqual(
+      members.map(([capability, member]) => [capability, member]),
+    );
+    expect(records.at(-1)).toMatchObject({ capability: 'audio', member: 'volume', active: false, reason: 'recovered' });
+    expect(
+      JSON.stringify(
+        [byReason, byMember].map(({ debug, info, warn }) => [debug.mock.calls, info.mock.calls, warn.mock.calls]),
+      ),
+    ).not.toContain(serial);
+  });
+
+  /**
+   * An authoritative observation this plugin refused to read, reported per capability and member because the
+   * reader is shared by the streaming and controls bundles and each names the member it was reading.
+   */
+  it('attributes every camera control observation it refused to read', () => {
+    const serial = 'T8000P0000000000';
+    const reasons = ['sdk-fault', 'missing', 'malformed'];
+    const members = [
+      ['camera', 'enabled'],
+      ['camera', 'statusLed'],
+      ['camera', 'nightVision'],
+      ['light', 'isOn'],
+      ['light', 'brightness'],
+      ['audio', 'microphone'],
+      ['audio', 'speaker'],
+      ['audio', 'volume'],
+    ] as const;
+
+    const byReason = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const reasoned = new DiagnosticConditions(byReason);
+    for (const reason of reasons) {
+      reasoned.reportHomeKit(
+        {
+          code: 'invalid-camera-control-observation',
+          capability: 'camera',
+          member: 'nightVision',
+          active: true,
+          reason,
+        },
+        [serial],
+      );
+    }
+
+    const byMember = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const membered = new DiagnosticConditions(byMember);
+    for (const [capability, member] of members) {
+      membered.reportHomeKit(
+        { code: 'invalid-camera-control-observation', capability, member, active: true, reason: 'malformed' },
+        [serial],
+      );
+    }
+    membered.reportHomeKit(
+      {
+        code: 'invalid-camera-control-observation',
+        capability: 'light',
+        member: 'brightness',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(byReason.warn).toHaveBeenCalledTimes(reasons.length);
+    expect(byReason.warn.mock.calls[0]![0]).toContain(
+      '[invalid-camera-control-observation] A camera control state could not be read',
+    );
+    expect(byReason.warn.mock.calls[0]![0]).toContain('Check the camera in the Eufy app');
+    expect(byReason.debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual(reasons);
+    expect(byReason.debug.mock.calls.map(([message]) => JSON.parse(message))[0]).toMatchObject({
+      scope: 'diagnostic-condition',
+      code: 'invalid-camera-control-observation',
+      capability: 'camera',
+      member: 'nightVision',
+      active: true,
+      reason: 'sdk-fault',
+      summaryKey: 'log.homekit.invalidCameraControlObservation',
+      actionKey: 'log.action.checkCameraControl',
+      affectedAccessoryCount: 1,
+    });
+
+    expect(byMember.warn).toHaveBeenCalledTimes(members.length);
+    expect(byMember.info).toHaveBeenCalledOnce();
+    const records = byMember.debug.mock.calls.map(([message]) => JSON.parse(message));
+    expect(records.slice(0, members.length).map(({ capability, member }) => [capability, member])).toEqual(
+      members.map(([capability, member]) => [capability, member]),
+    );
+    expect(records.at(-1)).toMatchObject({
+      capability: 'light',
+      member: 'brightness',
+      active: false,
+      reason: 'recovered',
+    });
+    expect(
+      JSON.stringify(
+        [byReason, byMember].map(({ debug, info, warn }) => [debug.mock.calls, info.mock.calls, warn.mock.calls]),
+      ),
+    ).not.toContain(serial);
+  });
+
   it('allowlists a withdrawn camera snapshot acquisition per acquisition member', () => {
     const warn = vi.fn();
     const info = vi.fn();
