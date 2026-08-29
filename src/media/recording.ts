@@ -121,13 +121,20 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
       teardown();
       units.end();
     };
+    /**
+     * Ends the recording on a failure, naming which bounded reason ended it.
+     *
+     * A HomeKit controller surfaces this error through HDS into the operator's log, so it is the one place a
+     * failed recording explains itself there. It names the reason and not the SDK's own error, whose text is
+     * unbounded and may carry device material; the reason is the bounded vocabulary this domain owns.
+     */
     const fail = (reason: RecordingFailure): void => {
       if (units.settled) {
         return;
       }
       teardown();
       lifecycle?.onOutcome?.({ outcome: 'failed', reason });
-      units.fail(new Error('recording adaptation produced no further usable output'));
+      units.fail(new Error(`recording produced no further usable output: ${reason}`));
     };
     /**
      * Ends the recording once its adaptation has written everything the source gave it, marking the last

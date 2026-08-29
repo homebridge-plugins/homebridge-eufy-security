@@ -150,7 +150,13 @@ function consume(recording: AdaptedRecording) {
     .finally(() => {
       finished = true;
     });
-  return { units, iteration, failed: () => failure !== undefined, finished: () => finished };
+  return {
+    units,
+    iteration,
+    failed: () => failure !== undefined,
+    failure: () => failure,
+    finished: () => finished,
+  };
 }
 
 const settle = async (): Promise<void> => {
@@ -522,6 +528,27 @@ describe('recording media adaptation', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * The error a HomeKit controller is given reaches the operator's log through HDS, so it carries which of
+   * the bounded reasons ended the recording. A source that failed is not an adaptation that failed, and a
+   * message naming the adaptation for either sends whoever reads it to the wrong process.
+   */
+  it('names which bounded reason ended a recording rather than always blaming its adaptation', async () => {
+    const session = recordingSession();
+    await settle();
+    session.children[0].stdout.write(INIT_SEGMENT);
+    await settle();
+    session.source.fail(new Error('synthetic source failure'));
+    await session.consumed.iteration;
+
+    expect(session.outcomes).toEqual([{ outcome: 'recording' }, { outcome: 'failed', reason: 'source-error' }]);
+    const failure = session.consumed.failure();
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('source-error');
+    expect((failure as Error).message).not.toContain('adaptation');
+    expect((failure as Error).message).not.toContain('synthetic source failure');
   });
 
   it('fails a recording whose adaptation exits before its source ends', async () => {
