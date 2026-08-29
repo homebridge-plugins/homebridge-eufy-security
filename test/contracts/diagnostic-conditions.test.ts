@@ -6,7 +6,7 @@ import { gunzipSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SnapshotFailure } from '../../src/media/contracts.js';
+import type { RecordingFailure, SnapshotFailure } from '../../src/media/contracts.js';
 import {
   createDiagnosticLogger,
   createSdkLogger,
@@ -724,6 +724,44 @@ describe('diagnostic conditions', () => {
         code: 'camera-snapshot-unavailable',
         capability: 'camera',
         member: 'snapshot',
+        active: false,
+        reason: 'recovered',
+      },
+      [],
+    );
+
+    expect(warn).toHaveBeenCalledTimes(reasons.length);
+    expect(info).toHaveBeenCalledOnce();
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message).reason)).toEqual([...reasons, 'recovered']);
+    expect(JSON.stringify([warn.mock.calls, info.mock.calls, debug.mock.calls])).not.toContain(serial);
+  });
+
+  it('attributes every bounded recording failure the media domain can report', () => {
+    const warn = vi.fn();
+    const info = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info, warn });
+    /** Exhaustive by type, so a widened recording vocabulary cannot reach the log unallowlisted and untested. */
+    const attributions = {
+      'source-unavailable': true,
+      'source-error': true,
+      'no-output-within-backstop': true,
+      'adaptation-failed': true,
+    } satisfies Record<RecordingFailure, true>;
+    const reasons = Object.keys(attributions);
+    const serial = 'T8000P0000000000';
+
+    for (const reason of reasons) {
+      conditions.reportHomeKit(
+        { code: 'camera-recording-failed', capability: 'camera', member: 'recordFragments', active: true, reason },
+        [serial],
+      );
+    }
+    conditions.reportHomeKit(
+      {
+        code: 'camera-recording-failed',
+        capability: 'camera',
+        member: 'recordFragments',
         active: false,
         reason: 'recovered',
       },

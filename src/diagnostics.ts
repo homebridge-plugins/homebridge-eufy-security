@@ -1485,6 +1485,7 @@ const REASONS = new Set([
   'missing-evidence',
   'missing-trigger',
   'no-acquisition',
+  'no-output-within-backstop',
   'no-primary-purpose-member',
   'no-retained-image',
   'not-confirmed',
