@@ -1,4 +1,4 @@
-import type { LiveAudioFrame, LiveStreamConsumer, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
+import type { LiveAudioFrame, LiveStreamConsumer, LiveVideoConfig, LiveVideoFrame, TalkbackHandle } from '@mega-yfue/eufy-sdk';
 import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
 import { createSocket } from 'node:dgram';
 import { execFile, spawn } from 'node:child_process';
@@ -208,7 +208,17 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     let stopped = false;
     let receivedVideoKeyframe = false;
     let reconfigurationPending = false;
-    let videoInput: Pick<LiveVideoFrame, 'codec' | 'width' | 'height'> | undefined;
+    /**
+     * The source configuration the running adaptation was opened for, and whether the source has since
+     * announced a different one.
+     *
+     * The SDK announces a coded configuration once per change, immediately before the first frame carrying
+     * it, so this session neither retains frame dimensions nor compares them: a frame header is the
+     * station's report, while the announcement carries the picture size a decoder will produce. A camera
+     * reconfigures repeatedly within one session, so this is not a rare path.
+     */
+    let videoConfig: LiveVideoConfig | undefined;
+    let sourceReconfigured = false;
     let audioInputCodec: LiveAudioFrame['codec'] | undefined;
     let rtcpDeadline: ReturnType<typeof setTimeout> | undefined;
     let initialRtcpGrace: ReturnType<typeof setTimeout> | undefined;
@@ -408,6 +418,19 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     };
 
     /**
+     * Records the coded configuration the source is about to deliver.
+     *
+     * The SDK announces only on a change, so any announcement after the first says the running adaptation
+     * can no longer code what is coming. It is not torn down here: the replacement has to start on a
+     * keyframe, and this arrives ahead of the frame that carries the new configuration rather than at a
+     * point where one is in hand.
+     */
+    const observeVideoConfig = (config: LiveVideoConfig): void => {
+      sourceReconfigured ||= videoConfig !== undefined;
+      videoConfig = config;
+    };
+
+    /**
      * Writes one source access unit to the adaptation that is entitled to code it.
      *
      * A changed source codec or geometry cannot be coded by the current process at all, so those frames wait
@@ -417,7 +440,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
      * and the source is then often the very thing not producing keyframes.
      */
     const writeVideo = (frame: LiveVideoFrame): void => {
-      if (stopped || !negotiated) {
+      if (stopped || !negotiated || !videoConfig) {
         return;
       }
       if (!receivedVideoKeyframe) {
@@ -426,22 +449,19 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         }
         receivedVideoKeyframe = true;
       }
-      const inputChanged =
-        videoInput !== undefined &&
-        (videoInput.codec !== frame.codec || videoInput.width !== frame.width || videoInput.height !== frame.height);
-      if (videoProcess && inputChanged && !frame.keyframe) {
+      if (videoProcess && sourceReconfigured && !frame.keyframe) {
         return;
       }
-      if (videoProcess && frame.keyframe && (inputChanged || reconfigurationPending)) {
+      if (videoProcess && frame.keyframe && (sourceReconfigured || reconfigurationPending)) {
+        sourceReconfigured = false;
         reconfigurationPending = false;
         stopProcess(videoProcess);
         videoProcess = undefined;
       }
       if (!videoProcess) {
-        videoInput = { codec: frame.codec, width: frame.width, height: frame.height };
         const child = this.createProcess(
           this.executable,
-          videoArguments(frame, negotiated.video, targetAddress, transport.video),
+          videoArguments(videoConfig, negotiated.video, targetAddress, transport.video),
         );
         videoProcess = child;
         const stderr = new AdaptationStderr();
@@ -728,6 +748,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         }
         videoStartBackstop = setTimeout(() => failVideo('no-video-within-backstop'), SOURCE_START_BACKSTOP_MS);
         videoStartBackstop.unref?.();
+        source.on('video-config', observeVideoConfig);
         source.on('video', writeVideo);
         source.on('audio', writeAudio);
         source.on('budget', (notice) => {
@@ -830,13 +851,13 @@ function outputArguments(
  * and `rc_lookahead` at either preset, so this costs computation rather than frame delay.
  */
 function videoArguments(
-  frame: LiveVideoFrame,
+  source: LiveVideoConfig,
   selection: NegotiatedLiveVideo,
   targetAddress: string,
   target: LiveMediaTarget,
 ): string[] {
   return [
-    ...commonArguments(frame.codec === 'h265' ? 'hevc' : frame.codec, ['-use_wallclock_as_timestamps', '1']),
+    ...commonArguments(source.codec === 'h265' ? 'hevc' : source.codec, ['-use_wallclock_as_timestamps', '1']),
     '-an',
     '-c:v',
     'libx264',

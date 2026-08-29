@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import type {
   LiveAudioFrame,
   LiveStreamConsumer,
+  LiveVideoConfig,
   LiveVideoFrame,
   StreamBudgetNotice,
   TalkbackHandle,
@@ -57,6 +58,8 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamConsumer {
   /** Frames the source is holding, handed over in order once it is released, as a paused consumer does. */
   private readonly queued: Array<() => void> = [];
   private paused = false;
+  /** The coded configuration last announced, so a change is announced once rather than per frame. */
+  private config?: LiveVideoConfig;
 
   readonly pause = vi.fn(() => {
     this.paused = true;
@@ -75,7 +78,25 @@ class SyntheticLiveStream extends EventEmitter implements LiveStreamConsumer {
 
   stop = vi.fn();
 
-  video(frame: LiveVideoFrame): void {
+  /**
+   * Deliver one frame, announcing its coded configuration first where that has changed.
+   *
+   * `announced` defaults to the frame's own header because these frames carry no real parameter sets, which
+   * is the SDK's documented fallback. Passing it explicitly models the case that matters: the SDK reads the
+   * configuration from the parameter sets, so it can differ from the header a station reported, and a
+   * session must follow the announcement rather than the report.
+   */
+  video(frame: LiveVideoFrame, announced?: LiveVideoConfig): void {
+    const config = announced ?? { codec: frame.codec, width: frame.width, height: frame.height };
+    if (
+      this.config === undefined ||
+      this.config.codec !== config.codec ||
+      this.config.width !== config.width ||
+      this.config.height !== config.height
+    ) {
+      this.config = config;
+      this.deliver(() => this.emit('video-config', config));
+    }
     this.deliver(() => this.emit('video', frame));
   }
 
@@ -824,6 +845,58 @@ describe('live media adaptation', () => {
     expect(session.children).toHaveLength(2);
     expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(first.map(({ data }) => data)));
     expect(Buffer.concat(session.children[1]!.input)).toEqual(Buffer.concat(second.map(({ data }) => data)));
+    session.prepared.stop();
+  });
+
+  /**
+   * The SDK announces the coded configuration — the picture size a decoder will produce, read from the
+   * parameter sets — and a frame header is the station's report of it. This session follows the
+   * announcement, so a change the header does not show still replaces the adaptation.
+   */
+  it('replaces the adaptation on an announced configuration the frame headers do not show', async () => {
+    const session = await liveSession();
+    await session.start();
+    const first = [KEYFRAME, { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) }];
+    const reconfigured = { codec: 'h264' as const, width: 960, height: 540 };
+    const second = [
+      { ...KEYFRAME, data: Buffer.from([0, 0, 0, 1, 0x65, 2]) },
+      { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
+    ];
+    for (const frame of first) {
+      session.stream.video(frame);
+    }
+    for (const frame of second) {
+      session.stream.video(frame, reconfigured);
+    }
+
+    expect(session.children).toHaveLength(2);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(first.map(({ data }) => data)));
+    expect(Buffer.concat(session.children[1]!.input)).toEqual(Buffer.concat(second.map(({ data }) => data)));
+    session.prepared.stop();
+  });
+
+  /**
+   * The converse, and the reason for the change: a frame header that moves while the announced configuration
+   * does not is the station contradicting its own parameter sets, measured once across some 6000 frames.
+   * Rebuilding on it would spend an encoder lifetime — and discard the frames in flight — for a picture that
+   * did not change.
+   */
+  it('keeps one adaptation across frame headers that move without an announcement', async () => {
+    const session = await liveSession();
+    await session.start();
+    const announced = { codec: 'h264' as const, width: 1280, height: 720 };
+    const gop = [
+      KEYFRAME,
+      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) },
+      { ...KEYFRAME, width: 640, height: 360, data: Buffer.from([0, 0, 0, 1, 0x65, 2]) },
+      { ...KEYFRAME, width: 1920, height: 1080, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
+    ];
+    for (const frame of gop) {
+      session.stream.video(frame, announced);
+    }
+
+    expect(session.children).toHaveLength(1);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(gop.map(({ data }) => data)));
     session.prepared.stop();
   });
 
