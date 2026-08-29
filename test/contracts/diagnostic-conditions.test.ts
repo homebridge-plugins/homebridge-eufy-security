@@ -6,6 +6,8 @@ import { gunzipSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { LIVE_TRACE_MESSAGE, type LiveTrace } from '@mega-yfue/eufy-sdk';
+
 import type { RecordingFailure, SnapshotFailure } from '../../src/media/contracts.js';
 import {
   createDiagnosticLogger,
@@ -354,36 +356,40 @@ describe('diagnostic conditions', () => {
   });
 
   /**
-   * Every phase the SDK's live trace vocabulary carries, because a phase this sanitizer does not recognise is
-   * dropped entirely rather than reduced. The vocabulary is not importable — it is exported from an SDK
-   * transport path this plugin may not reach — so it is restated here and this specification is the only
-   * thing that fails when the SDK widens it.
+   * Every phase the SDK's live trace vocabulary carries survives sanitization as a structured record,
+   * because a phase the sanitizer does not recognise is dropped entirely rather than reduced.
+   *
+   * One table keyed by the published `LiveTrace` union, so each entry must carry exactly the fields its
+   * phase declares and none can be exercised twice or missed. What FAILS when the SDK widens the union is
+   * the sanitizer's own table in `diagnostics.ts` — this file is stripped rather than typechecked, so its
+   * `satisfies` documents the shape rather than guarding it.
    */
   it('records every phase the SDK live trace vocabulary carries', () => {
     const debug = vi.fn();
     const sdk = createSdkLogger({ debug, error: vi.fn(), info: vi.fn(), warn: vi.fn() })!;
-    const traces = [
-      { phase: 'media-command', topology: 'own', action: 'start', level2: false },
-      { phase: 'media-command-ack', action: 'start' },
-      { phase: 'media-command-retry', action: 'start' },
-      { phase: 'media-command-unacknowledged', action: 'start' },
-      { phase: 'first-video-command', signCode: 8, accepted: true },
-      { phase: 'first-video-unit', keyframe: true },
-      { phase: 'first-keyframe' },
-      { phase: 'first-foreign-media-command', media: 'video' },
-      { phase: 'video-decode-empty', signCode: 3 },
-      { phase: 'datagram-gap', dataType: 1 },
-      { phase: 'sequence-restart', dataType: 1 },
-    ];
+    const traces = {
+      'media-command': { topology: 'own', action: 'start', level2: false },
+      'media-command-ack': { action: 'start' },
+      'media-command-retry': { action: 'start' },
+      'media-command-unacknowledged': { action: 'start' },
+      'first-video-command': { signCode: 8, accepted: true },
+      'first-video-unit': { keyframe: true },
+      'first-keyframe': {},
+      'first-foreign-media-command': { media: 'video' },
+      'video-decode-empty': { signCode: 3 },
+      'datagram-gap': { dataType: 1 },
+      'sequence-restart': { dataType: 1 },
+    } satisfies { [P in LiveTrace['phase']]: Omit<Extract<LiveTrace, { phase: P }>, 'phase'> };
 
-    for (const trace of traces) {
-      sdk.debug('[live] start trace', { ...trace, serial: 'T8000P0000000000' });
+    const phases = Object.keys(traces);
+    for (const [phase, fields] of Object.entries(traces)) {
+      sdk.debug(LIVE_TRACE_MESSAGE, { phase, ...fields, serial: 'T8000P0000000000' });
     }
 
     expect(debug.mock.calls.map(([message]) => JSON.parse(message).event)).toEqual(
-      traces.map(() => 'live-start-trace'),
+      phases.map(() => 'live-start-trace'),
     );
-    expect(debug.mock.calls.map(([message]) => JSON.parse(message).phase)).toEqual(traces.map(({ phase }) => phase));
+    expect(debug.mock.calls.map(([message]) => JSON.parse(message).phase)).toEqual(phases);
     expect(JSON.stringify(debug.mock.calls)).not.toContain('T8000P0000000000');
   });
 

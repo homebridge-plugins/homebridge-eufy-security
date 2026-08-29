@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gunzip as gunzipCallback, gzip as gzipCallback } from 'node:zlib';
 
-import type { Logger } from '@mega-yfue/eufy-sdk';
+import { LIVE_TRACE_MESSAGE, type Logger, type LiveTrace } from '@mega-yfue/eufy-sdk';
 
 export interface PlatformLogger {
   debug?(message: string): void;
@@ -1297,47 +1297,70 @@ function classifySdkEvent(message: string): string {
   return 'sdk-diagnostic';
 }
 
+/** A bounded byte from an SDK trace: a data-type id or a sign code, or nothing when out of range. */
+function traceByte(value: unknown, max: number): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max ? Number(value) : undefined;
+}
+
+/** One of a fixed set of labels, or nothing — the only string form a trace field is retained in. */
+function traceLabel(value: unknown, allowed: readonly string[]): string | undefined {
+  return allowed.includes(String(value)) ? String(value) : undefined;
+}
+
+/**
+ * What each phase of the SDK's live trace vocabulary retains, keyed by the phase itself.
+ *
+ * Typed against the published `LiveTrace` union, so a phase the SDK adds fails to compile here instead of
+ * falling through to a content-free record. That is not hypothetical: `sequence-restart` was added beside
+ * ten already handled, a hand-copied list of ten kept compiling, and the phase was reduced to an
+ * unstructured line for as long as it existed — losing the one piece of evidence a data channel whose
+ * numbering restarts mid-connection produces.
+ *
+ * Each entry validates the fields its own phase declares and returns nothing when they are not the shape
+ * claimed, because this reads a value that crossed a process boundary. A field is retained only as a fixed
+ * label, a boolean, or a bounded integer; the SDK states that its traces carry no serial, address or key
+ * material, and validating rather than copying is what keeps that true here whatever it sends.
+ */
+const LIVE_TRACE_PHASES = {
+  'media-command': (c) => {
+    const topology = traceLabel(c.topology, ['attached', 'own']);
+    const action = traceLabel(c.action, ['keepalive', 'start']);
+    return topology && action && typeof c.level2 === 'boolean' ? { topology, action, level2: c.level2 } : undefined;
+  },
+  'media-command-ack': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
+  'media-command-retry': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
+  'media-command-unacknowledged': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
+  'first-video-command': (c) => {
+    const signCode = traceByte(c.signCode, 255);
+    return signCode !== undefined && typeof c.accepted === 'boolean' ? { signCode, accepted: c.accepted } : undefined;
+  },
+  'first-video-unit': (c) => (typeof c.keyframe === 'boolean' ? { keyframe: c.keyframe } : undefined),
+  'first-keyframe': () => ({}),
+  'first-foreign-media-command': (c) => {
+    const media = traceLabel(c.media, ['audio', 'video']);
+    return media ? { media } : undefined;
+  },
+  'video-decode-empty': (c) => {
+    const signCode = traceByte(c.signCode, 255);
+    return signCode === undefined ? undefined : { signCode };
+  },
+  'datagram-gap': (c) => {
+    const dataType = traceByte(c.dataType, 3);
+    return dataType === undefined ? undefined : { dataType };
+  },
+  'sequence-restart': (c) => {
+    const dataType = traceByte(c.dataType, 3);
+    return dataType === undefined ? undefined : { dataType };
+  },
+} satisfies Record<LiveTrace['phase'], (candidate: Record<string, unknown>) => Record<string, unknown> | undefined>;
+
 function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   const phase = String(candidate.phase);
-  const signCode =
-    Number.isSafeInteger(candidate.signCode) && Number(candidate.signCode) >= 0 && Number(candidate.signCode) <= 255
-      ? Number(candidate.signCode)
-      : undefined;
-  if (phase === 'media-command') {
-    const topology = ['attached', 'own'].includes(String(candidate.topology)) ? String(candidate.topology) : undefined;
-    const action = ['keepalive', 'start'].includes(String(candidate.action)) ? String(candidate.action) : undefined;
-    if (!topology || !action || typeof candidate.level2 !== 'boolean') return undefined;
-    return { phase, topology, action, level2: candidate.level2 };
-  }
-  if (phase === 'media-command-ack') {
-    return candidate.action === 'start' ? { phase, action: 'start' } : undefined;
-  }
-  if (phase === 'media-command-retry' || phase === 'media-command-unacknowledged') {
-    return candidate.action === 'start' ? { phase, action: 'start' } : undefined;
-  }
-  if (phase === 'first-video-command') {
-    return signCode === undefined || typeof candidate.accepted !== 'boolean'
-      ? undefined
-      : { phase, signCode, accepted: candidate.accepted };
-  }
-  if (phase === 'first-video-unit') {
-    return typeof candidate.keyframe === 'boolean' ? { phase, keyframe: candidate.keyframe } : undefined;
-  }
-  if (phase === 'first-keyframe') return { phase };
-  if (phase === 'first-foreign-media-command') {
-    return ['audio', 'video'].includes(String(candidate.media)) ? { phase, media: String(candidate.media) } : undefined;
-  }
-  if (phase === 'video-decode-empty') return signCode === undefined ? undefined : { phase, signCode };
-  if (phase === 'datagram-gap' || phase === 'sequence-restart') {
-    return Number.isSafeInteger(candidate.dataType) &&
-      Number(candidate.dataType) >= 0 &&
-      Number(candidate.dataType) <= 3
-      ? { phase, dataType: Number(candidate.dataType) }
-      : undefined;
-  }
-  return undefined;
+  if (!Object.hasOwn(LIVE_TRACE_PHASES, phase)) return undefined;
+  const fields = LIVE_TRACE_PHASES[phase as LiveTrace['phase']](candidate);
+  return fields ? { phase, ...fields } : undefined;
 }
 
 /**
@@ -1353,7 +1376,7 @@ export function createSdkLogger(target: Partial<PlatformLogger> | undefined): Lo
     return undefined;
   }
   const format = (message: string, args: unknown[]): Record<string, unknown> | undefined => {
-    if (message === '[live] start trace') {
+    if (message === LIVE_TRACE_MESSAGE) {
       const trace = sanitizeSdkLiveStartTrace(args[0]);
       if (trace) return { scope: 'sdk', subsystem: 'p2p', event: 'live-start-trace', ...trace };
     }
