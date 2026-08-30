@@ -114,11 +114,10 @@ const SMALLEST_CREDIBLE_DIMENSION = 120;
 /**
  * The resolutions one camera advertises, derived from the geometry it actually produces.
  *
- * A controller picks one entry and the plugin must then deliver exactly that geometry, so a matrix carrying
- * only one shape forces every camera into it. Every entry used to be 16:9, which fitted a 4:3 camera inside a
- * 16:9 frame: measured on a 1600x1200 doorbell negotiated at 1280x720, the picture occupies 960x720 with 160
- * black columns each side — a quarter of every encoded frame is black, and that quarter is charged against
- * the negotiated bit rate rather than spent on the picture.
+ * A controller picks one entry and the plugin must then deliver exactly that geometry, so a matrix offering
+ * only one shape fits every camera of another shape into it. Measured on a 1600x1200 doorbell negotiated at
+ * 1280x720, the picture occupies 960x720 with 160 black columns each side: a quarter of every encoded frame is
+ * black, and that quarter is charged against the negotiated bit rate rather than spent on the picture.
  *
  * Entries keep the camera's own aspect and never exceed its own size, because asking a controller to accept
  * more pixels than the camera codes spends bit rate on upscaling. Dimensions are rounded to even numbers,
@@ -129,10 +128,10 @@ const SMALLEST_CREDIBLE_DIMENSION = 120;
  * REACHES A CONTROLLER ONLY AT PAIRING. HAP's configuration number is derived from the accessory's structure
  * with every characteristic value replaced by null, so changing what this returns never tells a paired
  * controller to read it again — verified in the host's own implementation, which carries a TODO admitting the
- * omission. A controller therefore keeps whatever matrix it read when the accessory's structure last changed
- * and may go on selecting a geometry from it that this no longer offers, which is honoured and fitted as
- * before. Measured on a paired 4:3 doorbell: the matrix below was published and the controller still selected
- * 1280x720. So this improves an accessory paired AFTER its shape is known, and nothing before that.
+ * omission. A controller keeps whatever matrix it read when the accessory's structure last changed, and may
+ * select from it a geometry this does not offer, which is honoured and fitted. Measured on a paired 4:3
+ * doorbell: the matrix was published and the controller selected 1280x720. This therefore takes effect for an
+ * accessory paired AFTER its shape is known.
  */
 export function advertisedResolutions(
   geometry: { readonly width: number; readonly height: number } | undefined,
