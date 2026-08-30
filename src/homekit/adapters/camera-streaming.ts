@@ -1322,6 +1322,7 @@ function liveSessionReporter(
   return (outcome, switchedOff) => {
     if (outcome.outcome === 'streaming') {
       condition();
+      context.trace?.({ event: 'live-session-streaming' });
       return;
     }
     context.trace?.({ event: 'live-session-failed', ...outcome });

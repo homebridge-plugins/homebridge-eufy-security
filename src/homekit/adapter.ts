@@ -80,7 +80,9 @@ export type AdapterLiveVideoTrace = Pick<NegotiatedLiveVideo, 'profile' | 'level
 /** An identity-free live-session failure or release milestone. */
 export type AdapterLiveSessionTrace =
   | (Extract<LiveSessionOutcome, { outcome: 'failed' }> & { event: 'live-session-failed' })
-  | { event: 'live-session-released' };
+  | { event: 'live-session-released' }
+  /** The first adapted output reached the negotiated destination, which is when a picture can appear. */
+  | { event: 'live-session-streaming' };
 
 export type AdapterTrace = AdapterEventTrace | AdapterLiveVideoTrace | AdapterLiveSessionTrace;
 

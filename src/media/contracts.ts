@@ -108,7 +108,7 @@ export type AdaptationRole = 'live-video' | 'live-audio' | 'return-audio' | 'rec
  * of its own. A build that warns its way through a working session is what a "live view is unwatchable"
  * report needs, and it is not a failure, so no reason is raised for it.
  */
-export type AdaptationEvent = 'spawn-failed' | 'exited-before-output' | 'exited-while-streaming' | 'output';
+export type AdaptationEvent = 'started' | 'spawn-failed' | 'exited-before-output' | 'exited-while-streaming' | 'output';
 
 /**
  * One bounded FFmpeg fact a media session observed, in the terms a support archive may keep.

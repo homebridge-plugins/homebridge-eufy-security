@@ -78,7 +78,15 @@ export type HomeKitEventTrace =
       reason: string;
       stage: 'sdk-source-acquisition' | 'first-source-keyframe' | 'first-adapted-output' | 'controller-rtcp';
     }
-  | { adapter: string; event: 'live-session-released' };
+  | { adapter: string; event: 'live-session-released' }
+  /**
+   * The first adapted output reached the negotiated destination.
+   *
+   * The moment a controller can show a picture, and the only thing that separates an adaptation that produced
+   * nothing from one whose output a controller did not display. Carries the fact alone: a session identity,
+   * a port and a key all travel in the same neighbourhood.
+   */
+  | { adapter: string; event: 'live-session-streaming' };
 
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
@@ -109,6 +117,7 @@ const SDK_EVENT_KEYS = new Set([
   'connection-closed',
   'connection-opened',
   'connection-retrying',
+  'live-session-streaming',
   'live-start-trace',
   'media-error',
   'media-warning',
@@ -1627,7 +1636,13 @@ const HOMEKIT_LIVE_SESSION_STAGES = new Set([
  */
 const ADAPTATION_ROLES = new Set(['live-video', 'live-audio', 'return-audio', 'recording', 'sdk']);
 /** What that process did. `output` is a process reported for what it wrote rather than for how it ended. */
-const ADAPTATION_EVENTS = new Set(['spawn-failed', 'exited-before-output', 'exited-while-streaming', 'output']);
+const ADAPTATION_EVENTS = new Set([
+  'started',
+  'spawn-failed',
+  'exited-before-output',
+  'exited-while-streaming',
+  'output',
+]);
 /**
  * The signals a terminated adaptation is reported under.
  *
@@ -2100,7 +2115,11 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
     }
     return;
   }
-  if (trace.event === 'live-session-released' || trace.event === 'live-session-failed') {
+  if (
+    trace.event === 'live-session-released' ||
+    trace.event === 'live-session-failed' ||
+    trace.event === 'live-session-streaming'
+  ) {
     const lifecycle = sanitizeLiveSessionTrace(trace as unknown as Record<string, unknown>);
     if (target.debug && lifecycle) {
       target.debug(JSON.stringify({ scope: 'homekit', level: 'debug', ...lifecycle }));
@@ -2251,7 +2270,7 @@ function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string
   if (value.adapter !== 'camera.streaming') {
     return undefined;
   }
-  if (value.event === 'live-session-released') {
+  if (value.event === 'live-session-released' || value.event === 'live-session-streaming') {
     return { adapter: value.adapter, event: value.event };
   }
   if (

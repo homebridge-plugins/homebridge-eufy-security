@@ -480,6 +480,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           videoArguments(videoConfig, negotiated.video, targetAddress, transport.video),
         );
         videoProcess = child;
+        adaptationDiagnostics?.report({ role: 'live-video', event: 'started' });
         const stderr = new AdaptationStderr();
         let producedOutput = false;
         child.stderr.on('data', (chunk: Buffer) => {
@@ -529,6 +530,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           audioArguments(frame, negotiated.audio, targetAddress, transport.audio),
         );
         audioProcess = child;
+        adaptationDiagnostics?.report({ role: 'live-audio', event: 'started' });
         const stderr = new AdaptationStderr();
         let producedOutput = false;
         child.stderr.on('data', (chunk: Buffer) => {
