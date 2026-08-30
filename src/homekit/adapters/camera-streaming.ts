@@ -102,6 +102,14 @@ const SMALLEST_CREDIBLE_DIMENSION = 120;
  * which is all H.264 can code. A shape that is absent or not credible falls back to
  * {@link DEFAULT_ADVERTISED_RESOLUTIONS}: a guessed shape is worse than a fitted one, because the fitting
  * would still happen and at the wrong ratio.
+ *
+ * REACHES A CONTROLLER ONLY AT PAIRING. HAP's configuration number is derived from the accessory's structure
+ * with every characteristic value replaced by null, so changing what this returns never tells a paired
+ * controller to read it again — verified in the host's own implementation, which carries a TODO admitting the
+ * omission. A controller therefore keeps whatever matrix it read when the accessory's structure last changed
+ * and may go on selecting a geometry from it that this no longer offers, which is honoured and fitted as
+ * before. Measured on a paired 4:3 doorbell: the matrix below was published and the controller still selected
+ * 1280x720. So this improves an accessory paired AFTER its shape is known, and nothing before that.
  */
 export function advertisedResolutions(
   geometry: { readonly width: number; readonly height: number } | undefined,

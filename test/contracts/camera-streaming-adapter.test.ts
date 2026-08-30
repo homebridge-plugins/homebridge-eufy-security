@@ -1534,9 +1534,12 @@ describe('camera streaming bundle adapter', () => {
 
   /**
    * A camera whose own shape has been observed advertises that shape instead of the 16:9 default, so a
-   * controller never selects a geometry the picture has to be letterboxed into. Measured on a 1600x1200
-   * doorbell negotiated at 1280x720, the fitting left 160 black columns each side and spent a quarter of the
-   * negotiated bit rate encoding them.
+   * controller reading the matrix for the first time is offered nothing the picture has to be fitted into.
+   * Measured on a 1600x1200 doorbell negotiated at 1280x720, that fitting leaves 160 black columns each side
+   * and spends a quarter of the negotiated bit rate encoding them.
+   *
+   * What this pins is the advertisement, not the outcome: a controller paired before the shape was known
+   * keeps its own copy of the old matrix, because HAP's configuration number ignores characteristic values.
    */
   it('advertises the shape the camera itself produces once one has been observed', () => {
     const target = new Accessory(

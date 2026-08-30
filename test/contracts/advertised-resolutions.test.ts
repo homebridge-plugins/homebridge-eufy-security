@@ -14,6 +14,10 @@ import { advertisedResolutions, DEFAULT_ADVERTISED_RESOLUTIONS } from '../../src
  * So the matrix is built from the camera's own geometry. A camera whose shape is not known yet keeps the
  * previous matrix, because a guessed shape is worse than a fitted one — it would tell HomeKit a shape the
  * camera does not have and the fitting would still happen, at the wrong ratio.
+ *
+ * This decides what is ADVERTISED. Whether a controller acts on it is separate and outside this unit: a
+ * controller paired before the shape was known keeps the matrix it already read, because HAP's configuration
+ * number is computed with characteristic values omitted.
  */
 
 /** The aspect of one advertised entry, to the nearest thousandth. */
