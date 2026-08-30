@@ -83,3 +83,33 @@ describe('a session that reached the negotiated output', () => {
     expect(Object.keys(record).sort()).toEqual(['adapter', 'event', 'level', 'scope']);
   });
 });
+
+/**
+ * How much source media a recording was given, which is what separates its two failure modes.
+ *
+ * A recording whose source delivered nothing closes an empty pipe, and FFmpeg reports that as
+ * `moov atom not found` — the same words an adaptation fed malformed fragments would produce. Observed on a
+ * real fleet as one such failure with nothing to say which it was, seventeen seconds after the motion that
+ * triggered it.
+ *
+ * The count answers it outright: zero is a source that never delivered, and any other number moves the
+ * question to the adaptation. It is a tally, so it is retained as a bounded integer.
+ */
+describe('what a recording reports about the media it was handed', () => {
+  it('carries the number of source fragments it wrote', () => {
+    const debug = vi.fn();
+    reportAdaptationNotice({ debug }, { role: 'recording', event: 'output', code: 183, sourceFragments: 0 });
+    expect(records(debug)[0]).toMatchObject({ role: 'recording', sourceFragments: 0 });
+  });
+
+  it('keeps a count that is not a tally out of the record', () => {
+    const debug = vi.fn();
+    reportAdaptationNotice({ debug }, {
+      role: 'recording',
+      event: 'output',
+      code: 1,
+      sourceFragments: -3,
+    } as never);
+    expect(records(debug)[0]).not.toHaveProperty('sourceFragments');
+  });
+});

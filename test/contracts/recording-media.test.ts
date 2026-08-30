@@ -581,6 +581,9 @@ describe('recording media adaptation', () => {
         role: 'recording',
         event: 'exited-before-output',
         code: 234,
+        // A build that could not start was handed nothing, which is the reading that separates it from a
+        // source that never delivered — both otherwise end on an empty input.
+        sourceFragments: 0,
         stderr: ["Unrecognized option 'movflags'"],
       },
     ]);
@@ -592,7 +595,9 @@ describe('recording media adaptation', () => {
     during.children[0].emit('exit', null, 'SIGKILL');
     await during.consumed.iteration;
 
-    expect(during.notices).toEqual([{ role: 'recording', event: 'exited-while-streaming', signal: 'SIGKILL' }]);
+    expect(during.notices).toEqual([
+      { role: 'recording', event: 'exited-while-streaming', signal: 'SIGKILL', sourceFragments: 0 },
+    ]);
   });
 
   it('fails a recording whose source reports an error', async () => {

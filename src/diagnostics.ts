@@ -2267,6 +2267,9 @@ function sanitizeAdaptationNotice(value: Record<string, unknown>, level: string)
     .map(redactAdaptationStderr)
     .filter((line): line is string => line !== undefined)
     .slice(-MAX_ADAPTATION_STDERR_LINES);
+  // A tally of fragments handed to the process, which separates a source that delivered nothing from an
+  // adaptation that could not read what it was given — FFmpeg words both as `moov atom not found`.
+  const sourceFragments = nonNegativeInteger(value.sourceFragments);
   return {
     scope: 'ffmpeg',
     level,
@@ -2274,6 +2277,7 @@ function sanitizeAdaptationNotice(value: Record<string, unknown>, level: string)
     event: value.event,
     ...(code === undefined ? {} : { code }),
     ...(signal === undefined ? {} : { signal }),
+    ...(sourceFragments === undefined ? {} : { sourceFragments }),
     ...(stderr.length ? { stderr } : {}),
   };
 }

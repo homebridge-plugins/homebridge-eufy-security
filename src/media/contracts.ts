@@ -124,6 +124,14 @@ export interface AdaptationNotice {
   readonly code?: number;
   readonly signal?: string;
   readonly stderr?: readonly string[];
+  /**
+   * How many source fragments a recording wrote to this process.
+   *
+   * A recording whose source delivered nothing closes an empty input, and FFmpeg reports that in the same
+   * words it uses for malformed input — so the count is what separates a source that never answered from an
+   * adaptation that could not read what it was given.
+   */
+  readonly sourceFragments?: number;
 }
 
 /** Where a media adaptation reports what its FFmpeg process did, without owning how it is recorded. */

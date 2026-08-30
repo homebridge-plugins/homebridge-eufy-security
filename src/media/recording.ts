@@ -205,6 +205,7 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
      * Reports what this recording's adaptation did, whether or not the recording fails for it. An `output`
      * report carries nothing but the tail, so a silent process that ended as intended is not reported.
      */
+    let sourceFragments = 0;
     const report = (event: AdaptationEvent, code?: number | null, signal?: NodeJS.Signals | null): void => {
       const tail = stderr.tail();
       if (event === 'output' && tail.length === 0) {
@@ -215,6 +216,7 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
         event,
         ...(typeof code === 'number' ? { code } : {}),
         ...(typeof signal === 'string' ? { signal } : {}),
+        sourceFragments,
         ...(tail.length ? { stderr: tail } : {}),
       });
     };
@@ -260,6 +262,7 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
             return;
           }
           await writeSourceFragment(adaptation, fragment);
+          sourceFragments++;
           if (stopped) {
             return;
           }
