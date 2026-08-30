@@ -71,6 +71,29 @@ export const DEFAULT_ADVERTISED_RESOLUTIONS: readonly (readonly [number, number,
   [1920, 1080, 30],
 ];
 
+/**
+ * The geometry to keep, given one already recorded and one a source has just announced.
+ *
+ * The LARGEST by area, never the latest. A camera runs an adaptive ladder and a session may be served any
+ * rung of it, so keeping the newest announcement would record a rung and advertise a ceiling below what the
+ * camera produces — measured on a real fleet, three of eight cameras were capped at 1280x720 that way.
+ * Growing only means repeated sessions converge on the true shape instead of oscillating with the ladder.
+ *
+ * A geometry with a non-positive side is refused, so nothing displaces a recorded one on a malformed report.
+ */
+export function largestSourceGeometry(
+  recorded: { readonly width: number; readonly height: number } | undefined,
+  announced: { readonly width: number; readonly height: number },
+): { readonly width: number; readonly height: number } | undefined {
+  if (announced.width <= 0 || announced.height <= 0) {
+    return recorded;
+  }
+  if (recorded && recorded.width * recorded.height >= announced.width * announced.height) {
+    return recorded;
+  }
+  return { width: announced.width, height: announced.height };
+}
+
 /** The frame rate every derived entry is advertised at; a negotiated rate is a ceiling, not a target. */
 const ADVERTISED_FPS = 30;
 
@@ -1034,6 +1057,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     ...(context.mediaBudget ? { budget: context.mediaBudget } : {}),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
     reportSelection: context.trace,
+    ...(context.observeSourceGeometry ? { observeSourceGeometry: context.observeSourceGeometry } : {}),
   };
   const recordingBinding: RecordingCameraBinding | undefined = recordingConfigured
     ? {
@@ -1817,6 +1841,8 @@ type SnapshotUnavailability = SnapshotFailure | 'adapter-missing';
 
 /** Everything one attachment supplies to the stable camera delegate, rebound on each reconciliation. */
 interface LiveCameraBinding {
+  /** Record a geometry the source announced, so a later start can advertise the shape it produces. */
+  readonly observeSourceGeometry?: (geometry: { readonly width: number; readonly height: number }) => void;
   readonly source: CameraMediaSource;
   readonly media: LiveMediaAdapter;
   readonly snapshotMedia?: SnapshotMediaAdapter;
@@ -2034,6 +2060,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       },
       onSessionReleased: this.binding.reportRelease,
       onTalkbackOutcome: (outcome) => this.binding.reportTalkback(outcome),
+      ...(this.binding.observeSourceGeometry ? { onSourceConfiguration: this.binding.observeSourceGeometry } : {}),
     });
     session = {
       prepared,

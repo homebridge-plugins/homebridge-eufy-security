@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { advertisedResolutions, DEFAULT_ADVERTISED_RESOLUTIONS } from '../../src/homekit/adapters/camera-streaming.js';
+import {
+  advertisedResolutions,
+  DEFAULT_ADVERTISED_RESOLUTIONS,
+  largestSourceGeometry,
+} from '../../src/homekit/adapters/camera-streaming.js';
 
 /**
  * What resolutions one camera advertises to HomeKit.
@@ -84,5 +88,59 @@ describe('advertisedResolutions', () => {
   it('advertises every entry at the frame rate a live run may select', () => {
     const rates = new Set(advertisedResolutions({ width: 1600, height: 1200 }).map(([, , fps]) => fps));
     expect([...rates]).toEqual([30]);
+  });
+});
+
+/**
+ * Which geometry to keep as a camera's shape.
+ *
+ * The source is the SDK's own announcement, read from the parameter sets in force and delivered whenever the
+ * source reconfigures. A camera runs an adaptive ladder, so a session is served a succession of rungs and the
+ * newest announcement is not the shape — keeping it capped three of eight cameras on a real fleet at
+ * 1280x720, below what they produce. A retained snapshot was tried first and was worse: one frame of the same
+ * ladder, and corruptible by any cross-camera leak upstream, which wrote another camera's picture into four of
+ * eight retained images.
+ */
+describe('largestSourceGeometry', () => {
+  it('takes the first announcement when nothing is recorded', () => {
+    expect(largestSourceGeometry(undefined, { width: 640, height: 360 })).toEqual({ width: 640, height: 360 });
+  });
+
+  it('grows to a larger rung', () => {
+    expect(largestSourceGeometry({ width: 640, height: 360 }, { width: 1920, height: 1080 })).toEqual({
+      width: 1920,
+      height: 1080,
+    });
+  });
+
+  it('keeps the recorded shape when the ladder drops back', () => {
+    const recorded = { width: 1920, height: 1080 };
+    expect(largestSourceGeometry(recorded, { width: 960, height: 540 })).toBe(recorded);
+  });
+
+  it('converges on the largest across a whole ladder, in any order', () => {
+    let kept: { readonly width: number; readonly height: number } | undefined;
+    for (const rung of [
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+      { width: 2304, height: 1296 },
+      { width: 960, height: 540 },
+    ]) {
+      kept = largestSourceGeometry(kept, rung);
+    }
+    expect(kept).toEqual({ width: 2304, height: 1296 });
+  });
+
+  it('prefers a taller shape of the same width, comparing area rather than width', () => {
+    expect(largestSourceGeometry({ width: 1600, height: 900 }, { width: 1600, height: 1200 })).toEqual({
+      width: 1600,
+      height: 1200,
+    });
+  });
+
+  it('refuses a malformed report rather than letting it displace a recorded shape', () => {
+    const recorded = { width: 1600, height: 1200 };
+    expect(largestSourceGeometry(recorded, { width: 0, height: 0 })).toBe(recorded);
+    expect(largestSourceGeometry(undefined, { width: -1, height: 720 })).toBeUndefined();
   });
 });

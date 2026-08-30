@@ -97,12 +97,20 @@ export interface AdapterAttachmentContext {
   readonly audioEnabled?: boolean;
   readonly snapshotMode?: SnapshotMode;
   /**
-   * The geometry this camera's own frames have, when it has been observed.
+   * The largest geometry this camera's source has been observed producing, when it has been.
    *
-   * Decides the resolution matrix advertised to a controller. Absent until an image has been retained for the
-   * camera, which keeps the standard matrix rather than publishing a guessed shape.
+   * Decides the resolution matrix advertised to a controller. Absent until a live session has announced one,
+   * which keeps the standard matrix rather than publishing a shape nothing has established.
    */
   readonly sourceGeometry?: { readonly width: number; readonly height: number };
+  /**
+   * Record a geometry this camera's source announced, for the matrix a later start will advertise.
+   *
+   * The adapter reports; the caller decides what to keep and where. Only the LARGEST is useful: a camera runs
+   * an adaptive ladder and a session may be served any rung of it, so keeping the latest would advertise a
+   * ceiling below what the camera can produce and cap it there.
+   */
+  readonly observeSourceGeometry?: (geometry: { readonly width: number; readonly height: number }) => void;
   readonly availability?: () => AvailabilityObservation | undefined;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;

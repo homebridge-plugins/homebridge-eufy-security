@@ -167,6 +167,14 @@ export interface LiveMediaTransport {
   readonly onSessionOutcome?: (outcome: LiveSessionOutcome) => void;
   readonly onSessionReleased?: () => void;
   readonly onTalkbackOutcome?: (outcome: TalkbackOutcome) => void;
+  /**
+   * The coded configuration the SDK announced for this camera's source, each time it changes.
+   *
+   * The authoritative account of what the camera produces — read from the parameter sets in force rather than
+   * inferred from an image — and the only one available without a second guess. A consumer records it to
+   * decide what to offer a controller next time; the session itself needs nothing from the answer.
+   */
+  readonly onSourceConfiguration?: (config: { readonly width: number; readonly height: number }) => void;
 }
 
 export interface PreparedLiveMedia {
@@ -316,14 +324,6 @@ export interface SnapshotMediaAdapter {
     presentation?: SnapshotPresentation,
   ): Promise<Buffer>;
   captureFromWarmLive?(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<void>;
-  /**
-   * The native geometry of the image retained for `serial`, or nothing when none is retained.
-   *
-   * A camera's own picture shape, which decides the resolutions HomeKit is offered. Nothing else can answer
-   * it before a stream runs: no cloud field carries it and the SDK's video-quality member is a tier label
-   * rather than a shape. A retained image is a real frame from that camera and survives restarts.
-   */
-  retainedGeometry?(serial: string): Promise<{ readonly width: number; readonly height: number } | undefined>;
   discard?(serial: string): void;
   reconcile?(serials: Iterable<string>): void;
   discardAll?(): void;

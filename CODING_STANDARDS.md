@@ -185,6 +185,34 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
 - Pull requests are concise and state what changed, why, what was verified, and what remains deferred.
 - Release notes are written for users and put required actions before internal detail.
 
+## Verifying on a real host
+
+A claim about behaviour on a device is worth nothing if the device is not running the code that makes it.
+Every one of these has already produced a false conclusion, so each is checked rather than assumed.
+
+- **Build both packages, then restart, then prove the order.** The service's start time must be LATER than
+  the newest `dist` of the plugin AND of the SDK. `systemctl show homebridge -p ActiveEnterTimestamp`
+  against `stat -c %y` on each `dist` answers it in one line. A restart issued before a build leaves the
+  host running the previous code while every log and measurement looks legitimate.
+- **Prove the SDK in `node_modules` is the one being edited.** While the SDK is unpublished the plugin
+  depends on it through `file:../eufy-sdk`, and any npm command that resolves dependencies will replace
+  that link with the last published version — silently, after which the plugin compiles against a surface
+  that lacks the work under test. Check that `node_modules/@mega-yfue/eufy-sdk` is still a symlink and that
+  its `package.json` version is the local one.
+- **`package.json` must not be committed with the `file:` dependency**, and the pin plus the lockfile
+  integrity in `test/contracts/package.test.ts` cannot pass until the SDK prerelease is published. Those
+  failures are the unpublished dependency, not a defect; every other failure is.
+- **Read the code that actually ran.** Grep the built `dist` for the symbol the change introduces or
+  removes. A source tree that typechecks says nothing about what the host loaded.
+- **Turn the host's debug output on before measuring**, so a negotiated selection or a protocol trace is
+  observable rather than inferred. Without it a session leaves only its outcome, and an outcome is
+  compatible with several causes.
+- **Prefer an observation the host cannot fake.** A negotiated geometry read off the running adaptation's
+  own argument list, a characteristic read out of the persisted accessory cache, or a service start time
+  are facts; a log line that merely failed to appear is not evidence that nothing happened.
+- **Say which runs did not reproduce.** An intermittent fault that a session failed to trigger is an
+  inconclusive run, and reporting it as a passing one is how a defect gets closed while it is still there.
+
 ## Agent skills
 
 ### Issue tracker

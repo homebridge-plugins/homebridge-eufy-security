@@ -442,6 +442,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
      */
     const observeVideoConfig = (config: LiveVideoConfig): void => {
       videoConfig = config;
+      transport.onSourceConfiguration?.({ width: config.width, height: config.height });
     };
 
     /**
