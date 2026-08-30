@@ -101,3 +101,67 @@ describe('live refresh spread', () => {
     }
   });
 });
+
+/**
+ * A background refresh stands aside while its camera's station is serving a live session.
+ *
+ * A base fans several cameras over one session and serves them one at a time, so a burst opened here contends
+ * with a live view a person is watching. This refresh exists to keep a still current, which has no claim on a
+ * station against that. The request it was started from is unaffected either way: it answers from the retained
+ * image.
+ */
+describe('live refresh against a busy station', () => {
+  const BASE = 'T8010P0000000000';
+  const SERIAL = 'SYNTHETIC0000000C';
+
+  /** A registry reporting exactly the stations named as busy. */
+  const stations = (...busy: readonly string[]) => ({
+    busy: (stationSn: string) => busy.includes(stationSn),
+    hold: () => () => undefined,
+  });
+
+  it('does not open a burst while the station is serving a live session', async () => {
+    const images = retainedImages([[SERIAL, jpeg('retained')]]);
+    const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => 0, stations(BASE));
+    const source = camera('refreshed');
+
+    await acquisition.acquire({ identity: {}, serial: SERIAL, stationSn: BASE }, source, 'Refresh');
+
+    expect(source.snapshotLive).not.toHaveBeenCalled();
+  });
+
+  it('still answers the request from the retained image', async () => {
+    const retained = jpeg('retained');
+    const images = retainedImages([[SERIAL, retained]]);
+    const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => 0, stations(BASE));
+
+    const answered = await acquisition.acquire(
+      { identity: {}, serial: SERIAL, stationSn: BASE },
+      camera('refreshed'),
+      'Refresh',
+    );
+
+    expect(answered).toEqual(retained);
+  });
+
+  it('opens a burst when another station is the busy one', async () => {
+    const images = retainedImages([[SERIAL, jpeg('retained')]]);
+    const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => 0, stations('T9999P0000000000'));
+    const source = camera('refreshed');
+
+    await acquisition.acquire({ identity: {}, serial: SERIAL, stationSn: BASE }, source, 'Refresh');
+
+    await vi.waitFor(() => expect(source.snapshotLive).toHaveBeenCalledOnce());
+  });
+
+  /** A camera whose station the SDK did not state cannot be placed, so nothing defers it. */
+  it('opens a burst for a camera with no station stated', async () => {
+    const images = retainedImages([[SERIAL, jpeg('retained')]]);
+    const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => 0, stations(BASE));
+    const source = camera('refreshed');
+
+    await acquisition.acquire({ identity: {}, serial: SERIAL }, source, 'Refresh');
+
+    await vi.waitFor(() => expect(source.snapshotLive).toHaveBeenCalledOnce());
+  });
+});

@@ -12,6 +12,7 @@ import type {
   SnapshotMediaSource,
   SnapshotMode,
   SnapshotPresentation,
+  StationLiveSessionRegistry,
 } from './contracts.js';
 
 const LIVE_REFRESH_INTERVAL_MS = 120_000;
@@ -178,6 +179,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     private readonly budget?: MediaSessionBudget,
     private readonly packaged: (name: PackagedImage) => Promise<Buffer | undefined> = packagedImage,
     private readonly random: () => number = Math.random,
+    private readonly stations?: StationLiveSessionRegistry,
   ) {}
 
   /**
@@ -451,6 +453,9 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
   ): void {
     const dueAt = this.liveRefreshDueAtMs.get(scope.serial);
     if (dueAt !== undefined && Date.now() < dueAt) {
+      return;
+    }
+    if (scope.stationSn !== undefined && this.stations?.busy(scope.stationSn)) {
       return;
     }
     if (this.pendingLive.has(scope.identity) || !source.snapshotLive) {

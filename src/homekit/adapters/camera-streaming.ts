@@ -29,6 +29,7 @@ import type {
   LiveMediaSource,
   LiveSessionOutcome,
   MediaSessionBudget,
+  StationLiveSessionRegistry,
   MediaSessionClaim,
   NegotiatedLiveVideo,
   NegotiatedRecordedAudio,
@@ -1056,6 +1057,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     ...(context.mediaBudget ? { budget: context.mediaBudget } : {}),
     reportSnapshot: cameraCondition(context, CAMERA_SNAPSHOT_UNAVAILABLE_CONDITION, 'snapshot'),
     reportSelection: context.trace,
+    ...(context.device.stationSn ? { stationSn: context.device.stationSn } : {}),
+    ...(context.stationLiveSessions ? { stations: context.stationLiveSessions } : {}),
     ...(context.observeSourceGeometry ? { observeSourceGeometry: context.observeSourceGeometry } : {}),
   };
   const recordingBinding: RecordingCameraBinding | undefined = recordingConfigured
@@ -1840,6 +1843,10 @@ type SnapshotUnavailability = SnapshotFailure | 'adapter-missing';
 
 /** Everything one attachment supplies to the stable camera delegate, rebound on each reconciliation. */
 interface LiveCameraBinding {
+  /** The station this camera's traffic belongs to, when the SDK states one. */
+  readonly stationSn?: string;
+  /** Where a live session is recorded, so opportunistic work elsewhere on the station stands aside. */
+  readonly stations?: StationLiveSessionRegistry;
   /** Record a geometry the source announced, so a later start can advertise the shape it produces. */
   readonly observeSourceGeometry?: (geometry: { readonly width: number; readonly height: number }) => void;
   readonly source: CameraMediaSource;
@@ -1874,6 +1881,8 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
    * itself and refuse it at a ceiling it is already inside.
    */
   private readonly claims = new Map<string, MediaSessionClaim>();
+  /** Station holds taken for the life of a session, so opportunistic work elsewhere on it stands aside. */
+  private readonly stationHolds = new Map<string, () => void>();
   private readonly snapshotScope: SnapshotAcquisitionScope;
   private acceptingSessions = true;
   private refused = false;
@@ -1885,7 +1894,11 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     private binding: LiveCameraBinding,
     private readonly hap: AdapterAttachmentContext['hap'],
   ) {
-    this.snapshotScope = { identity: {}, serial };
+    this.snapshotScope = {
+      identity: {},
+      serial,
+      ...(binding.stationSn ? { stationSn: binding.stationSn } : {}),
+    };
   }
 
   update(binding: LiveCameraBinding): void {
@@ -2006,7 +2019,16 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       return false;
     }
     this.claims.set(sessionID, claim);
+    if (this.binding.stationSn && this.binding.stations && !this.stationHolds.has(sessionID)) {
+      this.stationHolds.set(sessionID, this.binding.stations.hold(this.binding.stationSn));
+    }
     return true;
+  }
+
+  /** Give back this session's station hold. Idempotent, and safe for a session that never took one. */
+  private releaseStationHold(sessionID: string): void {
+    this.stationHolds.get(sessionID)?.();
+    this.stationHolds.delete(sessionID);
   }
 
   /** Gives back a share taken for a preparation that never became a session, and only then. */
@@ -2016,6 +2038,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     }
     this.claims.get(sessionID)?.release();
     this.claims.delete(sessionID);
+    this.releaseStationHold(sessionID);
   }
 
   /** Withdraws a latched capacity refusal once a session is admitted again, and only then. */
@@ -2171,6 +2194,10 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       claim.release();
     }
     this.claims.clear();
+    for (const release of this.stationHolds.values()) {
+      release();
+    }
+    this.stationHolds.clear();
     this.prepareGenerations.clear();
     this.unsupervise();
   }
@@ -2188,6 +2215,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     session?.prepared.stop();
     this.claims.get(sessionID)?.release();
     this.claims.delete(sessionID);
+    this.releaseStationHold(sessionID);
     if (this.sessions.size === 0) {
       this.unsupervise();
     }

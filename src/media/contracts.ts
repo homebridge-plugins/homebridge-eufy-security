@@ -158,6 +158,24 @@ export interface MediaSessionBudget {
   claim(): MediaSessionClaim | undefined;
 }
 
+/**
+ * Which stations are serving a live session, asked before opportunistic live work is started elsewhere on one.
+ *
+ * A HomeBase fans several cameras over one session and serves them one at a time, so a live burst opened on
+ * one of its cameras contends with a live view running on another. A standalone camera is its own station and
+ * contends with nobody.
+ *
+ * Distinct from {@link MediaSessionBudget}, which counts concurrent work against a ceiling an operator
+ * declared and refuses what exceeds it. This answers where the work would land, and it refuses nothing: a
+ * caller decides whether its own work is worth deferring.
+ */
+export interface StationLiveSessionRegistry {
+  /** Whether a live session is currently held on `stationSn`. */
+  busy(stationSn: string): boolean;
+  /** Record one live session on `stationSn`, and answer the release that ends it. */
+  hold(stationSn: string): () => void;
+}
+
 export interface LiveMediaTransport {
   readonly addressVersion: 'ipv4' | 'ipv6';
   readonly targetAddress: string;
@@ -267,6 +285,13 @@ export interface SnapshotMediaSource {
 export interface SnapshotAcquisitionScope {
   readonly identity: object;
   readonly serial: string;
+  /**
+   * The station this camera's traffic belongs to — its parent base, or its own serial when it has none.
+   *
+   * Absent when the SDK stated none, which leaves opportunistic work unable to tell where it would land and so
+   * ungoverned, exactly as it was before the station was known.
+   */
+  readonly stationSn?: string;
 }
 
 /**

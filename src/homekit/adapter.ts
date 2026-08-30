@@ -10,6 +10,7 @@ import type {
   LiveMediaAdapter,
   LiveSessionOutcome,
   MediaSessionBudget,
+  StationLiveSessionRegistry,
   NegotiatedLiveVideo,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
@@ -94,6 +95,8 @@ export interface AdapterAttachmentContext {
   readonly snapshotMedia?: SnapshotMediaAdapter;
   /** The declared ceiling on concurrent media, absent when the operator declared none. */
   readonly mediaBudget?: MediaSessionBudget;
+  /** Where a live session is recorded, so opportunistic media work elsewhere on its station stands aside. */
+  readonly stationLiveSessions?: StationLiveSessionRegistry;
   readonly audioEnabled?: boolean;
   readonly snapshotMode?: SnapshotMode;
   /**

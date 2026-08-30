@@ -19,6 +19,7 @@ import { FfmpegRecordingMedia } from './media/recording.js';
 import { PersistedLastSuccessfulImages } from './media/last-successful-image.js';
 import { SnapshotAcquisition } from './media/snapshot.js';
 import { DeclaredMediaSessionBudget } from './media/session-budget.js';
+import { StationLiveSessions } from './media/station-live-sessions.js';
 import { RuntimeOwner } from './runtime/owner.js';
 import { createPersistedSdkClient, type SdkClientFactory } from './runtime/sdk-client.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -72,11 +73,17 @@ export function createEufyPlatform(
         ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath, adaptationDiagnostics)
         : undefined;
       const mediaBudget = new DeclaredMediaSessionBudget(configuredConfig.maxConcurrentMediaSessions);
+      // One registry for both sides of the question: HomeKit records a live session on its camera's station,
+      // and snapshot acquisition asks whether a station is serving one before opening a burst on it.
+      const stationLiveSessions = new StationLiveSessions();
       const snapshotMedia = new SnapshotAcquisition(
         storageRoot
           ? new PersistedLastSuccessfulImages(storageRoot, () => reportInvalidSnapshotCache(diagnosticLog))
           : undefined,
         mediaBudget,
+        undefined,
+        undefined,
+        stationLiveSessions,
       );
       if (configuredConfig.discardedV4Settings.length > 0 && !configuredConfig.discardedV4Acknowledged) {
         reportDiscardedV4Settings(diagnosticLog);
@@ -127,6 +134,7 @@ export function createEufyPlatform(
             snapshotMedia,
             recordingMedia,
             mediaBudget,
+            stationLiveSessions,
           );
           this.reconciler.start();
         }

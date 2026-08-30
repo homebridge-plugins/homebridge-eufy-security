@@ -6,6 +6,7 @@ import { indexDeviceEvidence } from '../device/member-evidence.js';
 import type {
   LiveMediaAdapter,
   MediaSessionBudget,
+  StationLiveSessionRegistry,
   RecordingMediaAdapter,
   SnapshotMediaAdapter,
   SnapshotMode,
@@ -116,6 +117,7 @@ export class HomeKitReconciler {
     private readonly snapshotMedia?: SnapshotMediaAdapter,
     private readonly recordingMedia?: RecordingMediaAdapter,
     private readonly mediaBudget?: MediaSessionBudget,
+    private readonly stationLiveSessions?: StationLiveSessionRegistry,
   ) {
     for (const accessory of cachedAccessories) {
       this.accessories.set(accessory.UUID, accessory);
@@ -231,6 +233,7 @@ export class HomeKitReconciler {
           recordingMedia: this.recordingMedia,
           snapshotMedia: this.snapshotMedia,
           ...(this.mediaBudget ? { mediaBudget: this.mediaBudget } : {}),
+          ...(this.stationLiveSessions ? { stationLiveSessions: this.stationLiveSessions } : {}),
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
           snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
           ...(sourceGeometry ? { sourceGeometry } : {}),
