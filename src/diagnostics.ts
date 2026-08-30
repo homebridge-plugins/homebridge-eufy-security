@@ -2158,9 +2158,33 @@ function redactAdaptationStderr(line: string): string | undefined {
   if (printable === undefined || printable.startsWith('progress=')) {
     return undefined;
   }
-  const redacted = printable
+  return redactSensitiveText(printable);
+}
+
+/**
+ * Removes from one line everything a support case may not keep, leaving the sentence and its numbers.
+ *
+ * One rule set for every line this plugin retains, whether it came from an adaptation's stderr or from the
+ * SDK's own diagnostics, because what counts as a secret does not depend on which process said it — and two
+ * lists would drift until one of them missed a shape.
+ *
+ * Each kind is replaced by what it is rather than searched for afterwards, since a redaction that depends on
+ * recognising a secret fails on the first message shape nobody predicted.
+ *
+ * Key material is replaced BEFORE the path rules, not after. Base64 includes `/`, so a path rule applied
+ * first splits a key into sub-runs too short for any length threshold to catch — measured on random 30-byte
+ * keys, roughly one line in twenty then kept an eight-character fragment verbatim. The cost of this order is
+ * that a long path made only of letters and separators is labelled as redacted rather than as a path, which
+ * loses a label and never a secret.
+ *
+ * The P2P device id is grouped with key material rather than with identifiers: it is an input to the station's
+ * encryption, so it is a credential.
+ */
+function redactSensitiveText(line: string): string | undefined {
+  const redacted = line
     .replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, '<url>')
     .replace(/\[[0-9a-f:]{2,}\]/gi, '<address>')
+    .replace(/\b[A-Z0-9]{7}-[0-9]{6}-[A-Z0-9]{5}\b/g, '<redacted>')
     .replace(/[A-Za-z0-9+/]{20,}={0,2}/g, '<redacted>')
     .replace(/[A-Za-z]:\\[^\s]*/g, '<path>')
     .replace(/(?:\/[\w.@-]+){2,}\/?/g, '<path>')
