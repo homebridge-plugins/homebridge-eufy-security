@@ -130,7 +130,6 @@ const SDK_EVENT_KEYS = new Set([
   'session-idle',
   'session-resumed',
   'session-restored',
-  'session-retrying',
   'snapshot-cache-warning',
   'transport-error',
 ]);
@@ -1302,7 +1301,6 @@ function classifySdkEvent(message: string): string {
     return 'media-warning';
   }
   if (normalized.includes('[eufy]')) return 'client-warning';
-  if (normalized.includes('retry')) return 'session-retrying';
   return 'sdk-diagnostic';
 }
 

@@ -275,6 +275,27 @@ describe('diagnostic conditions', () => {
     expect(normal[0]).not.toContain('unknown-condition');
   });
 
+  /**
+   * A warm-up is not a retry, and nothing else reached the bucket that said it was.
+   *
+   * The SDK's warm-up line reads `warming (retry=2000ms deadline=20000ms)`. A bucket matching `retry` caught
+   * it, while `connection-retrying` already matched `retrying` higher up — so that bucket could only ever be
+   * fed by warm-ups, and every record it produced was false. The records carry no text, so nothing in a log
+   * could contradict a station that had never rebuilt anything: a live open of four cameras read as four
+   * session rebuilds.
+   */
+  it('does not call a warm-up a retry, and keeps a real one in its own bucket', () => {
+    const debug = vi.fn();
+    const sdk = createSdkLogger({ debug })!;
+
+    sdk.debug('[live synthetic-parent:0] warming (retry=2000ms deadline=20000ms)');
+    sdk.debug('[push] synthetic-cause — retrying (attempt 2)');
+
+    const events = debug.mock.calls.map(([message]) => JSON.parse(message).event);
+    expect(events[0], 'a warm-up is its own structured phase').not.toContain('retry');
+    expect(events[1], 'a message that says it is retrying is one').toBe('connection-retrying');
+  });
+
   it('classifies current SDK session messages without retaining session identity', () => {
     const debug = vi.fn();
     const sdk = createSdkLogger({ debug })!;
