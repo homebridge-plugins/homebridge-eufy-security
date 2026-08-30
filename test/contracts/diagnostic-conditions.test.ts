@@ -379,6 +379,10 @@ describe('diagnostic conditions', () => {
       'video-decode-empty': { signCode: 3 },
       'datagram-gap': { dataType: 1 },
       'sequence-restart': { dataType: 1 },
+      'level2-wait': { waitMs: 7599 },
+      'level2-ready': { cipherId: 209 },
+      'level2-absent': { waitedMs: 8000 },
+      warming: { retryMs: 2000, deadlineMs: 20000 },
     } satisfies { [P in LiveTrace['phase']]: Omit<Extract<LiveTrace, { phase: P }>, 'phase'> };
 
     const phases = Object.keys(traces);
@@ -391,6 +395,30 @@ describe('diagnostic conditions', () => {
     );
     expect(debug.mock.calls.map(([message]) => JSON.parse(message).phase)).toEqual(phases);
     expect(JSON.stringify(debug.mock.calls)).not.toContain('T8000P0000000000');
+  });
+
+  /**
+   * The startup phases carry the durations a slow live start is diagnosed from, which is the whole reason they
+   * are structured: the same facts as free text could not be retained, because a station identity inside a
+   * message survives every pattern a redactor recognises.
+   */
+  it('retains the durations a startup phase states, and drops one outside its window', () => {
+    const debug = vi.fn();
+    const sdk = createSdkLogger({ debug, error: vi.fn(), info: vi.fn(), warn: vi.fn() })!;
+
+    sdk.debug(LIVE_TRACE_MESSAGE, { phase: 'level2-wait', waitMs: 7599 });
+    sdk.debug(LIVE_TRACE_MESSAGE, { phase: 'warming', retryMs: 2000, deadlineMs: 20000 });
+    sdk.debug(LIVE_TRACE_MESSAGE, { phase: 'level2-ready', cipherId: 209 });
+    sdk.debug(LIVE_TRACE_MESSAGE, { phase: 'level2-wait', waitMs: 999_999 });
+
+    const records = debug.mock.calls.map(([message]) => JSON.parse(message as string));
+    expect(records.map((r) => [r.event, r.waitMs ?? r.retryMs, r.cipherId])).toEqual([
+      ['live-start-trace', 7599, undefined],
+      ['live-start-trace', 2000, undefined],
+      ['live-start-trace', undefined, 209],
+      ['sdk-diagnostic', undefined, undefined],
+    ]);
+    expect(records[1]!.deadlineMs).toBe(20000);
   });
 
   it('persists an SDK live startup trace only during authorized live diagnostics', async () => {

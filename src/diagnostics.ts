@@ -1318,6 +1318,15 @@ function allowlistedLabel(value: unknown, allowed: readonly string[]): string | 
   return allowed.includes(String(value)) ? String(value) : undefined;
 }
 
+/**
+ * The widest startup window a retained duration may state.
+ *
+ * A minute bounds every window the SDK actually uses — a level-2 grace, a warm-up deadline, a retry interval —
+ * and a duration beyond it is a value this plugin did not expect rather than a measurement, so it is dropped
+ * like any other field that fails its shape.
+ */
+const MAX_STARTUP_WINDOW_MS = 60_000;
+
 /** The three phases whose only field is the action they report, which the union fixes at `start`. */
 const retainedStart = (candidate: Record<string, unknown>): Record<string, unknown> | undefined =>
   candidate.action === 'start' ? { action: 'start' } : undefined;
@@ -1366,6 +1375,23 @@ const LIVE_TRACE_PHASES = {
   'sequence-restart': (c) => {
     const dataType = boundedInteger(c.dataType, 3);
     return dataType === undefined ? undefined : { dataType };
+  },
+  'level2-wait': (c) => {
+    const waitMs = boundedInteger(c.waitMs, MAX_STARTUP_WINDOW_MS);
+    return waitMs === undefined ? undefined : { waitMs };
+  },
+  'level2-ready': (c) => {
+    const cipherId = boundedInteger(c.cipherId, 65535);
+    return cipherId === undefined ? undefined : { cipherId };
+  },
+  'level2-absent': (c) => {
+    const waitedMs = boundedInteger(c.waitedMs, MAX_STARTUP_WINDOW_MS);
+    return waitedMs === undefined ? undefined : { waitedMs };
+  },
+  warming: (c) => {
+    const retryMs = boundedInteger(c.retryMs, MAX_STARTUP_WINDOW_MS);
+    const deadlineMs = boundedInteger(c.deadlineMs, MAX_STARTUP_WINDOW_MS);
+    return retryMs === undefined || deadlineMs === undefined ? undefined : { retryMs, deadlineMs };
   },
 } satisfies Record<LiveTrace['phase'], (candidate: Record<string, unknown>) => Record<string, unknown> | undefined>;
 
