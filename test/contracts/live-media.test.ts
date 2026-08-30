@@ -1072,7 +1072,7 @@ describe('live media adaptation', () => {
         'main',
         '-level:v',
         '3.1',
-        '-r',
+        '-fpsmax',
         '30',
         '-b:v',
         '300k',
@@ -1155,7 +1155,7 @@ describe('live media adaptation', () => {
           'high',
           '-level:v',
           '4.0',
-          '-r',
+          '-fpsmax',
           '15',
           '-g',
           '30',
@@ -1220,7 +1220,9 @@ describe('live media adaptation', () => {
       'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
     );
     expect(spawned[1]).toContain('scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2');
-    expect(spawned[1]).toEqual(expect.arrayContaining(['-r', '15', '-g', '30', '-b:v', '150k', '-maxrate', '150k']));
+    expect(spawned[1]).toEqual(
+      expect.arrayContaining(['-fpsmax', '15', '-g', '30', '-b:v', '150k', '-maxrate', '150k']),
+    );
     expect(spawned[1]).toEqual(
       expect.arrayContaining([
         '-payload_type',
@@ -1332,7 +1334,8 @@ describe('live media adaptation', () => {
     expect(spawned.map((args) => args[args.indexOf('-f') + 1])).toEqual(['h264', 'hevc']);
     for (const args of spawned) {
       expect(args).toContain('scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2');
-      expect(args).toEqual(expect.arrayContaining(['-r', '30', '-b:v', '300k', '-payload_type', '99']));
+      expect(args).toEqual(expect.arrayContaining(['-fpsmax', '30', '-b:v', '300k', '-payload_type', '99']));
+      expect(args).not.toContain('-r');
     }
     expect(stream.stop).not.toHaveBeenCalled();
     prepared.stop();
@@ -1906,5 +1909,40 @@ describe('adaptation binary identity', () => {
       absent.version,
       'a path naming nothing runnable answers nothing, which is what tells it from a missing encoder',
     ).toBeUndefined();
+  });
+});
+
+/**
+ * A negotiated frame rate is a ceiling, not a cadence.
+ *
+ * Pinning it with `-r` makes the encoder duplicate frames the source never sent, and each duplicate costs a
+ * full encode and a share of the negotiated bit rate for a picture carrying nothing new. Measured on a
+ * 1600x1200 doorbell delivering about 15 fps against a 30 fps selection: 264 of 267 emitted frames were
+ * duplicates, and the adaptation ran at 0.32x real time — so it fell further behind every second and the
+ * session died on its 30 s backstop with nothing watchable ever reaching the controller.
+ *
+ * The recording path already states this rule and bounds the rate; this is the same rule on the live path.
+ */
+describe('live output frame rate', () => {
+  it('bounds the rate instead of pinning it, so a slower source is not padded with duplicates', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-fpsmax') + 1]).toBe('30');
+    expect(args).not.toContain('-r');
+    session.prepared.stop();
+  });
+
+  it('still derives the keyframe interval from the negotiated rate', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-g') + 1]).toBe('60');
+    expect(args[args.indexOf('-keyint_min') + 1]).toBe('60');
+    session.prepared.stop();
   });
 });

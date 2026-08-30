@@ -863,6 +863,14 @@ function outputArguments(
  * frame rate a bare Annex-B pipe never states, which collapses the whole session onto one instant; the
  * constant-rate output then resolves the collision by discarding almost every frame it was given.
  *
+ * A negotiated frame rate is a CEILING, not a cadence, so the rate is bounded rather than pinned. Pinning it
+ * makes the encoder duplicate frames the source never sent, and each duplicate costs a full encode and a share
+ * of the negotiated bit rate for a picture carrying nothing new. Measured on a 1600x1200 doorbell delivering
+ * about 15 fps against a 30 fps selection: 264 of 267 emitted frames were duplicates and the adaptation ran at
+ * 0.32x real time, so it fell further behind every second and the session died on its backstop with nothing
+ * watchable reaching the controller. The keyframe interval still derives from the negotiated rate, because that
+ * is a contract about segment boundaries rather than about cadence.
+ *
  * `superfast` is the cheapest `libx264` preset that retains CABAC, and therefore the cheapest one whose
  * coded stream can carry a negotiated Main or High profile; `ultrafast` drops CABAC and codes Constrained
  * Baseline whatever `-profile:v` asks for. `-tune zerolatency` pins the same `sliced_threads`, `bframes`
@@ -891,7 +899,7 @@ function videoArguments(
     'yuv420p',
     '-vf',
     `scale=${selection.width}:${selection.height}:force_original_aspect_ratio=decrease,pad=${selection.width}:${selection.height}:(ow-iw)/2:(oh-ih)/2`,
-    '-r',
+    '-fpsmax',
     String(selection.fps),
     '-g',
     String(selection.fps * 2),
