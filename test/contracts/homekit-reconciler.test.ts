@@ -316,6 +316,11 @@ function smartLightDevice(power = false, brightness = 50): Device {
   } as unknown as Device;
 }
 
+/** A camera admitted by live evidence, which is what a streaming controller attaches to. */
+function cameraLiveDevice(): Device {
+  return { camera: () => ({ live: async () => ({}) }) } as unknown as Device;
+}
+
 function cameraControlsDevice(enabled = true): Device {
   return {
     camera: () => ({ enabled }),
@@ -547,6 +552,55 @@ describe('HomeKit registry reconciliation', () => {
     source.publish(registryView(2, new Map([[serial, contactDevice(false)]]), snapshot(contactManifest(serial))));
     expect(accessory.getServiceById(Service.ContactSensor, 'contact.sensor')).toBeDefined();
     expect(accessory.getServiceById(Service.Battery, 'battery.status')).toBeUndefined();
+  });
+
+  /**
+   * A camera's own picture shape decides the resolutions HomeKit is offered, and a controller publishes that
+   * matrix once when it is constructed. The shape is read from disk, which cannot be awaited inside a
+   * reconciliation that answers a registry update — so it is recorded on the accessory, where Homebridge
+   * persists it and the next start reads it synchronously before any controller is built.
+   *
+   * Holding it in memory instead never took effect: the read always resolved after the pass that needed it,
+   * on every start, so the derived matrix was published on no start at all.
+   */
+  it('records a camera shape on its accessory so the next start can advertise it', async () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    const retainedGeometry = vi.fn(async () => ({ width: 1600, height: 1200 }));
+    new HomeKitReconciler(source, recording.api, vi.fn(), [], undefined, {}, { prepare: vi.fn() } as never, {
+      acquire: vi.fn(),
+      retainedGeometry,
+    }).start();
+    const serial = 'synthetic-four-thirds';
+
+    source.publish(registryView(1, new Map([[serial, cameraLiveDevice()]]), snapshot(cameraLiveManifest(serial))));
+    await vi.waitFor(() => expect(recording.updatePlatformAccessories).toHaveBeenCalled());
+
+    expect(retainedGeometry).toHaveBeenCalledWith(serial);
+    const [[[accessory]]] = recording.updatePlatformAccessories.mock.calls as [[[{ context: Record<string, any> }]]];
+    expect(accessory.context.homebridgeEufy).toMatchObject({
+      serial,
+      sourceGeometry: { width: 1600, height: 1200 },
+    });
+  });
+
+  it('keeps the serial marker and the shape beside each other across reconciliations', async () => {
+    const source = new RegistrySource();
+    const recording = recordingApi();
+    new HomeKitReconciler(source, recording.api, vi.fn(), [], undefined, {}, { prepare: vi.fn() } as never, {
+      acquire: vi.fn(),
+      retainedGeometry: vi.fn(async () => ({ width: 1600, height: 1200 })),
+    }).start();
+    const serial = 'synthetic-four-thirds-retained';
+    const view = registryView(1, new Map([[serial, cameraLiveDevice()]]), snapshot(cameraLiveManifest(serial)));
+
+    source.publish(view);
+    await vi.waitFor(() => expect(recording.updatePlatformAccessories).toHaveBeenCalled());
+    const [[[accessory]]] = recording.updatePlatformAccessories.mock.calls as [[[{ context: Record<string, any> }]]];
+    source.publish(registryView(2, new Map([[serial, cameraLiveDevice()]]), snapshot(cameraLiveManifest(serial))));
+
+    expect(accessory.context.homebridgeEufy.serial).toBe(serial);
+    expect(accessory.context.homebridgeEufy.sourceGeometry).toEqual({ width: 1600, height: 1200 });
   });
 
   it('keeps battery-only devices dashboard-only', () => {

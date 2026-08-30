@@ -70,6 +70,15 @@ interface AccessoryContext {
   homebridgeEufy?: {
     version: 1;
     serial: string;
+    /**
+     * The geometry this camera's own frames have, once observed.
+     *
+     * Persisted here rather than held in memory because it decides the resolution matrix a controller is
+     * offered, and that matrix is published once when the accessory's controller is constructed — before any
+     * asynchronous read of it could finish. Homebridge restores this context before the first reconciliation,
+     * so a camera whose shape has ever been observed advertises it from the next start onwards.
+     */
+    sourceGeometry?: { width: number; height: number };
   };
   device?: {
     uniqueId?: string;
@@ -82,15 +91,6 @@ export class HomeKitReconciler {
   private readonly representedSerials = new Set<string>();
   private readonly attachedAdapters = new Map<string, ReadonlyMap<string, AttachedAdapter>>();
   private readonly activeAdapters = new Map<string, ReadonlySet<string>>();
-  /**
-   * The geometry each camera's own frames have, once an image retained for it has been read.
-   *
-   * Read asynchronously while reconciliation stays synchronous, so the shape is applied to the accessory
-   * whose controller is built after it arrives — in practice the next start, since a controller's advertised
-   * matrix is published once when it is constructed. The retained image survives restarts, so a camera that
-   * has ever produced one is advertised at its own shape from then on.
-   */
-  private readonly sourceGeometry = new Map<string, { readonly width: number; readonly height: number }>();
   private readonly observingSourceGeometry = new Set<string>();
   private readonly representationDiagnostics = new Map<
     string,
@@ -155,13 +155,14 @@ export class HomeKitReconciler {
   }
 
   /**
-   * Read this camera's own geometry once, from the image already retained for it.
+   * Read this camera's own geometry once and record it on its accessory, from the image already retained.
    *
    * Started at most once per serial per run and never awaited: reconciliation answers a registry update and
-   * cannot block on the filesystem, and a shape that arrives afterwards is applied by the next accessory
-   * construction rather than by mutating a published matrix under a controller's feet.
+   * may not block on the filesystem. The answer is therefore too late for the controller built in this pass,
+   * which is why it is persisted instead of returned — a controller publishes its resolution matrix once, so
+   * the shape is applied by the next start rather than by mutating a matrix a controller has already read.
    */
-  private observeSourceGeometry(serial: string): void {
+  private observeSourceGeometry(serial: string, accessory: PlatformAccessory): void {
     if (this.observingSourceGeometry.has(serial) || !this.snapshotMedia?.retainedGeometry) {
       return;
     }
@@ -169,7 +170,16 @@ export class HomeKitReconciler {
     void this.snapshotMedia
       .retainedGeometry(serial)
       .then((geometry) => {
-        if (geometry) this.sourceGeometry.set(serial, geometry);
+        const context = accessory.context as AccessoryContext;
+        const recorded = context.homebridgeEufy?.sourceGeometry;
+        if (!geometry || !context.homebridgeEufy) {
+          return;
+        }
+        if (recorded?.width === geometry.width && recorded?.height === geometry.height) {
+          return;
+        }
+        context.homebridgeEufy.sourceGeometry = { width: geometry.width, height: geometry.height };
+        this.store.update([accessory]);
       })
       .catch(() => undefined);
   }
@@ -188,7 +198,6 @@ export class HomeKitReconciler {
 
     const nextRepresented = new Set<string>();
     for (const [serial, device] of view.registry) {
-      this.observeSourceGeometry(serial);
       const previousHandles = this.attachedAdapters.get(serial);
       const manifest = manifests.get(serial)!;
       const evidence = indexDeviceEvidence(manifest);
@@ -219,6 +228,7 @@ export class HomeKitReconciler {
       const uuid = this.store.generateUuid(`d1_${serial}`);
       const existing = this.accessories.get(uuid);
       const accessory = existing ?? this.store.createAccessory(manifest.name, uuid);
+      const sourceGeometry = (accessory.context as AccessoryContext).homebridgeEufy?.sourceGeometry;
       const handles = new Map<string, AttachedAdapter>();
       const attachOrRetain = (key: string, adapter: (typeof admittedAdapters)[number][1]): boolean => {
         const handle = adapter.attach({
@@ -232,7 +242,7 @@ export class HomeKitReconciler {
           ...(this.mediaBudget ? { mediaBudget: this.mediaBudget } : {}),
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
           snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
-          ...(this.sourceGeometry.get(serial) ? { sourceGeometry: this.sourceGeometry.get(serial)! } : {}),
+          ...(sourceGeometry ? { sourceGeometry } : {}),
           availability: () => this.source.currentAvailability?.(serial),
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),
@@ -262,7 +272,15 @@ export class HomeKitReconciler {
       }
 
       accessory.updateDisplayName(manifest.name);
-      (accessory.context as AccessoryContext).homebridgeEufy = { version: 1, serial };
+      const accessoryContext = accessory.context as AccessoryContext;
+      accessoryContext.homebridgeEufy = {
+        version: 1,
+        serial,
+        ...(accessoryContext.homebridgeEufy?.sourceGeometry
+          ? { sourceGeometry: accessoryContext.homebridgeEufy.sourceGeometry }
+          : {}),
+      };
+      this.observeSourceGeometry(serial, accessory);
       for (const [key, adapter] of admittedAdapters) {
         if (adapter.role === 'supplemental') {
           attachOrRetain(key, adapter);
