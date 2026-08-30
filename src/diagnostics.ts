@@ -1297,9 +1297,15 @@ function classifySdkEvent(message: string): string {
   return 'sdk-diagnostic';
 }
 
+/** A non-negative integer, or nothing — a byte count, a duration, a tally of accessories. */
+function nonNegativeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+
 /** A non-negative integer no larger than `max`, or nothing — a data-type id, a sign code, an exit status. */
 function boundedInteger(value: unknown, max: number): number | undefined {
-  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max ? Number(value) : undefined;
+  const integer = nonNegativeInteger(value);
+  return integer !== undefined && integer <= max ? integer : undefined;
 }
 
 /**
@@ -1312,19 +1318,23 @@ function allowlistedLabel(value: unknown, allowed: readonly string[]): string | 
   return allowed.includes(String(value)) ? String(value) : undefined;
 }
 
+/** The three phases whose only field is the action they report, which the union fixes at `start`. */
+const retainedStart = (candidate: Record<string, unknown>): Record<string, unknown> | undefined =>
+  candidate.action === 'start' ? { action: 'start' } : undefined;
+
 /**
  * What each phase of the SDK's live trace vocabulary retains, keyed by the phase itself.
  *
- * Typed against the published `LiveTrace` union, so a phase the SDK adds fails to compile here rather than
- * falling through to a content-free record. A phase this table does not name is dropped entirely, which is
- * why the vocabulary is taken from the type that owns it instead of restated.
+ * Typed against the published `LiveTrace` union, so a phase this table does not name fails to compile rather
+ * than being dropped to a content-free record at runtime.
  *
  * Each entry validates the fields its own phase declares, by name, and returns nothing when they are not the
  * shape claimed, because this reads a value that crossed a process boundary. A field is retained only as a
  * fixed label, a boolean, or a bounded integer; the SDK states that its traces carry no serial, address or
- * key material, and validating rather than copying is what keeps that true here whatever it sends. The field
- * shapes themselves are not checked against the union, so a field the SDK renames within an existing phase
- * is dropped silently.
+ * key material, and validating rather than copying is what keeps that true here whatever it sends.
+ *
+ * The field NAMES are not checked against the union, only the phases are — so a field the SDK renames within
+ * an existing phase is dropped silently, and that phase keeps only what it still recognises.
  */
 const LIVE_TRACE_PHASES = {
   'media-command': (c) => {
@@ -1332,9 +1342,9 @@ const LIVE_TRACE_PHASES = {
     const action = allowlistedLabel(c.action, ['keepalive', 'start']);
     return topology && action && typeof c.level2 === 'boolean' ? { topology, action, level2: c.level2 } : undefined;
   },
-  'media-command-ack': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
-  'media-command-retry': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
-  'media-command-unacknowledged': (c) => (c.action === 'start' ? { action: 'start' } : undefined),
+  'media-command-ack': retainedStart,
+  'media-command-retry': retainedStart,
+  'media-command-unacknowledged': retainedStart,
   'first-video-command': (c) => {
     const signCode = boundedInteger(c.signCode, 255);
     return signCode !== undefined && typeof c.accepted === 'boolean' ? { signCode, accepted: c.accepted } : undefined;
@@ -1871,8 +1881,7 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       }
       const type = allowlistedLabel(candidate.type, ['boolean', 'number', 'object', 'string', 'undefined']);
       if (!type) continue;
-      const length =
-        Number.isSafeInteger(candidate.length) && Number(candidate.length) >= 0 ? Number(candidate.length) : undefined;
+      const length = nonNegativeInteger(candidate.length);
       details.push({ type, ...(length === undefined ? {} : { length }) });
     }
     return {
@@ -1888,8 +1897,7 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
   if (value.scope === 'runtime-notice') {
     if (typeof value.code !== 'string' || !Object.hasOwn(RUNTIME_NOTICES, value.code)) return undefined;
     const notice = RUNTIME_NOTICES[value.code as RuntimeNoticeCode];
-    const durationMs =
-      Number.isSafeInteger(value.durationMs) && Number(value.durationMs) >= 0 ? Number(value.durationMs) : undefined;
+    const durationMs = nonNegativeInteger(value.durationMs);
     const messageKey =
       durationMs !== undefined && 'durationMessageKey' in notice ? notice.durationMessageKey : notice.messageKey;
     return {
@@ -1981,10 +1989,7 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       };
     }
     if (!REASONS.has(value.reason)) return undefined;
-    const affectedAccessoryCount =
-      Number.isSafeInteger(value.affectedAccessoryCount) && Number(value.affectedAccessoryCount) >= 0
-        ? Number(value.affectedAccessoryCount)
-        : undefined;
+    const affectedAccessoryCount = nonNegativeInteger(value.affectedAccessoryCount);
     const accessoryAliases = Array.isArray(value.accessoryAliases)
       ? value.accessoryAliases
           .filter((alias): alias is string => typeof alias === 'string' && /^accessory-[0-9a-f-]{36}$/.test(alias))

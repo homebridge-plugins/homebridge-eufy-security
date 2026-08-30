@@ -834,38 +834,80 @@ describe('live media adaptation', () => {
    * change and the keyframe a replacement can start from are the only ones a session may withhold. Every
    * other unit still reaches an adaptation, and each process receives only the units it can code.
    */
-  it('withholds only the access units no adaptation can code across a source geometry change', async () => {
+  /**
+   * A camera ramps its source up and down a resolution ladder, and it does so in the first seconds of a
+   * session: measured on the fleet, a mains-powered camera announced four geometries within 3.9 s of the
+   * pull opening, having delivered a decodable keyframe at 525 ms. Replacing the adaptation on each one cost
+   * four process lifetimes and four waits for the next keyframe before any video reached the controller.
+   *
+   * It is also unnecessary. One adaptation codes every rung: measured through this plugin's own bundled
+   * FFmpeg with the argument list below, a stream changing 1280x720 -> 640x360 delivered 60 of 60 frames,
+   * the reverse 60 of 60, and 640 -> 1280 -> 640 delivered 90 of 90, with no warning and a continuous
+   * output at the negotiated geometry. The decoder reinitialises on the new parameter sets and the scale
+   * filter follows it, which is what the teardown was standing in for.
+   *
+   * The geometry is not in the argument list at all — the output geometry is HomeKit's selection — so a
+   * rebuild here spawned a byte-identical command.
+   */
+  it('keeps one adaptation across every rung of a source resolution ladder', async () => {
     const session = await liveSession();
     await session.start();
-    const first = [KEYFRAME, { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) }];
-    const withheld = [
-      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 2]) },
-      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
+    const ladder = [
+      KEYFRAME,
+      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) },
+      { ...KEYFRAME, width: 640, height: 360, data: Buffer.from([0, 0, 0, 1, 0x65, 2]) },
+      { ...KEYFRAME, width: 1920, height: 1080, data: Buffer.from([0, 0, 0, 1, 0x65, 3]) },
+      { ...KEYFRAME, width: 1920, height: 1080, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 4]) },
     ];
-    const second = [
-      { ...KEYFRAME, width: 640, height: 360, data: Buffer.from([0, 0, 0, 1, 0x65, 4]) },
-      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 5]) },
-    ];
-    for (const frame of [...first, ...withheld, ...second]) {
+    for (const frame of ladder) {
       session.stream.video(frame);
     }
 
-    expect(session.children).toHaveLength(2);
-    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(first.map(({ data }) => data)));
-    expect(Buffer.concat(session.children[1]!.input)).toEqual(Buffer.concat(second.map(({ data }) => data)));
+    expect(session.children).toHaveLength(1);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(ladder.map(({ data }) => data)));
     session.prepared.stop();
   });
 
   /**
-   * The SDK announces the coded configuration — the picture size a decoder will produce, read from the
-   * parameter sets — and a frame header is the station's report of it. This session follows the
-   * announcement, so a change the header does not show still replaces the adaptation.
+   * A codec change is the one source change an adaptation cannot absorb: its input format is fixed at spawn,
+   * so an H.265 access unit fed to a process opened for H.264 fails to parse. Measured the same way — the
+   * mixed stream decoded only the frames before the change and reported `Invalid data found when processing
+   * input` for the rest — so here the process is replaced, and the units between the change and the keyframe
+   * a replacement can start from are withheld.
    */
-  it('replaces the adaptation on an announced configuration the frame headers do not show', async () => {
+  it('withholds only the access units no adaptation can code across a source codec change', async () => {
+    const session = await liveSession();
+    await session.start();
+    const h264 = [KEYFRAME, { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) }];
+    const withheld = [
+      { ...KEYFRAME, codec: 'h265' as const, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x02, 2]) },
+      { ...KEYFRAME, codec: 'h265' as const, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x02, 3]) },
+    ];
+    const h265 = [
+      { ...KEYFRAME, codec: 'h265' as const, data: Buffer.from([0, 0, 0, 1, 0x26, 4]) },
+      { ...KEYFRAME, codec: 'h265' as const, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x02, 5]) },
+    ];
+    for (const frame of [...h264, ...withheld, ...h265]) {
+      session.stream.video(frame);
+    }
+
+    expect(session.children).toHaveLength(2);
+    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(h264.map(({ data }) => data)));
+    expect(Buffer.concat(session.children[1]!.input)).toEqual(Buffer.concat(h265.map(({ data }) => data)));
+    expect(session.spawned[1]![session.spawned[1]!.indexOf('-f') + 1]).toBe('hevc');
+    session.prepared.stop();
+  });
+
+  /**
+   * The SDK announces the coded configuration — read from the parameter sets in force — and a frame header
+   * is the station's report of it. This session follows the announcement, so a codec the header does not
+   * show still replaces the adaptation, whose input format was fixed at spawn.
+   */
+  it('replaces the adaptation on an announced codec the frame headers do not show', async () => {
     const session = await liveSession();
     await session.start();
     const first = [KEYFRAME, { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) }];
-    const reconfigured = { codec: 'h264' as const, width: 960, height: 540 };
+    const announcedH265 = { codec: 'h265' as const, width: 1280, height: 720 };
     const second = [
       { ...KEYFRAME, data: Buffer.from([0, 0, 0, 1, 0x65, 2]) },
       { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
@@ -874,37 +916,13 @@ describe('live media adaptation', () => {
       session.stream.video(frame);
     }
     for (const frame of second) {
-      session.stream.video(frame, reconfigured);
+      session.stream.video(frame, announcedH265);
     }
 
     expect(session.children).toHaveLength(2);
     expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(first.map(({ data }) => data)));
     expect(Buffer.concat(session.children[1]!.input)).toEqual(Buffer.concat(second.map(({ data }) => data)));
-    session.prepared.stop();
-  });
-
-  /**
-   * The converse, and the reason for the change: a frame header that moves while the announced configuration
-   * does not is the station contradicting its own parameter sets, measured once across some 6000 frames.
-   * Rebuilding on it would spend an encoder lifetime — and discard the frames in flight — for a picture that
-   * did not change.
-   */
-  it('keeps one adaptation across frame headers that move without an announcement', async () => {
-    const session = await liveSession();
-    await session.start();
-    const announced = { codec: 'h264' as const, width: 1280, height: 720 };
-    const gop = [
-      KEYFRAME,
-      { ...KEYFRAME, width: 640, height: 360, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) },
-      { ...KEYFRAME, width: 640, height: 360, data: Buffer.from([0, 0, 0, 1, 0x65, 2]) },
-      { ...KEYFRAME, width: 1920, height: 1080, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 3]) },
-    ];
-    for (const frame of gop) {
-      session.stream.video(frame, announced);
-    }
-
-    expect(session.children).toHaveLength(1);
-    expect(Buffer.concat(session.children[0]!.input)).toEqual(Buffer.concat(gop.map(({ data }) => data)));
+    expect(session.spawned[1]![session.spawned[1]!.indexOf('-f') + 1]).toBe('hevc');
     session.prepared.stop();
   });
 
@@ -913,9 +931,8 @@ describe('live media adaptation', () => {
    * announcements made before then have nothing to replace and must not schedule a replacement.
    *
    * A cold source announces from each frame's own header until its parameter sets state a geometry, and a
-   * camera's ladder ramps during exactly that window — so several announcements before the first keyframe is
-   * the ordinary case, not an edge. Counting them instead of comparing them tore down the adaptation at the
-   * following keyframe and discarded every access unit up to it.
+   * camera's ladder ramps during exactly that window, so several announcements before the first keyframe is
+   * the ordinary case rather than an edge.
    */
   it('opens one adaptation despite configurations announced before any keyframe', async () => {
     const session = await liveSession();
@@ -946,13 +963,21 @@ describe('live media adaptation', () => {
    * The access units announced under the other configuration are still withheld, because that is media the
    * running process cannot code — not rebuilding is separate from feeding it anything.
    */
-  it('keeps one adaptation when an announced configuration reverts before a keyframe', async () => {
+  /**
+   * A codec that moves away and back before any keyframe leaves the running adaptation still able to code
+   * what follows, so it is kept. Counting announcements rather than comparing them replaced it here, for a
+   * codec it was already opened for.
+   *
+   * The units announced under the foreign codec stay withheld: that process cannot parse them, which is the
+   * whole reason a codec change withholds at all.
+   */
+  it('keeps one adaptation when an announced codec reverts before a keyframe', async () => {
     const session = await liveSession();
     await session.start();
     const opened = { codec: 'h264' as const, width: 1280, height: 720 };
-    const away = { codec: 'h264' as const, width: 960, height: 540 };
+    const away = { codec: 'h265' as const, width: 1280, height: 720 };
     const first = KEYFRAME;
-    const foreign = { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 1]) };
+    const foreign = { ...KEYFRAME, codec: 'h265' as const, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x02, 1]) };
     const resumed = [
       { ...KEYFRAME, keyframe: false, data: Buffer.from([0, 0, 0, 1, 0x41, 2]) },
       { ...KEYFRAME, data: Buffer.from([0, 0, 0, 1, 0x65, 3]) },
@@ -1288,9 +1313,10 @@ describe('live media adaptation', () => {
     stream.video({ codec: 'h265', width: 1920, height: 1080, keyframe: false, data: Buffer.from([0x02]) });
     expect(spawned).toHaveLength(1);
     stream.video({ codec: 'h265', width: 1920, height: 1080, keyframe: true, data: Buffer.from([0x26]) });
+    // A geometry-only change on the last frame: absorbed by the running adaptation, so it spawns nothing.
     stream.video({ codec: 'h265', width: 1280, height: 720, keyframe: true, data: Buffer.from([0x26]) });
 
-    expect(spawned.map((args) => args[args.indexOf('-f') + 1])).toEqual(['h264', 'hevc', 'hevc']);
+    expect(spawned.map((args) => args[args.indexOf('-f') + 1])).toEqual(['h264', 'hevc']);
     for (const args of spawned) {
       expect(args).toContain('scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2');
       expect(args).toEqual(expect.arrayContaining(['-r', '30', '-b:v', '300k', '-payload_type', '99']));

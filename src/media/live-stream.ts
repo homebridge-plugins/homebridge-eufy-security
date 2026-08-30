@@ -25,13 +25,22 @@ import type {
 export const PROCESS_STOP_GRACE_MS = 2_000;
 
 /**
- * Whether one coded source configuration can be adapted by a process opened for the other.
+ * Whether an adaptation opened for `running` can code what the source announced as `announced`.
  *
- * Compared by value, because the SDK resolves a configuration per frame: an unchanged source produces an
- * equal object rather than the same one, and identity would replace an adaptation on every frame.
+ * Only the codec decides it. An adaptation's input format is fixed at spawn, so an H.265 access unit fed to
+ * a process opened for H.264 does not parse; a changed geometry is absorbed, because the decoder
+ * reinitialises on the new parameter sets and the scale filter follows it. Measured through this plugin's
+ * bundled FFmpeg on its own argument list: 60 of 60 frames across 1280x720 to 640x360, 60 of 60 in reverse,
+ * 90 of 90 across 640 to 1280 to 640, no warnings; and a codec change decoding only the frames before it.
+ *
+ * The geometry never reached the argument list either — the output geometry is HomeKit's selection — so
+ * rebuilding on it spawned a byte-identical command, discarded the frames in flight, and waited for the
+ * next keyframe. A camera ramps its ladder during the first seconds of a session, four rungs inside 3.9 s
+ * on a mains-powered camera measured on the fleet, so all of that was paid before any video reached the
+ * controller.
  */
-function sameConfiguration(a: LiveVideoConfig, b: LiveVideoConfig): boolean {
-  return a.codec === b.codec && a.width === b.width && a.height === b.height;
+function canCode(running: LiveVideoConfig, announced: LiveVideoConfig): boolean {
+  return running.codec === announced.codec;
 }
 
 const INITIAL_RTCP_GRACE_MS = 15_000;
@@ -222,15 +231,10 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     /**
      * The coded configuration the source last announced, and the one the running adaptation was opened for.
      *
-     * The SDK announces a coded configuration once per change, immediately before the first frame carrying
-     * it, so this session neither retains frame dimensions nor compares them: a frame header is the station's
-     * report, while the announcement carries the picture size a decoder will produce.
-     *
-     * Two values rather than a flag, because an announcement is not by itself a reason to replace anything.
-     * A cold source announces from each frame's own header until its parameter sets state a geometry, and a
-     * camera's ladder ramps during exactly that window, so several arrive before the first keyframe opens any
-     * adaptation at all; and a configuration that moves away and back leaves the running adaptation still
-     * correct. Only a difference between these two is a reason to rebuild.
+     * Both, rather than a flag, because only a difference between them is a reason to replace an adaptation:
+     * announcements arrive before the first keyframe has opened one, and a configuration that moves away and
+     * back leaves the running adaptation still able to code what follows. What counts as a difference is
+     * {@link canCode}.
      */
     let videoConfig: LiveVideoConfig | undefined;
     let adaptationConfig: LiveVideoConfig | undefined;
@@ -433,10 +437,8 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
     };
 
     /**
-     * Records the coded configuration the source is about to deliver.
-     *
-     * Nothing is torn down here. A replacement adaptation can only start on a keyframe, and this arrives
-     * ahead of the frame carrying the new configuration rather than at a point where one is in hand.
+     * Records the coded configuration the source is about to deliver. Nothing is replaced here: a replacement
+     * can only start on a keyframe, and this arrives ahead of the frame carrying the new configuration.
      */
     const observeVideoConfig = (config: LiveVideoConfig): void => {
       videoConfig = config;
@@ -461,7 +463,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         }
         receivedVideoKeyframe = true;
       }
-      const inputChanged = adaptationConfig !== undefined && !sameConfiguration(adaptationConfig, videoConfig);
+      const inputChanged = adaptationConfig !== undefined && !canCode(adaptationConfig, videoConfig);
       if (videoProcess && inputChanged && !frame.keyframe) {
         return;
       }
@@ -864,13 +866,13 @@ function outputArguments(
  * and `rc_lookahead` at either preset, so this costs computation rather than frame delay.
  */
 function videoArguments(
-  source: LiveVideoConfig,
+  input: LiveVideoConfig,
   selection: NegotiatedLiveVideo,
   targetAddress: string,
   target: LiveMediaTarget,
 ): string[] {
   return [
-    ...commonArguments(source.codec === 'h265' ? 'hevc' : source.codec, ['-use_wallclock_as_timestamps', '1']),
+    ...commonArguments(input.codec === 'h265' ? 'hevc' : input.codec, ['-use_wallclock_as_timestamps', '1']),
     '-an',
     '-c:v',
     'libx264',

@@ -181,6 +181,13 @@ One fragment the SDK's fragment recording emits, carrying the camera's own codec
 geometry, and keyframe cadence. It is recording input, never HomeKit output.
 _Avoid_: Recorded fragment, negotiated recording
 
+**Announced source configuration**:
+The codec and coded picture size the SDK states a live source is producing, read from the parameter sets in
+force and announced once per change immediately before the first frame carrying it. It is what the source
+is sending, never what HomeKit asked for; a camera changes it several times within one session, and only a
+changed codec requires a new media adaptation.
+_Avoid_: Negotiated recording, negotiated live selection, frame geometry
+
 **Negotiated recording**:
 The complete recording contract one HomeKit controller selected: container and fragment length, H.264
 profile, level, geometry, frame-rate ceiling, bit-rate ceiling, keyframe interval, and audio codec.
