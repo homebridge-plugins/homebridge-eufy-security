@@ -27,7 +27,60 @@ const LIVE_REFRESH_SPREAD_MS = LIVE_REFRESH_INTERVAL_MS / 2;
 /** The largest image this plugin will accept or retain, which keeps one inside the Homebridge backup limit. */
 export const MAXIMUM_IMAGE_BYTES = 10 * 1024 * 1024;
 
-/** A bounded non-empty payload delimited by the JPEG start-of-image and end-of-image markers. */
+/** The pixel geometry of a camera's own frame, as distinct from any geometry HomeKit negotiated. */
+export interface ImageGeometry {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The geometry a JPEG's start-of-frame declares, or nothing when the bytes do not state one.
+ *
+ * The only account of a camera's native picture shape available before a stream runs. The SDK publishes none
+ * at discovery — no cloud field carries it and the video-quality member is a tier label rather than a shape —
+ * while a retained image is a real frame from that camera and survives restarts.
+ *
+ * Every start-of-frame marker is accepted, not only the baseline one, because which of them a camera sends is
+ * its choice and they all declare the geometry in the same place. The scan is bounded and refuses anything it
+ * cannot read: a segment length that would not advance, one that walks past the end, a header truncated
+ * before its geometry, or a zero dimension. This reads bytes a device produced, so the answer is a geometry
+ * or nothing — a wrong one would have HomeKit told the wrong shape for the life of the accessory.
+ */
+export function jpegGeometry(jpeg: Buffer): ImageGeometry | undefined {
+  if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) {
+    return undefined;
+  }
+  for (let offset = 2; offset + 9 < jpeg.length; ) {
+    if (jpeg[offset] !== 0xff) {
+      return undefined;
+    }
+    // Any number of 0xff fill bytes may precede a marker, so the marker is the first byte that is not one.
+    while (offset + 1 < jpeg.length && jpeg[offset + 1] === 0xff) {
+      offset++;
+    }
+    if (offset + 9 >= jpeg.length) {
+      return undefined;
+    }
+    const marker = jpeg[offset + 1]!;
+    const length = jpeg.readUInt16BE(offset + 2);
+    // A start-of-frame is any of SOF0..SOF3 / SOF5..SOF7 / SOF9..; the four-marker span below covers the
+    // codings a camera sends, and each states height then width at the same offset.
+    if (marker >= 0xc0 && marker <= 0xc3) {
+      if (offset + 9 >= jpeg.length || length < 8) {
+        return undefined;
+      }
+      const height = jpeg.readUInt16BE(offset + 5);
+      const width = jpeg.readUInt16BE(offset + 7);
+      return width > 0 && height > 0 ? { width, height } : undefined;
+    }
+    if (length < 2) {
+      return undefined;
+    }
+    offset += 2 + length;
+  }
+  return undefined;
+}
+
 export function isBoundedJpeg(jpeg: Buffer): boolean {
   return (
     jpeg.length > 5 &&
@@ -180,6 +233,19 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     private readonly packaged: (name: PackagedImage) => Promise<Buffer | undefined> = packagedImage,
     private readonly random: () => number = Math.random,
   ) {}
+
+  /**
+   * The native geometry of the image retained for `serial`, or nothing when none is retained or its bytes
+   * state none.
+   *
+   * A camera's own picture shape, which nothing else can answer before a stream runs. Read from disk on
+   * demand rather than cached here: it is asked once per accessory at setup, and the retained image is
+   * replaced by a later snapshot whose shape is the one that then matters.
+   */
+  async retainedGeometry(serial: string): Promise<ImageGeometry | undefined> {
+    const retained = await this.images?.read(serial);
+    return retained ? jpegGeometry(retained) : undefined;
+  }
 
   /**
    * Answers one snapshot request under the selected policy.

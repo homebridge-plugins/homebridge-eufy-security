@@ -316,6 +316,14 @@ export interface SnapshotMediaAdapter {
     presentation?: SnapshotPresentation,
   ): Promise<Buffer>;
   captureFromWarmLive?(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<void>;
+  /**
+   * The native geometry of the image retained for `serial`, or nothing when none is retained.
+   *
+   * A camera's own picture shape, which decides the resolutions HomeKit is offered. Nothing else can answer
+   * it before a stream runs: no cloud field carries it and the SDK's video-quality member is a tier label
+   * rather than a shape. A retained image is a real frame from that camera and survives restarts.
+   */
+  retainedGeometry?(serial: string): Promise<{ readonly width: number; readonly height: number } | undefined>;
   discard?(serial: string): void;
   reconcile?(serials: Iterable<string>): void;
   discardAll?(): void;

@@ -82,6 +82,16 @@ export class HomeKitReconciler {
   private readonly representedSerials = new Set<string>();
   private readonly attachedAdapters = new Map<string, ReadonlyMap<string, AttachedAdapter>>();
   private readonly activeAdapters = new Map<string, ReadonlySet<string>>();
+  /**
+   * The geometry each camera's own frames have, once an image retained for it has been read.
+   *
+   * Read asynchronously while reconciliation stays synchronous, so the shape is applied to the accessory
+   * whose controller is built after it arrives — in practice the next start, since a controller's advertised
+   * matrix is published once when it is constructed. The retained image survives restarts, so a camera that
+   * has ever produced one is advertised at its own shape from then on.
+   */
+  private readonly sourceGeometry = new Map<string, { readonly width: number; readonly height: number }>();
+  private readonly observingSourceGeometry = new Set<string>();
   private readonly representationDiagnostics = new Map<
     string,
     Exclude<RepresentationDiagnostic['reason'], 'recovered'>
@@ -144,6 +154,26 @@ export class HomeKitReconciler {
     this.lastPublication = undefined;
   }
 
+  /**
+   * Read this camera's own geometry once, from the image already retained for it.
+   *
+   * Started at most once per serial per run and never awaited: reconciliation answers a registry update and
+   * cannot block on the filesystem, and a shape that arrives afterwards is applied by the next accessory
+   * construction rather than by mutating a published matrix under a controller's feet.
+   */
+  private observeSourceGeometry(serial: string): void {
+    if (this.observingSourceGeometry.has(serial) || !this.snapshotMedia?.retainedGeometry) {
+      return;
+    }
+    this.observingSourceGeometry.add(serial);
+    void this.snapshotMedia
+      .retainedGeometry(serial)
+      .then((geometry) => {
+        if (geometry) this.sourceGeometry.set(serial, geometry);
+      })
+      .catch(() => undefined);
+  }
+
   private reconcile(view: HomeKitRegistryView): void {
     const publication = `${view.generation}:${view.version}`;
     if (publication === this.lastPublication) {
@@ -158,6 +188,7 @@ export class HomeKitReconciler {
 
     const nextRepresented = new Set<string>();
     for (const [serial, device] of view.registry) {
+      this.observeSourceGeometry(serial);
       const previousHandles = this.attachedAdapters.get(serial);
       const manifest = manifests.get(serial)!;
       const evidence = indexDeviceEvidence(manifest);
@@ -201,6 +232,7 @@ export class HomeKitReconciler {
           ...(this.mediaBudget ? { mediaBudget: this.mediaBudget } : {}),
           audioEnabled: this.entityPreferences[serial]?.audio !== false,
           snapshotMode: this.entityPreferences[serial]?.snapshotMode ?? 'Refresh',
+          ...(this.sourceGeometry.get(serial) ? { sourceGeometry: this.sourceGeometry.get(serial)! } : {}),
           availability: () => this.source.currentAvailability?.(serial),
           diagnose: (diagnostic) => this.setAdapterDiagnostic(serial, key, diagnostic),
           observed: (code) => this.clearAdapterDiagnostics(serial, code, key),

@@ -59,6 +59,76 @@ import type {
 export const CAMERA_STREAMING_ADAPTER_KEY = 'camera.streaming';
 
 /**
+ * The resolutions advertised to a controller when the camera's own shape is not known.
+ *
+ * 16:9, because it is what most cameras produce and what a controller's tile is drawn at. A camera whose
+ * shape has never been observed keeps these rather than being given a guessed matrix.
+ */
+export const DEFAULT_ADVERTISED_RESOLUTIONS: readonly (readonly [number, number, number])[] = [
+  [320, 180, 15],
+  [640, 360, 30],
+  [1280, 720, 30],
+  [1920, 1080, 30],
+];
+
+/** The frame rate every derived entry is advertised at; a negotiated rate is a ceiling, not a target. */
+const ADVERTISED_FPS = 30;
+
+/**
+ * Divisors of the native size a derived matrix offers, so a controller drawing a small tile is not forced to
+ * the largest.
+ *
+ * Whole divisions of the camera's own geometry rather than a list of heights: a fixed list carries steps
+ * belonging to other shapes, which land on sizes no camera produces — a 16:9 camera offered a 1200-high step
+ * advertises 2134x1200, whose ratio has drifted and whose width is arbitrary. Halving keeps the exact aspect
+ * and stays even, and on a 16:9 camera it lands on the familiar ladder unchanged.
+ */
+const ADVERTISED_DIVISORS = [1, 2, 4] as const;
+
+/** Below this the shape is not a camera frame, and deriving a matrix from it would publish nonsense. */
+const SMALLEST_CREDIBLE_DIMENSION = 120;
+
+/**
+ * The resolutions one camera advertises, derived from the geometry it actually produces.
+ *
+ * A controller picks one entry and the plugin must then deliver exactly that geometry, so a matrix carrying
+ * only one shape forces every camera into it. Every entry used to be 16:9, which fitted a 4:3 camera inside a
+ * 16:9 frame: measured on a 1600x1200 doorbell negotiated at 1280x720, the picture occupies 960x720 with 160
+ * black columns each side — a quarter of every encoded frame is black, and that quarter is charged against
+ * the negotiated bit rate rather than spent on the picture.
+ *
+ * Entries keep the camera's own aspect and never exceed its own size, because asking a controller to accept
+ * more pixels than the camera codes spends bit rate on upscaling. Dimensions are rounded to even numbers,
+ * which is all H.264 can code. A shape that is absent or not credible falls back to
+ * {@link DEFAULT_ADVERTISED_RESOLUTIONS}: a guessed shape is worse than a fitted one, because the fitting
+ * would still happen and at the wrong ratio.
+ */
+export function advertisedResolutions(
+  geometry: { readonly width: number; readonly height: number } | undefined,
+): readonly (readonly [number, number, number])[] {
+  if (
+    !geometry ||
+    !Number.isSafeInteger(geometry.width) ||
+    !Number.isSafeInteger(geometry.height) ||
+    geometry.width < SMALLEST_CREDIBLE_DIMENSION ||
+    geometry.height < SMALLEST_CREDIBLE_DIMENSION
+  ) {
+    return DEFAULT_ADVERTISED_RESOLUTIONS;
+  }
+  const even = (value: number): number => Math.max(2, Math.round(value / 2) * 2);
+  const derived = new Map<string, readonly [number, number, number]>();
+  for (const divisor of ADVERTISED_DIVISORS) {
+    const width = even(geometry.width / divisor);
+    const height = even(geometry.height / divisor);
+    if (width < SMALLEST_CREDIBLE_DIMENSION && height < SMALLEST_CREDIBLE_DIMENSION) {
+      continue;
+    }
+    derived.set(`${width}x${height}`, [width, height, ADVERTISED_FPS]);
+  }
+  return [...derived.values()].sort(([leftWidth], [rightWidth]) => leftWidth - rightWidth);
+}
+
+/**
  * The stable key of the Camera Operating Mode service this bundle publishes for a camera that configures no
  * HomeKit Secure Video recording, and therefore has no controller-owned service to carry the presented
  * state.
@@ -1006,12 +1076,9 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
             profiles: [context.hap.H264Profile.BASELINE, context.hap.H264Profile.MAIN, context.hap.H264Profile.HIGH],
             levels: [context.hap.H264Level.LEVEL3_1, context.hap.H264Level.LEVEL3_2, context.hap.H264Level.LEVEL4_0],
           },
-          resolutions: [
-            [320, 180, 15],
-            [640, 360, 30],
-            [1280, 720, 30],
-            [1920, 1080, 30],
-          ],
+          resolutions: advertisedResolutions(context.sourceGeometry).map(
+            (entry) => [...entry] as [number, number, number],
+          ),
         },
         ...(context.audioEnabled === false
           ? {}

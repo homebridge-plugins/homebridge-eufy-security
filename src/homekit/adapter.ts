@@ -96,6 +96,13 @@ export interface AdapterAttachmentContext {
   readonly mediaBudget?: MediaSessionBudget;
   readonly audioEnabled?: boolean;
   readonly snapshotMode?: SnapshotMode;
+  /**
+   * The geometry this camera's own frames have, when it has been observed.
+   *
+   * Decides the resolution matrix advertised to a controller. Absent until an image has been retained for the
+   * camera, which keeps the standard matrix rather than publishing a guessed shape.
+   */
+  readonly sourceGeometry?: { readonly width: number; readonly height: number };
   readonly availability?: () => AvailabilityObservation | undefined;
   diagnose(diagnostic: AdapterDiagnostic): void;
   observed(code: string): void;
