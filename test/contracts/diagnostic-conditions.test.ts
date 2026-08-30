@@ -383,6 +383,7 @@ describe('diagnostic conditions', () => {
       'level2-ready': { cipherId: 209 },
       'level2-absent': { waitedMs: 8000 },
       warming: { retryMs: 2000, deadlineMs: 20000 },
+      'media-command-unsent': { reason: 'level2-key' },
     } satisfies { [P in LiveTrace['phase']]: Omit<Extract<LiveTrace, { phase: P }>, 'phase'> };
 
     const phases = Object.keys(traces);

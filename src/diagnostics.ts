@@ -1397,6 +1397,10 @@ const LIVE_TRACE_PHASES = {
     const waitedMs = boundedInteger(c.waitedMs, MAX_STARTUP_WINDOW_MS);
     return waitedMs === undefined ? undefined : { waitedMs };
   },
+  'media-command-unsent': (c) => {
+    const reason = allowlistedLabel(c.reason, ['level2-key', 'address']);
+    return reason ? { reason } : undefined;
+  },
   warming: (c) => {
     const retryMs = boundedInteger(c.retryMs, MAX_STARTUP_WINDOW_MS);
     const deadlineMs = boundedInteger(c.deadlineMs, MAX_STARTUP_WINDOW_MS);
