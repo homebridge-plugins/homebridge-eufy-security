@@ -1648,6 +1648,15 @@ const ADAPTATION_EVENTS = new Set([
   'output',
 ]);
 /**
+ * Which of those events is a failure, and so the ones a record is levelled `warn` for.
+ *
+ * The others are a stream working: `started` is a process beginning, and `output` is a process reported for
+ * what it wrote on the way to a stop it was asked to make — the exit code of a killed FFmpeg among it. Neither
+ * is something a reader must act on, and levelling the class rather than the record put four warnings in the
+ * log for every session that succeeded.
+ */
+const ADAPTATION_FAILURE_EVENTS = new Set<string>(['spawn-failed', 'exited-before-output', 'exited-while-streaming']);
+/**
  * The signals a terminated adaptation is reported under.
  *
  * A signal this build cannot name is dropped rather than passed through, because the field is written from
@@ -2181,7 +2190,8 @@ export function reportAdaptationNotice(target: Pick<PlatformLogger, 'debug'>, tr
   if (!target.debug) {
     return;
   }
-  const notice = sanitizeAdaptationNotice({ ...trace, level: 'warn' }, 'warn');
+  const level = ADAPTATION_FAILURE_EVENTS.has(trace.event) ? 'warn' : 'debug';
+  const notice = sanitizeAdaptationNotice({ ...trace, level }, level);
   if (notice) {
     target.debug(JSON.stringify(notice));
   }

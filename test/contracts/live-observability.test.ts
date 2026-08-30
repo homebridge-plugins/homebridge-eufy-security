@@ -17,6 +17,34 @@ import { createSdkLogger, reportAdaptationNotice, reportHomeKitEvent } from '../
 const records = (debug: ReturnType<typeof vi.fn>) =>
   debug.mock.calls.map(([message]) => JSON.parse(message as string) as Record<string, unknown>);
 
+/**
+ * An adaptation trace is levelled by what it reports, not by the fact that it is one.
+ *
+ * Every one of these was a failure once, so stamping the class `warn` was the same thing as levelling each
+ * record. `started` and `output` are not failures — one is a process beginning, the other a process reported
+ * for what it wrote on the way to an intended stop — and levelling them as warnings puts four warnings in a
+ * support log for every stream that worked, which is what a real fleet showed after `started` was added.
+ */
+describe('the level an adaptation record carries', () => {
+  const levelOf = (event: string, extra: Record<string, unknown> = {}) => {
+    const debug = vi.fn();
+    reportAdaptationNotice({ debug }, { role: 'live-video', event, ...extra } as never);
+    return records(debug)[0]?.level;
+  };
+
+  it('is debug for a process that started, which is a stream working', () => {
+    expect(levelOf('started')).toBe('debug');
+  });
+
+  it('is debug for the output of a process asked to stop, teardown being how a session ends', () => {
+    expect(levelOf('output', { code: 255, stderr: ['bitrate= 281.9kbits/s'] })).toBe('debug');
+  });
+
+  it.each(['spawn-failed', 'exited-before-output', 'exited-while-streaming'])('is warn for %s', (event) => {
+    expect(levelOf(event, { stderr: ['Invalid data found'] })).toBe('warn');
+  });
+});
+
 describe('an adaptation that has started', () => {
   it('is recorded, so a keyframe with no adaptation behind it is visible', () => {
     const debug = vi.fn();

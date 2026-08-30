@@ -1719,7 +1719,7 @@ describe('diagnostic conditions', () => {
     expect(
       JSON.parse(debug.mock.calls[0]![0] as string),
       'an exit status and a signal outside the bounded sets are dropped, never passed through',
-    ).toEqual({ scope: 'ffmpeg', level: 'warn', role: 'sdk', event: 'output' });
+    ).toEqual({ scope: 'ffmpeg', level: 'debug', role: 'sdk', event: 'output' });
     expect(JSON.parse(debug.mock.calls[1]![0] as string)).toEqual({
       scope: 'ffmpeg',
       level: 'warn',
