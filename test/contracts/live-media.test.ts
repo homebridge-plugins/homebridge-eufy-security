@@ -274,7 +274,11 @@ async function talkbackSession(talkback: () => Promise<TalkbackHandle>) {
  */
 async function liveSession(
   source?: { live(): Promise<LiveStreamConsumer> },
-  { audio, stalling }: { audio?: NegotiatedLiveAudio; stalling?: boolean } = {},
+  {
+    audio,
+    stalling,
+    video = NEGOTIATED_VIDEO,
+  }: { audio?: NegotiatedLiveAudio; stalling?: boolean; video?: NegotiatedLiveVideo } = {},
 ) {
   const stream = new SyntheticLiveStream();
   const onVideoFailure = vi.fn();
@@ -340,7 +344,7 @@ async function liveSession(
     released,
     notices,
     start: (): Promise<void> =>
-      prepared.start(source ?? { live: async () => stream }, { video: NEGOTIATED_VIDEO, ...(audio ? { audio } : {}) }),
+      prepared.start(source ?? { live: async () => stream }, { video, ...(audio ? { audio } : {}) }),
     receiverReport: (): void => receiverReport?.(),
   };
 }
@@ -1075,7 +1079,7 @@ describe('live media adaptation', () => {
         '-fpsmax',
         '30',
         '-b:v',
-        '300k',
+        '288k',
         '-payload_type',
         '99',
         '-ssrc',
@@ -1160,9 +1164,9 @@ describe('live media adaptation', () => {
           '-g',
           '30',
           '-b:v',
-          '250k',
+          '242k',
           '-maxrate',
-          '250k',
+          '242k',
         ]),
       );
       expect(spawned[0]).toContain(
@@ -1221,7 +1225,7 @@ describe('live media adaptation', () => {
     );
     expect(spawned[1]).toContain('scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2');
     expect(spawned[1]).toEqual(
-      expect.arrayContaining(['-fpsmax', '15', '-g', '30', '-b:v', '150k', '-maxrate', '150k']),
+      expect.arrayContaining(['-fpsmax', '15', '-g', '30', '-b:v', '144k', '-maxrate', '144k']),
     );
     expect(spawned[1]).toEqual(
       expect.arrayContaining([
@@ -1334,7 +1338,7 @@ describe('live media adaptation', () => {
     expect(spawned.map((args) => args[args.indexOf('-f') + 1])).toEqual(['h264', 'hevc']);
     for (const args of spawned) {
       expect(args).toContain('scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2');
-      expect(args).toEqual(expect.arrayContaining(['-fpsmax', '30', '-b:v', '300k', '-payload_type', '99']));
+      expect(args).toEqual(expect.arrayContaining(['-fpsmax', '30', '-b:v', '288k', '-payload_type', '99']));
       expect(args).not.toContain('-r');
     }
     expect(stream.stop).not.toHaveBeenCalled();
@@ -1943,6 +1947,76 @@ describe('live output frame rate', () => {
     const args = session.spawned[0]!;
     expect(args[args.indexOf('-g') + 1]).toBe('60');
     expect(args[args.indexOf('-keyint_min') + 1]).toBe('60');
+    session.prepared.stop();
+  });
+});
+
+/**
+ * The negotiated bit rate bounds what the accessory transmits, so the encoder is given the ceiling less the
+ * transport its own packetization will add to it.
+ *
+ * An encoder coding inside its ceiling still transmits over it whenever the transport is unreserved, which is
+ * what the measured overshoot was on every camera tried. The evidence, and the decision that the ceiling
+ * covers the transport rather than the coded stream, are in docs/architecture.md.
+ *
+ * Every expected budget below is written out rather than recomputed, because a test that re-derives the
+ * formula only asserts that the formula equals itself.
+ *
+ * The VBV buffer is one second of the budget rather than two. A buffer is an allowance a window may exceed
+ * the rate by, so a two-second buffer owes a 45-second session 4.4 percent over its ceiling on arithmetic
+ * alone.
+ */
+describe('live output bit rate', () => {
+  it('reserves the transport its own packetization adds out of the negotiated ceiling', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-b:v') + 1]).toBe('288k');
+    expect(args[args.indexOf('-maxrate') + 1]).toBe('288k');
+    session.prepared.stop();
+  });
+
+  it('bounds one second of VBV buffer rather than two, so a window is not owed a second buffer', async () => {
+    const session = await liveSession();
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-bufsize') + 1]).toBe('288k');
+    expect(args[args.indexOf('-bufsize') + 1]).toBe(args[args.indexOf('-maxrate') + 1]);
+    session.prepared.stop();
+  });
+
+  it('reserves more from a smaller MTU, because the same media is carried in more packets', async () => {
+    const session = await liveSession(undefined, { video: { ...NEGOTIATED_VIDEO, mtu: 600 } });
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-maxrate') + 1]).toBe('281k');
+    session.prepared.stop();
+  });
+
+  it('reserves less at a lower negotiated frame rate, because fewer frames end in a partial packet', async () => {
+    const session = await liveSession(undefined, { video: { ...NEGOTIATED_VIDEO, fps: 15 } });
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-maxrate') + 1]).toBe('290k');
+    session.prepared.stop();
+  });
+
+  it('keeps a budget a tiny ceiling cannot pay for positive, so the encoder still starts', async () => {
+    const session = await liveSession(undefined, { video: { ...NEGOTIATED_VIDEO, maxBitRate: 1 } });
+    await session.start();
+    session.stream.video(KEYFRAME);
+
+    const args = session.spawned[0]!;
+    expect(args[args.indexOf('-maxrate') + 1]).toBe('1k');
+    expect(args[args.indexOf('-bufsize') + 1]).toBe('1k');
     session.prepared.stop();
   });
 });

@@ -269,10 +269,29 @@ describe('recording media adaptation', () => {
         'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
       ]),
     );
-    expect(args).toEqual(expect.arrayContaining(['-b:v', '2000k', '-maxrate', '2000k', '-bufsize', '4000k']));
+    expect(args[args.indexOf('-b:v') + 1]).toBe('2000k');
+    expect(args[args.indexOf('-maxrate') + 1]).toBe('2000k');
+    expect(args[args.indexOf('-bufsize') + 1]).toBe('2000k');
     expect(inputArguments(args)).toEqual(expect.arrayContaining(['-f', 'mp4']));
     session.recording.stop();
     await session.consumed.iteration;
+  });
+
+  /**
+   * A VBV buffer is an allowance a window may exceed the rate by, so its size decides how far over the
+   * negotiated ceiling a finite recording can sit: two seconds of buffer owes a 45-second window 4.4 percent
+   * over on arithmetic alone.
+   *
+   * Only the buffer is shared with the live path, which also reserves the transport its own packetization
+   * adds. A recording is carried as fragmented MP4 over the HAP session rather than as RTP, so it has neither
+   * those packets nor a measurement of what its container costs.
+   */
+  it('holds one second of VBV buffer rather than two, so a finite recording is not owed a second buffer', () => {
+    const session = recordingSession({ ...NEGOTIATED, maxBitRate: 800 });
+    const args = session.spawned[0];
+    expect(args[args.indexOf('-bufsize') + 1]).toBe('800k');
+    expect(args[args.indexOf('-bufsize') + 1]).toBe(args[args.indexOf('-maxrate') + 1]);
+    session.recording.stop();
   });
 
   it('fragments the output on forced keyframes no further apart than the selected fragment length', async () => {

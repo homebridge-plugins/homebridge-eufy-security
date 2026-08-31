@@ -11,14 +11,14 @@ cannot be hermetic.
 Most scripts are observation-only. These are not, and are excluded from the published package by
 `.npmignore`:
 
-| Script | What it writes |
-| --- | --- |
-| `eufy-camera-power.mjs` | Moves one camera's enablement state |
-| `live-hap-disabled-camera-check.mjs` | Turns a camera off and on again |
-| `live-hap-operating-mode-check.mjs` | Turns a camera off and on again through HomeKit, with `--serial` |
-| `live-talkback-check.mjs` | Plays audio through a camera speaker |
-| `authentication-handoff-evidence.mjs` | Takes one ownership lease against a live storage root |
-| `qualify-authentication-handoff.sh` | Provisions a throwaway Homebridge instance and replaces its account |
+| Script                                | What it writes                                                      |
+| ------------------------------------- | ------------------------------------------------------------------- |
+| `eufy-camera-power.mjs`               | Moves one camera's enablement state                                 |
+| `live-hap-disabled-camera-check.mjs`  | Turns a camera off and on again                                     |
+| `live-hap-operating-mode-check.mjs`   | Turns a camera off and on again through HomeKit, with `--serial`    |
+| `live-talkback-check.mjs`             | Plays audio through a camera speaker                                |
+| `authentication-handoff-evidence.mjs` | Takes one ownership lease against a live storage root               |
+| `qualify-authentication-handoff.sh`   | Provisions a throwaway Homebridge instance and replaces its account |
 
 Real-device writes require the owner's explicit approval. Observation-only verification is the default.
 
@@ -97,6 +97,20 @@ archives.
 Record the result with the live acceptance evidence for the change. A live acquisition or session wakes
 a camera, so every script uses wired cameras unless `--battery` is passed.
 
+### Comparing two revisions
+
+Pin the selection to what the accessory advertises, and read the advertisement in both runs rather than
+assuming it held. An accessory's advertised resolution list is not a constant: it can move from a generic
+fallback to one derived from each camera's native geometry as the plugin learns that geometry, and every
+script refuses a selection outside the advertisement. A comparison whose two halves ran at different
+geometries measures the advertisement rather than the change, and the halves that refuse measure nothing at
+all — an inconclusive run, which is reported as inconclusive rather than as a pass.
+
+Prefer one downtime window containing both revisions over two windows separated in time: build the first
+revision, run every camera, build the second, run them again, all against one storage copy taken once. That
+removes the account and registry state drift between runs, and it is also less total downtime than two
+windows, because the dedicated instance starts once per revision instead of once per run.
+
 ## Live authentication qualification
 
 `scripts/qualify-authentication-handoff.sh` walks a maintainer through one real handoff of a dedicated
@@ -116,8 +130,8 @@ ownership lease against a live storage root and belongs only to a throwaway inst
 
 ## Support and repository tooling
 
-| Script | Purpose |
-| --- | --- |
-| `decrypt-diagnostics.mjs` | Decrypts and extracts a support archive a user sent in |
-| `sync-device-artwork.mjs` | Regenerates bundled device artwork |
-| `guard-no-ecs.sh` | Repository gate: fails if `eufy-security-client` reappears |
+| Script                    | Purpose                                                    |
+| ------------------------- | ---------------------------------------------------------- |
+| `decrypt-diagnostics.mjs` | Decrypts and extracts a support archive a user sent in     |
+| `sync-device-artwork.mjs` | Regenerates bundled device artwork                         |
+| `guard-no-ecs.sh`         | Repository gate: fails if `eufy-security-client` reappears |

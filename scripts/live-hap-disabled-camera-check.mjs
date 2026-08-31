@@ -208,6 +208,7 @@ try {
     seconds: (Date.now() - observedFrom) / 1_000,
     expected: selection,
     session: established,
+    samples: streaming.samplesSince(observedFrom),
   });
   observeAdaptation('enabled', { video: 1, audio: 1 });
 

@@ -17,8 +17,16 @@
  *   - the decrypted H.264 elementary stream carries exactly the negotiated coded dimensions, profile, and
  *     level in its sequence parameter sets, so the selection is proven on the wire and not only on a
  *     command line;
- *   - measured frame rate, keyframe cadence, and bit rate stay inside the negotiated maxima, and video
- *     continues across the RTCP interval while receiver reports are sent from the moment the session
+ *   - measured frame rate and keyframe cadence stay inside the negotiated maxima, and the rate the accessory
+ *     TRANSMITS stays inside the negotiated bit rate: the judged figure is the whole SRTP datagram rather than
+ *     the coded media inside it, because the ceiling bounds what goes on the wire. It is judged over half a
+ *     minute or more, and reported unverified below that, where a VBV allowance has not yet amortized. The
+ *     coded rate, the transport's share, and the worst ten-second window are reported alongside; the last of
+ *     those is comparable between revisions but is not a pass condition, for the reason the harness gives on
+ *     `SUSTAINED_WINDOW_SECONDS`;
+ *   - the adaptation is asked for no more than the negotiated bit rate, with a VBV buffer no larger than one
+ *     second of that budget, and pins no constant output frame rate;
+ *   - video continues across the RTCP interval while receiver reports are sent from the moment the session
  *     starts, because an accessory may terminate a session that receives no RTCP inside its startup
  *     grace, well before a slow camera has delivered a first frame;
  *   - a snapshot requested while the session is streaming is served as a structurally complete JPEG and
@@ -33,7 +41,8 @@
  *   - audio absence or silence does not stop video, reported as a separate audio packet count;
  *   - sessions end on request and the accessory returns to an available streaming status;
  *   - with `--homebridge-pid`, adaptation processes exist while streaming, their arguments carry the
- *     negotiated dimensions, frame rate, and bit rate, and none survives the end of the sessions.
+ *     negotiated dimensions and frame-rate bound and a budget inside the negotiated bit rate, and none
+ *     survives the end of the sessions.
  *
  * Adaptation arguments are matched but never printed, because they carry SRTP key material. Decrypted
  * media is measured and discarded: no imagery is written to disk. Use `live-hap-capture.mjs` when a
@@ -47,7 +56,7 @@
  * Usage:
  *   node scripts/live-hap-stream-check.mjs \
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
- *     [--aid 7] [--serial T8XXXXXXXXXXXXXX] [--battery] [--seconds 25] [--width 1280] [--height 720] \
+ *     [--aid 7] [--serial T8XXXXXXXXXXXXXX] [--battery] [--seconds 45] [--width 1280] [--height 720] \
  *     [--fps 30] [--bitrate 299] \
  *     [--profile main] [--level 3.1] [--no-reconfigure] [--no-snapshot] [--concurrent] \
  *     [--reconfigure-width 640] [--reconfigure-height 360] [--reconfigure-fps 15] \
@@ -56,8 +65,9 @@
  *
  * A live session wakes the camera and streams from it, so wired cameras are used unless `--battery` is
  * passed. A battery source bounds a continuous stream with a power budget the plugin must extend, so use
- * `--seconds 60` or more on a battery camera to cross that boundary. The script removes its own pairing
- * before exiting.
+ * `--seconds 60` or more on a battery camera to cross that boundary. The default observation is long enough
+ * to establish the negotiated bit-rate ceiling exactly; a shorter one reports that rule unverified rather
+ * than passing it. The script removes its own pairing before exiting.
  *
  * `--profile` and `--level` select what this run negotiates and are judged exactly. Use
  * `live-hap-codec-matrix-check.mjs` to walk every advertised combination in one pairing.
@@ -108,7 +118,7 @@ const CONCURRENT_WINDOW_SECONDS = 10;
 
 const parsed = options(process.argv.slice(2));
 const address = required(parsed, 'address');
-const seconds = Number(parsed.get('seconds') ?? 25);
+const seconds = Number(parsed.get('seconds') ?? 45);
 const selection = videoSelection(parsed);
 const reconfigured = {
   ...selection,
@@ -206,12 +216,25 @@ function observeAdaptation(label, expectedSessions, applied) {
     `${label} adaptation applied ${applied.width}x${applied.height}`,
   );
   check(
-    video.some(({ args }) => new RegExp(`-r\\s+${applied.fps}\\b`).test(args)),
-    `${label} adaptation applied ${applied.fps}fps`,
+    video.some(({ args }) => new RegExp(`-fpsmax\\s+${applied.fps}\\b`).test(args)),
+    `${label} adaptation bounded the rate at ${applied.fps}fps`,
   );
   check(
-    video.some(({ args }) => args.includes(`${applied.bitrate}k`)),
-    `${label} adaptation applied ${applied.bitrate}kbps`,
+    video.every(({ args }) => !/(?:^|\s)-r\s+\d/.test(args)),
+    `${label} adaptation pinned no constant output rate`,
+  );
+  const budgets = video.map(({ args }) => Number(/-maxrate\s+(\d+)k/.exec(args)?.[1]));
+  console.log(`${label} adaptation video budget=${budgets.join(',')}kbps of ${applied.bitrate}kbps negotiated`);
+  check(
+    budgets.length > 0 && budgets.every((budget) => budget > 0 && budget < applied.bitrate),
+    `${label} asked the encoder for strictly less than the negotiated ${applied.bitrate}kbps, reserving its transport`,
+  );
+  check(
+    video.every(({ args }) => {
+      const [, maxrate, bufsize] = /-maxrate\s+(\d+)k.*?-bufsize\s+(\d+)k/.exec(args) ?? [];
+      return maxrate !== undefined && Number(bufsize) <= Number(maxrate);
+    }),
+    `${label} bounded the VBV buffer to one second of the encoder budget`,
   );
 }
 
@@ -283,6 +306,7 @@ try {
     seconds: (Date.now() - observedFrom) / 1_000,
     expected: selection,
     session: streaming,
+    samples: primary.samplesSince(observedFrom),
   });
   check(streaming.packets > early.packets, 'primary continued past its first packets across the RTCP interval');
   check(
@@ -368,6 +392,7 @@ try {
       window: measuredWindow(after, reconfiguredAt),
       seconds: (Date.now() - reconfiguredFrom) / 1_000,
       expected: reconfigured,
+      samples: primary.samplesSince(reconfiguredFrom),
     });
   }
 
@@ -394,6 +419,7 @@ try {
         seconds: (Date.now() - observedConcurrentFrom) / 1_000,
         expected: selection,
         session: secondary.measured.report,
+        samples: secondary.samplesSince(observedConcurrentFrom),
       });
       check(
         primary.measured.report.packets > concurrentFrom.packets,

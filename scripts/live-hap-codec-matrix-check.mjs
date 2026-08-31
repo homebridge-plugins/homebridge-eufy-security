@@ -136,6 +136,7 @@ async function exercise(client, accessory, selection) {
         seconds: (Date.now() - observedFrom) / 1_000,
         expected: selection,
         session: report,
+        samples: session.samplesSince(observedFrom),
       });
       coded = report.parameterSets.map((set) => `${set.width}x${set.height} ${set.profile}@${set.level}`).join(' -> ');
     }

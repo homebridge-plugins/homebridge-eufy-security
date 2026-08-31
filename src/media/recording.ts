@@ -510,6 +510,13 @@ class Fmp4OutputReader {
  * makes the encoder duplicate frames a slower source never sent, and every duplicate spends the negotiated
  * bit rate on a frame that carries nothing.
  *
+ * The VBV buffer holds one second of the negotiated rate rather than two. A buffer is an allowance a window
+ * may exceed the rate by, so its size decides how far over the ceiling a finite recording can sit: two
+ * seconds of buffer owes a 45-second window 4.4 percent over on arithmetic alone. The live path shares this
+ * buffer rule and additionally reserves the transport its own packetization adds; a recording is carried as
+ * fragmented MP4 over the HAP session rather than as RTP, so it has neither those packets nor a measurement
+ * of what its own container costs.
+ *
  * Fragmentation is driven only by keyframes, so every fragment necessarily starts with one. A keyframe
  * interval longer than the fragment length cannot also bound the fragment, so the shorter of the two
  * governs; a duration-driven cut would instead be free to land between keyframes and produce a fragment no
@@ -570,7 +577,7 @@ function recordingArguments(negotiated: NegotiatedRecording): string[] {
     '-maxrate',
     `${negotiated.maxBitRate}k`,
     '-bufsize',
-    `${negotiated.maxBitRate * 2}k`,
+    `${negotiated.maxBitRate}k`,
     ...(negotiated.audio
       ? [
           '-c:a',

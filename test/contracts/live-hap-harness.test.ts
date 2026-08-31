@@ -19,6 +19,7 @@ const {
   describeSupportedVideoStreamConfiguration,
   isStructuralJpeg,
   judgeWindow,
+  worstSustainedRate,
   logMark,
   operatingModeAddress,
   operatingModeState,
@@ -194,19 +195,38 @@ const SELECTION = {
 type CodedParameterSet = { width: number; height: number; profile: string; level: string };
 
 /** Judges one window with a recording sink in place of a run's observation accounting. */
-function judged(coded: readonly CodedParameterSet[], expected: unknown): { passed: string[]; failed: string[] } {
+function judged(
+  coded: readonly CodedParameterSet[],
+  expected: unknown,
+  window: Record<string, unknown> = {},
+): { passed: string[]; failed: string[]; unverified: string[] } {
   const passed: string[] = [];
   const failed: string[] = [];
+  const unverified: string[] = [];
   const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
   try {
     judgeWindow(
-      { check: (ok: boolean, description: string) => (ok ? passed : failed).push(description) },
-      { label: 'window', window: measuredVideo(coded), seconds: 1, expected },
+      {
+        check: (ok: boolean, description: string) => (ok ? passed : failed).push(description),
+        unverified: (description: string) => unverified.push(description),
+      },
+      { label: 'window', window: measuredVideo(coded), seconds: 1, expected, ...window },
     );
   } finally {
     log.mockRestore();
   }
-  return { passed, failed };
+  return { passed, failed, unverified };
+}
+
+/** A cumulative sample series carrying a constant rate, and then a burst over the final `burstSeconds`. */
+function samples({ kbps, seconds, burstKbps = kbps, burstSeconds = 0 }: Record<string, number>) {
+  const series = [];
+  let bytes = 0;
+  for (let second = 0; second <= seconds; second += 1) {
+    series.push({ at: 1_000_000 + second * 1_000, bytes });
+    bytes += ((second >= seconds - burstSeconds ? burstKbps : kbps) * 1_000) / 8;
+  }
+  return series;
 }
 
 /** One measured window carrying the given coded parameter sets, as a session snapshot would report it. */
@@ -768,5 +788,57 @@ describe('live HomeKit stream measurement', () => {
 
     expect(stream.report.frames - mark.frames).toBe(2);
     expect(stream.report.bytes - mark.bytes).toBe(2 * (12 + SLICE.length + 10));
+  });
+});
+
+/**
+ * The negotiated bit-rate ceiling is judged on what the accessory transmits, over the one horizon where it
+ * can be established, and the rule refuses to answer where the observation cannot establish it.
+ *
+ * The rule this replaced allowed half again over every window length, so a run that transmitted meaningfully
+ * more than it negotiated passed. What matters most here is therefore the negative cases: a window that is
+ * over must fail, and an observation too short to establish the ceiling must report itself unverified rather
+ * than pass.
+ *
+ * The worst ten-second window is measured and reported but deliberately not judged, because no threshold for
+ * it survived measurement; the reasoning is on `SUSTAINED_WINDOW_SECONDS`. The test below pins that it does
+ * not fail a run, so restoring a threshold has to be a deliberate change rather than a quiet one.
+ */
+describe('measured bit-rate ceiling', () => {
+  const expected = { ...SELECTION, bitrate: 300 };
+  const window = (bytes: number) => ({ ...measuredVideo([NEGOTIATED]), bytes });
+
+  it('holds a window of half a minute or more to the ceiling exactly', () => {
+    const under = judged([NEGOTIATED], expected, { seconds: 45, window: window(45 * 37_000) });
+    expect(under.failed).toHaveLength(0);
+    expect(under.passed).toContain('window transmitted no more than the negotiated 300kbps over 45s');
+
+    const over = judged([NEGOTIATED], expected, { seconds: 45, window: window(45 * 39_000) });
+    expect(over.failed).toContain('window transmitted no more than the negotiated 300kbps over 45s');
+  });
+
+  it('reports the ceiling unverified below half a minute rather than passing a window that cannot show it', () => {
+    const short = judged([NEGOTIATED], expected, { seconds: 8, window: window(8 * 60_000) });
+    expect(short.failed).toHaveLength(0);
+    expect(short.unverified.join(' ')).toContain('ceiling over 8s=not-established');
+    expect(short.passed.some((line) => line.includes('no more than the negotiated'))).toBe(false);
+  });
+
+  it('does not fail a burst inside a compliant session, because no threshold for one survived measurement', () => {
+    const bursting = judged([NEGOTIATED], expected, {
+      seconds: 60,
+      window: window(60 * 30_000),
+      samples: samples({ kbps: 150, seconds: 60, burstKbps: 900, burstSeconds: 12 }),
+    });
+
+    expect(bursting.passed).toContain('window transmitted no more than the negotiated 300kbps over 60s');
+    expect(bursting.failed).toHaveLength(0);
+  });
+
+  it('measures the worst window rather than the mean, and takes the shortest span past the window', () => {
+    const series = samples({ kbps: 100, seconds: 40, burstKbps: 500, burstSeconds: 10 });
+    expect(worstSustainedRate(series, 10)).toBeCloseTo(500, 0);
+    expect(worstSustainedRate(series, 40)).toBeCloseTo(200, 0);
+    expect(worstSustainedRate(samples({ kbps: 100, seconds: 4 }), 10)).toBeUndefined();
   });
 });

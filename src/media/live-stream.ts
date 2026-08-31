@@ -86,6 +86,37 @@ const ADAPTATION_STDERR_TAIL_LINES = 8;
 /** The longest partial line held while waiting for its terminator, so a silent process cannot grow one. */
 const ADAPTATION_STDERR_PARTIAL_BYTES = 512;
 
+/** RFC 3550 fixed RTP header, RFC 3711 HMAC-SHA1-80 tag, and the RFC 6184 FU-A fragmentation header. */
+const PACKET_OVERHEAD_BYTES = 12 + 10 + 2;
+/**
+ * How far under the negotiated MTU the RTP muxer keeps a datagram. Measured on the bundled encoder at two
+ * MTUs: `pkt_size` 1200 emitted datagrams of at most 1196 bytes and 1378 emitted at most 1374.
+ */
+const PACKET_SIZE_HEADROOM_BYTES = 4;
+
+/**
+ * The encoder budget one negotiated video selection leaves after paying for its own transport, in kbps.
+ *
+ * The negotiated bit rate bounds what the accessory transmits, not what it codes, so the RTP and SRTP bytes
+ * this session will add are reserved out of the ceiling instead of being spent beside it. Every packet costs
+ * a header, an authentication tag and a fragmentation header, and the packet count is the coded media divided
+ * by what one full packet can carry, plus one partial packet per frame.
+ *
+ * The negotiated frame rate is the figure used because it bounds packets per second exactly as it bounds
+ * pictures per second. A camera delivering below its selection therefore produces fewer packets than were
+ * reserved for, which spends the ceiling rather than exceeding it.
+ *
+ * A ceiling too small to pay for its own transport still yields a positive budget, because an encoder given
+ * a non-positive rate refuses to start and a refused session is worse than an overshooting one.
+ */
+function videoBudgetInsideCeiling(selection: NegotiatedLiveVideo): number {
+  const ceilingBytesPerSecond = selection.maxBitRate * 125;
+  const mediaBytesPerPacket = selection.mtu - PACKET_SIZE_HEADROOM_BYTES - PACKET_OVERHEAD_BYTES;
+  const packetsPerSecond = ceilingBytesPerSecond / mediaBytesPerPacket + selection.fps;
+  const reserved = (PACKET_OVERHEAD_BYTES * packetsPerSecond * 8) / 1_000;
+  return Math.max(1, Math.floor(selection.maxBitRate - reserved));
+}
+
 /**
  * Splits one adaptation process's stderr into whole lines and retains a bounded tail of the diagnostic
  * ones.
@@ -874,6 +905,13 @@ function outputArguments(
  * watchable reaching the controller. The keyframe interval still derives from the negotiated rate, because that
  * is a contract about segment boundaries rather than about cadence.
  *
+ * A negotiated bit rate is a ceiling on what the accessory TRANSMITS, so the encoder is given the ceiling less
+ * the transport its own packetization adds, and its VBV buffer holds one second of that budget rather than
+ * two. A buffer is an allowance a window may exceed the rate by, so a two-second buffer owes a 45-second
+ * session 4.4 percent over its ceiling on arithmetic alone, before any transport is counted. An encoder coding
+ * inside its ceiling still transmits over it whenever the transport is unreserved, which is what the measured
+ * overshoot was; the evidence is in docs/architecture.md.
+ *
  * `superfast` is the cheapest `libx264` preset that retains CABAC, and therefore the cheapest one whose
  * coded stream can carry a negotiated Main or High profile; `ultrafast` drops CABAC and codes Constrained
  * Baseline whatever `-profile:v` asks for. `-tune zerolatency` pins the same `sliced_threads`, `bframes`
@@ -885,6 +923,7 @@ function videoArguments(
   targetAddress: string,
   target: LiveMediaTarget,
 ): string[] {
+  const budget = videoBudgetInsideCeiling(selection);
   return [
     ...commonArguments(input.codec === 'h265' ? 'hevc' : input.codec, ['-use_wallclock_as_timestamps', '1']),
     '-an',
@@ -911,11 +950,11 @@ function videoArguments(
     '-sc_threshold',
     '0',
     '-b:v',
-    `${selection.maxBitRate}k`,
+    `${budget}k`,
     '-maxrate',
-    `${selection.maxBitRate}k`,
+    `${budget}k`,
     '-bufsize',
-    `${selection.maxBitRate * 2}k`,
+    `${budget}k`,
     ...outputArguments(targetAddress, target, selection.payloadType, selection.ssrc, selection.mtu),
   ];
 }

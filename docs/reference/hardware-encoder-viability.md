@@ -13,11 +13,12 @@ findings, because no candidate encoder reads `-preset` at all.
 
 ## What the plugin currently promises
 
-`videoArguments` in `src/media/live-stream.ts:353` builds one argument list per adaptation process. From the
-HomeKit-negotiated `NegotiatedLiveVideo` (`src/media/live-stream.ts:48`) it passes `-profile:v` as one of
-`baseline`, `main`, `high`; `-level:v` as one of `3.1`, `3.2`, `4.0`; `-r <fps>`; and
-`-b:v <n>k -maxrate <n>k -bufsize <2n>k`. It also passes `-pix_fmt yuv420p` and a software
-`scale`/`pad` filter chain, and it feeds Annex-B video on `pipe:0`.
+`videoArguments` in `src/media/live-stream.ts` builds one argument list per adaptation process. From the
+HomeKit-negotiated `NegotiatedLiveVideo` it passes `-profile:v` as one of
+`baseline`, `main`, `high`; `-level:v` as one of `3.1`, `3.2`, `4.0`; `-fpsmax <fps>`, because a negotiated
+frame rate is a ceiling rather than a cadence; and `-b:v <n>k -maxrate <n>k -bufsize <n>k`, where `n` is the
+negotiated bit rate less the transport the session's own packetization adds. It also passes `-pix_fmt yuv420p`
+and a software `scale`/`pad` filter chain, and it feeds Annex-B video on `pipe:0`.
 
 The executable is host-dependent: `src/configuration.ts:136` resolves `ffmpegPath` to the configured path
 if present, otherwise to the `ffmpeg-for-homebridge` bundled binary. Nothing in `src/` names an encoder or

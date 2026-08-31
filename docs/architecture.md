@@ -541,6 +541,56 @@ AAC-ELD output requires an explicit global header. `libfdk_aac` picks its transp
 output asks for and defaults to ADTS, which cannot carry AAC-ELD at all, so without that header the
 encoder refuses to initialize and the negotiated audio codec is unreachable.
 
+### The negotiated bit-rate ceiling
+
+The negotiated bit rate bounds what the accessory **transmits**, not what it codes. RTP and SRTP overhead
+fits inside the ceiling rather than beside it, because that is the traffic a metered or congested uplink
+pays for and the figure a controller may size its own buffering against. Every other member of the
+negotiated video parameters describes the coded picture, so this is a decision rather than a reading of the
+parameter set, and it is recorded here because the rate-control arguments follow from it.
+
+The ceiling is enforced over half a minute or more, which is where a VBV buffer's allowance has amortized
+away. A hard cap over any window is not reachable: a one-second window carrying an instantaneous refresh
+measured about 30 percent over on every rate-control setting tried, the tightest included, so a rule claiming
+one would be describing H.264 rather than this plugin.
+
+No threshold for a shorter window survived measurement either. Two cameras of one model, at one geometry and
+one frame rate, carried 313 and 366 kbps against a 299 kbps ceiling over their worst ten-second window. That
+spread is scene complexity rather than a property of the plugin: `-tune zerolatency` forces `rc_lookahead=0`,
+and a ten-second window at 25 fps holds roughly four instantaneous refreshes, which an encoder without
+lookahead cannot smooth. The worst ten-second window is therefore measured and reported on every live run, so
+a regression is visible and comparable between revisions, but it is not a pass condition; a threshold fitted
+to one fleet's scenes would fail the next, and a rule that fails intermittently teaches a maintainer to
+ignore it. Reducing the refreshes rather than the allowance is the lever, and it is a separate decision about
+the live keyframe interval.
+
+Two arguments follow. The encoder is given the ceiling **less the RTP and SRTP bytes the session's own
+packetization will add**, derived rather than chosen: a 12-byte RTP header and a 10-byte authentication tag
+on every packet, and one packet per negotiated MTU of coded media plus one partial packet per frame. The
+negotiated frame rate is the figure used, because it bounds packets per second exactly as it bounds
+pictures per second; a camera delivering below its selection produces fewer packets than were reserved for,
+which spends the ceiling rather than exceeding it. And the VBV buffer holds one second of that budget
+rather than two, because a two-second buffer puts a 45-second window 4.4 percent over on arithmetic alone.
+
+The measurement that fixed this is a back-to-back comparison, both phases inside one downtime window against
+one storage copy, driven at each camera's own advertised geometry so the plugin build was the only variable.
+Before the reservation, every camera coded an elementary stream inside its 299 kbps ceiling and still
+transmitted 2.3 to 4.0 percent more than it had negotiated. After it, every camera transmitted under, at 276,
+282, 289, 292 and 295 kbps. The overshoot was the transport, and the transport had never been reserved for.
+Measured packetization overhead ran from 2.1 to 2.6 percent at frame rates of 15 and 25.
+
+The margin is deliberately thin rather than generous. The cameras delivering 25 fps land closest to the
+ceiling because packets per second scale with frames and those sessions spend most of what was reserved. A
+session delivering the full negotiated 30 fps spends almost exactly the reservation, which is the point: the
+derivation reserves what a full-rate session costs and no more.
+
+Cost was measured rather than assumed: halving the buffer costs 0.12 of a quantizer step on the bundled
+encoder, and capped CRF was rejected outright because it held the same rate at a quantizer of 49 against 34.
+
+The recording path shares the buffer rule and not the reservation. A recording is carried as fragmented MP4
+over the HAP session rather than as RTP, so it has neither those packets nor a measurement of what its own
+container costs; reserving for a container overhead nobody has measured would be a guess.
+
 ### Return audio adaptation
 
 Controller-to-accessory audio shares the live session's negotiated audio endpoint but not its outbound
@@ -720,4 +770,3 @@ asks about every camera at once leaves them all falling due at the same instant;
 keep them there for as long as the plugin runs. Each camera therefore draws its own next due time, up to
 half an interval later, and commits it when the refresh starts. Deriving it per request instead would take
 the shortest of many draws and return the busiest cameras to the shared clock.
-

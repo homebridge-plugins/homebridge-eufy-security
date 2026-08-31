@@ -63,6 +63,8 @@ const AAC_ELD = 2;
 const NON_INTERLEAVED = 0;
 const SESSION_COMMANDS = { end: 0, start: 1, reconfigure: 4 };
 const SRTP_AUTHENTICATION_TAG = 10;
+/** RFC 3550 fixed RTP header, which every measured datagram carries ahead of its payload. */
+const RTP_HEADER = 12;
 /**
  * HomeKit's H.264 profile and level vocabulary. A position in each list is the identifier that carries
  * that name on the wire, both in what an accessory advertises and in what a controller selects.
@@ -1047,6 +1049,7 @@ export class LiveSession {
       ...(this.onNalUnit ? { onNalUnit: this.onNalUnit } : {}),
     });
     this.audioPackets = 0;
+    this.samples = [];
     this.video.socket.on('message', (packet) => this.measured.accept(packet));
     this.audio.socket.on('message', (packet) => {
       if (!isRtcp(packet)) {
@@ -1057,6 +1060,14 @@ export class LiveSession {
     await this.write(SESSION_COMMANDS.start, selection);
     this.reports = setInterval(() => this.report(), 1_000);
     this.reports.unref?.();
+  }
+
+  /**
+   * The cumulative samples taken at or after one instant, which is how a window's sustained rate is judged on
+   * the selection in force during it rather than on a selection a later reconfiguration replaced.
+   */
+  samplesSince(since) {
+    return (this.samples ?? []).filter((sample) => sample.at >= since);
   }
 
   /** Asks the accessory to change the negotiated video while the same session continues. */
@@ -1088,11 +1099,19 @@ export class LiveSession {
     return untlv(Buffer.from(response.characteristics[0].value, 'base64')).get(1)?.[0];
   }
 
+  /**
+   * Sends the receiver report the accessory's keepalive needs, and records one cumulative sample.
+   *
+   * The samples are what a sustained-rate rule is read from. A bound on a ten-second window cannot be
+   * recovered from a whole-session total, because the total dilutes exactly the burst the bound is about, so
+   * the series is retained while the session runs rather than reconstructed afterwards.
+   */
   report() {
     if (!this.measured) {
       return;
     }
-    const { highestSequence, packets } = this.measured.report;
+    const { highestSequence, packets, bytes } = this.measured.report;
+    this.samples.push({ at: Date.now(), bytes, packets });
     this.video.socket.send(
       receiverReport(0x4f4f4f4f, this.videoSsrc, highestSequence, packets),
       this.accessoryVideoPort,
@@ -1182,10 +1201,56 @@ export function measuredWindow(current, previous) {
 }
 
 /**
+ * How long a window must be before the negotiated bit rate is held to it exactly. Below this the VBV buffer
+ * allowance has not amortized away, so a shorter observation cannot establish the ceiling either way.
+ */
+const CEILING_WINDOW_SECONDS = 30;
+/**
+ * The shorter window whose worst rate is reported alongside, so a burst is visible and comparable between
+ * revisions. It is reported and not judged, because no allowance for it survived measurement: two cameras of
+ * one model, at one geometry and one frame rate, carried 313 and 366 kbps against a 299 kbps ceiling over
+ * their worst such window. That spread is scene complexity, and `-tune zerolatency` forces `rc_lookahead=0`,
+ * so an encoder coding roughly four instantaneous refreshes inside the window cannot smooth them. A threshold
+ * fitted to one fleet's scenes would fail the next, and a rule that fails intermittently teaches a maintainer
+ * to ignore it.
+ */
+const SUSTAINED_WINDOW_SECONDS = 10;
+
+/**
+ * The worst rate any window of at least `windowSeconds` carried, in kbps, from a series of cumulative
+ * samples, or nothing when the series does not span one such window.
+ *
+ * Only the shortest span at or past the window is measured from each start, because a longer span from the
+ * same start can only dilute a burst the shorter one already caught.
+ */
+export function worstSustainedRate(samples, windowSeconds) {
+  let worst;
+  for (let start = 0; start < samples.length; start += 1) {
+    for (let end = start + 1; end < samples.length; end += 1) {
+      const span = (samples[end].at - samples[start].at) / 1_000;
+      if (span < windowSeconds) {
+        continue;
+      }
+      const rate = ((samples[end].bytes - samples[start].bytes) * 8) / 1_000 / span;
+      worst = worst === undefined ? rate : Math.max(worst, rate);
+      break;
+    }
+  }
+  return worst;
+}
+
+/**
  * Reports and judges what one measured window carried against the selection it was negotiated from,
  * without exposing any media content. Rates are judged on the window; keyframe presence and refresh
  * cadence are judged on `session`, the cumulative report the window belongs to, because a window shorter
  * than one group of pictures legitimately contains no keyframe of its own.
+ *
+ * The negotiated bit rate bounds what the accessory transmits, so the rate judged is the whole SRTP datagram
+ * rather than the coded media inside it, and it is judged over half a minute or more, where the VBV buffer
+ * allowance has amortized away. It is not stretched to fit a shorter observation: one that cannot establish
+ * the rule reports it unverified rather than passing it, because a rule that passes everything is how a
+ * ceiling goes unmeasured through every live run. The worst ten-second window is reported beside it as a
+ * comparable figure rather than judged, for the reason `SUSTAINED_WINDOW_SECONDS` gives.
  *
  * Every coded parameter set in the window must carry exactly the negotiated dimensions, profile, and
  * level. HomeKit negotiates a stream a controller has committed to decode, so a lower profile or level is
@@ -1193,11 +1258,16 @@ export function measuredWindow(current, previous) {
  * set earlier in it. Constrained Baseline is the realization of a Baseline selection and is reported as
  * `baseline`, which is the one substitution the negotiated contract admits.
  */
-export function judgeWindow(results, { label, window, seconds, expected, session = window }) {
+export function judgeWindow(results, { label, window, seconds, expected, session = window, samples }) {
   const kilobitsPerSecond = (window.bytes * 8) / 1_000 / Math.max(seconds, 1);
+  const transportBytes = window.packets * (RTP_HEADER + SRTP_AUTHENTICATION_TAG);
+  const codedKilobitsPerSecond = ((window.bytes - transportBytes) * 8) / 1_000 / Math.max(seconds, 1);
   const framesPerSecond = window.frames / Math.max(seconds, 1);
+  const sustained = samples === undefined ? undefined : worstSustainedRate(samples, SUSTAINED_WINDOW_SECONDS);
   console.log(
     `${label} packets=${window.packets} bytes=${window.bytes} rate=${kilobitsPerSecond.toFixed(0)}kbps` +
+      ` (coded=${codedKilobitsPerSecond.toFixed(0)}kbps transport=${((transportBytes / window.bytes) * 100).toFixed(1)}%)` +
+      ` worst-${SUSTAINED_WINDOW_SECONDS}s=${sustained === undefined ? 'not-sampled' : `${sustained.toFixed(0)}kbps`}` +
       ` frames=${window.frames} (${framesPerSecond.toFixed(1)}fps) keyframes=${window.keyframes}` +
       ` unauthenticated=${window.unauthenticated} foreign-ssrc=${window.foreign} accessory-rtcp=${window.rtcpPackets}`,
   );
@@ -1220,10 +1290,17 @@ export function judgeWindow(results, { label, window, seconds, expected, session
       `${label} refreshed inside the negotiated group of pictures`,
     );
   }
-  results.check(
-    kilobitsPerSecond <= expected.bitrate * 1.5,
-    `${label} stayed inside the negotiated ${expected.bitrate}kbps`,
-  );
+  if (seconds >= CEILING_WINDOW_SECONDS) {
+    results.check(
+      kilobitsPerSecond <= expected.bitrate,
+      `${label} transmitted no more than the negotiated ${expected.bitrate}kbps over ${seconds.toFixed(0)}s`,
+    );
+  } else {
+    results.unverified(
+      `  ${label} ceiling over ${seconds.toFixed(0)}s=not-established` +
+        ` (needs ${CEILING_WINDOW_SECONDS}s, below which the VBV allowance has not amortized)`,
+    );
+  }
   results.check(framesPerSecond <= expected.fps * 1.2, `${label} stayed inside the negotiated ${expected.fps}fps`);
   const coded = window.parameterSets;
   results.check(
