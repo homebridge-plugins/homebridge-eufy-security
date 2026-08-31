@@ -177,11 +177,37 @@ export interface MediaSessionBudget {
  * declared and refuses what exceeds it. This answers where the work would land, and it refuses nothing: a
  * caller decides whether its own work is worth deferring.
  */
+/**
+ * What a caller holds a station's one live channel for.
+ *
+ * The order between them is this plugin's product policy and lives with the registry that applies it. The SDK
+ * reports only that a station serves one camera at a time; it does not rank the callers, because the ranking
+ * depends on what a host shows at once.
+ */
+export type StationLiveClaim = 'live' | 'recording' | 'snapshot';
+
 export interface StationLiveSessionRegistry {
-  /** Whether a live session is currently held on `stationSn`. */
-  busy(stationSn: string): boolean;
-  /** Record one live session on `stationSn`, and answer the release that ends it. */
-  hold(stationSn: string): () => void;
+  /** The strongest claim currently held on `stationSn`, or `undefined` where nothing holds it. */
+  heldFor(stationSn: string): StationLiveClaim | undefined;
+  /**
+   * Whether `camera` may take `stationSn` for `claim` now.
+   *
+   * A camera the station is already serving is always admitted, whatever the claim: work on one camera shares
+   * a single pull, so a recording and a live view of the same camera cost the station nothing extra. This is
+   * the shape a motion notification produces, and it is the common one.
+   *
+   * Between DIFFERENT cameras of one station the claim decides, and equal claims do not displace: a second
+   * live view does not evict the first.
+   */
+  admits(stationSn: string, camera: string, claim: StationLiveClaim): boolean;
+  /**
+   * Record one session on `stationSn` for `camera`, asking anything weaker on another camera to yield first,
+   * and answer the release that ends it.
+   *
+   * `abandon` is how this session gives the station back early; a session that cannot be stopped cleanly omits
+   * it and is never asked. A session is never asked to yield for another claim on its own camera.
+   */
+  hold(stationSn: string, camera: string, claim: StationLiveClaim, abandon?: () => void): () => void;
 }
 
 export interface LiveMediaTransport {

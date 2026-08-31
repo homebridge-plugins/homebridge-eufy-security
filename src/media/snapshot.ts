@@ -455,7 +455,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
     if (dueAt !== undefined && Date.now() < dueAt) {
       return;
     }
-    if (scope.stationSn !== undefined && this.stations?.busy(scope.stationSn)) {
+    if (scope.stationSn !== undefined && this.stations?.admits(scope.stationSn, scope.serial, 'snapshot') === false) {
       return;
     }
     if (this.pendingLive.has(scope.identity) || !source.snapshotLive) {

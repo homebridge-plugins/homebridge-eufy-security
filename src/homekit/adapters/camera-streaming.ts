@@ -1042,6 +1042,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
     detachRejectors.clear();
   };
   const binding: LiveCameraBinding = {
+    serial: context.device.sn,
     source,
     media: context.liveMedia,
     ...(context.snapshotMedia ? { snapshotMedia: context.snapshotMedia } : {}),
@@ -1063,6 +1064,9 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   };
   const recordingBinding: RecordingCameraBinding | undefined = recordingConfigured
     ? {
+        serial: context.device.sn,
+        ...(binding.stationSn ? { stationSn: binding.stationSn } : {}),
+        ...(binding.stations ? { stations: binding.stations } : {}),
         source,
         media: context.recordingMedia!,
         audioEnabled: context.audioEnabled !== false,
@@ -1844,6 +1848,8 @@ type SnapshotUnavailability = SnapshotFailure | 'adapter-missing';
 
 /** Everything one attachment supplies to the stable camera delegate, rebound on each reconciliation. */
 interface LiveCameraBinding {
+  /** This camera's own serial, which is what tells its work apart from a sibling's on one station. */
+  readonly serial: string;
   /** The station this camera's traffic belongs to, when the SDK states one. */
   readonly stationSn?: string;
   /** Where a live session is recorded, so opportunistic work elsewhere on the station stands aside. */
@@ -2021,7 +2027,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     }
     this.claims.set(sessionID, claim);
     if (this.binding.stationSn && this.binding.stations && !this.stationHolds.has(sessionID)) {
-      this.stationHolds.set(sessionID, this.binding.stations.hold(this.binding.stationSn));
+      this.stationHolds.set(sessionID, this.binding.stations.hold(this.binding.stationSn, this.binding.serial, 'live'));
     }
     return true;
   }
@@ -2321,6 +2327,12 @@ type RecordingAdmissionRefusal = 'disabled';
 
 /** Everything one attachment supplies to the stable recording delegate, rebound on each reconciliation. */
 interface RecordingCameraBinding {
+  /** This camera's own serial, which tells its recording apart from a sibling's work on one station. */
+  readonly serial: string;
+  /** The station this camera's traffic belongs to, when the SDK states one. */
+  readonly stationSn?: string;
+  /** Where a recording is recorded, so a still stands aside for it and a live view takes the station from it. */
+  readonly stations?: StationLiveSessionRegistry;
   readonly source: CameraMediaSource;
   readonly media: RecordingMediaAdapter;
   readonly audioEnabled: boolean;
@@ -2406,6 +2418,18 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
     this.streams.set(streamId, recording);
     const abort = (): void => recording.stop();
     signal?.addEventListener('abort', abort, { once: true });
+    /**
+     * A recording holds the station its camera belongs to, so a still elsewhere on that base stands aside and a
+     * live view opened on a sibling takes it. Yielding stops this recording rather than letting it run on a
+     * station that has been re-tasked, because a recording of a camera the base is no longer serving produces
+     * nothing and would keep asking for the channel the viewer needs.
+     *
+     * Work on this camera never yields to work on this camera: they share one pull.
+     */
+    const releaseStation =
+      binding.stationSn && binding.stations
+        ? binding.stations.hold(binding.stationSn, binding.serial, 'recording', () => recording.stop())
+        : undefined;
     try {
       for await (const fragment of recording) {
         yield { data: fragment.data, isLast: fragment.last };
@@ -2416,6 +2440,7 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
     } finally {
       signal?.removeEventListener('abort', abort);
       recording.stop();
+      releaseStation?.();
       this.streams.delete(streamId);
     }
   }

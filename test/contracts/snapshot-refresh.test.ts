@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { SnapshotAcquisition } from '../../src/media/snapshot.js';
 import type { LastSuccessfulImages } from '../../src/media/snapshot.js';
+import type { StationLiveSessionRegistry } from '../../src/media/contracts.js';
 
 function jpeg(marker: string): Buffer {
   return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from(marker, 'utf8'), Buffer.from([0xff, 0xd9])]);
@@ -114,9 +115,15 @@ describe('live refresh against a busy station', () => {
   const BASE = 'T8010P0000000000';
   const SERIAL = 'SYNTHETIC0000000C';
 
-  /** A registry reporting exactly the stations named as busy. */
-  const stations = (...busy: readonly string[]) => ({
-    busy: (stationSn: string) => busy.includes(stationSn),
+  /**
+   * A registry reporting exactly the stations named as serving a live view.
+   *
+   * A station held for a live view admits nothing else: a still ranks below it, and an equal claim does not
+   * displace, so the whole set is refused there.
+   */
+  const stations = (...watched: readonly string[]): StationLiveSessionRegistry => ({
+    heldFor: (stationSn: string) => (watched.includes(stationSn) ? 'live' : undefined),
+    admits: (stationSn: string) => !watched.includes(stationSn),
     hold: () => () => undefined,
   });
 
