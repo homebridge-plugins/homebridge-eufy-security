@@ -5,7 +5,7 @@ import type { SnapshotMode } from '../configuration.js';
 export type { SnapshotMode } from '../configuration.js';
 
 export interface LiveMediaSource {
-  live(): Promise<LiveStreamConsumer>;
+  live(options?: { signal?: AbortSignal }): Promise<LiveStreamConsumer>;
   talkback?(): Promise<TalkbackHandle>;
 }
 
@@ -275,7 +275,15 @@ export type RecordingFailure =
   | 'source-unavailable'
   | 'source-error'
   | 'no-output-within-backstop'
-  | 'adaptation-failed';
+  | 'adaptation-failed'
+  /**
+   * The station was serving another of its cameras to something this recording does not outrank.
+   *
+   * Not a fault. A base serves one camera at a time and the SDK refuses a second rather than degrading both,
+   * so this says the recording could not have the station, not that anything is broken. HomeKit tries again on
+   * the next trigger.
+   */
+  | 'station-busy';
 
 /** One recording lifecycle outcome, carrying no device identity, address, key, or media material. */
 export type RecordingOutcome =
@@ -289,7 +297,11 @@ export interface RecordedFragment {
 }
 
 export interface RecordingMediaSource {
-  recordFragments?(options?: { fragmentSeconds?: number; preBufferSeconds?: number }): FragmentRecordingHandle;
+  recordFragments?(options?: {
+    fragmentSeconds?: number;
+    preBufferSeconds?: number;
+    signal?: AbortSignal;
+  }): FragmentRecordingHandle;
 }
 
 /** One recording in progress: the units it produces, and the one call that ends it. */
@@ -312,7 +324,12 @@ export interface RecordingMediaAdapter {
 
 export interface SnapshotMediaSource {
   snapshotStored?(): Promise<Buffer>;
-  snapshotLive?(): Promise<{ jpeg: Buffer; width: number; height: number }>;
+  snapshotLive?(options?: { signal?: AbortSignal }): Promise<{
+    jpeg: Buffer;
+    width: number;
+    height: number;
+    retained?: true;
+  }>;
 }
 
 /** Stable camera-local identity that preserves concurrent acquisition lifetime across source replacement. */

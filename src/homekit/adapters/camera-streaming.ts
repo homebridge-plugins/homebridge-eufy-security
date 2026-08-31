@@ -2412,6 +2412,19 @@ class RecordingCameraDelegate implements CameraRecordingDelegate {
       this.refused = false;
       binding.reportAdmission();
     }
+    /**
+     * A station already serving another of its cameras to something this recording does not outrank cannot
+     * serve this one, and the SDK refuses it. Reporting that here spares a round trip whose only outcome is
+     * the refusal, and states it as the bounded reason rather than letting it arrive as a source error.
+     */
+    if (
+      binding.stationSn &&
+      binding.stations &&
+      !binding.stations.admits(binding.stationSn, binding.serial, 'recording')
+    ) {
+      binding.reportRecording({ outcome: 'failed', reason: 'station-busy' });
+      throw new this.hap.HDSProtocolError(this.hap.HDSProtocolSpecificErrorReason.NOT_ALLOWED);
+    }
     const recording = binding.media.record(binding.source, this.negotiated(binding, configuration), {
       onOutcome: (outcome) => binding.reportRecording(outcome),
     });

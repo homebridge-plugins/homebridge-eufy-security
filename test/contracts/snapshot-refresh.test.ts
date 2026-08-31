@@ -172,3 +172,70 @@ describe('live refresh against a busy station', () => {
     await vi.waitFor(() => expect(source.snapshotLive).toHaveBeenCalledOnce());
   });
 });
+
+/**
+ * A still holds the station while it captures, and yields it to a live view opened on a sibling.
+ *
+ * Deferring before it starts is not enough: a burst already in flight goes on asking the base for its channel,
+ * which is the contention the hold exists to remove. Measured on one base, a still on a sibling halved a live
+ * view's frame rate for as long as it ran. Yielding aborts the acquisition, and the last good image answers the
+ * request in its place.
+ */
+describe('a still asked to yield the station', () => {
+  const BASE = 'T8010P0000000000';
+  const SERIAL = 'SYNTHETIC0000000D';
+
+  /** A registry that hands back the abandonment it was given, so a spec can trigger the yield. */
+  const yieldable = () => {
+    let abandon: (() => void) | undefined;
+    const registry: StationLiveSessionRegistry = {
+      heldFor: () => undefined,
+      admits: () => true,
+      hold: (_stationSn, _camera, _claim, onAbandon) => {
+        abandon = onAbandon;
+        return () => undefined;
+      },
+    };
+    return { registry, yieldNow: () => abandon?.() };
+  };
+
+  it('is told to abandon through the signal it passed the source', async () => {
+    const { registry, yieldNow } = yieldable();
+    const images = retainedImages([[SERIAL, jpeg('retained')]]);
+    const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => 0, registry);
+    let observed: AbortSignal | undefined;
+    const source = {
+      snapshotLive: vi.fn(async (options?: { signal?: AbortSignal }) => {
+        observed = options?.signal;
+        yieldNow();
+        throw new Error('aborted');
+      }),
+    };
+
+    await acquisition
+      .acquire({ identity: {}, serial: SERIAL, stationSn: BASE }, source, 'Refresh')
+      .catch(() => undefined);
+
+    expect(observed).toBeDefined();
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it('releases the station once its capture has settled, so nothing stays held', async () => {
+    let released = 0;
+    const registry: StationLiveSessionRegistry = {
+      heldFor: () => undefined,
+      admits: () => true,
+      hold: () => () => {
+        released += 1;
+      },
+    };
+    const images = retainedImages([[SERIAL, jpeg('retained')]]);
+    const acquisition = new SnapshotAcquisition(images, undefined, undefined, () => 0, registry);
+
+    await acquisition
+      .acquire({ identity: {}, serial: SERIAL, stationSn: BASE }, camera('refreshed'), 'Refresh')
+      .catch(() => undefined);
+
+    await vi.waitFor(() => expect(released).toBe(1));
+  });
+});

@@ -609,6 +609,21 @@ describe('recording media adaptation', () => {
     expect(session.consumed.failed()).toBe(true);
   });
 
+  /**
+   * A base serves one of its cameras at a time, and the SDK refuses a second rather than degrading both. A
+   * recording that was simply outranked is not a camera that failed, and naming the two apart is what lets an
+   * operator read the difference in a log.
+   */
+  it('names a station serving another camera apart from a source that failed', async () => {
+    const session = recordingSession();
+    await settle();
+    const busy = new Error('the station is already serving channel 0 to a viewer');
+    busy.name = 'StationBusyError';
+    session.source.fail(busy);
+    await session.consumed.iteration;
+    expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'station-busy' }]);
+  });
+
   it('fails a recording the source exposes no fragment recording for', async () => {
     const outcomes: RecordingOutcome[] = [];
     const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', undefined, () => {

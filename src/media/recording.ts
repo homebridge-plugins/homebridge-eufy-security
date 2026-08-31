@@ -28,6 +28,18 @@ import {
  * leave a consumer waiting for a recording that had in fact finished. Expiry ends the recording with
  * whatever was flushed rather than failing it, because the media up to that point is complete.
  */
+/**
+ * Why a source stopped producing, as this domain's bounded vocabulary.
+ *
+ * A station serving another of its cameras is not a fault: a base serves one at a time and the SDK refuses a
+ * second rather than degrading both, so the recording could not have the station and nothing is broken.
+ * Naming it apart from a real source error is what lets an operator read the difference, and what stops a
+ * recording that was simply outranked from looking like a camera that failed.
+ */
+function sourceFailure(error: unknown): RecordingFailure {
+  return error instanceof Error && error.name === 'StationBusyError' ? 'station-busy' : 'source-error';
+}
+
 const OUTPUT_FLUSH_DEADLINE_MS = 5_000;
 
 /**
@@ -274,9 +286,9 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
         adaptation.stdin.end();
         flushDeadline = setTimeout(finish, OUTPUT_FLUSH_DEADLINE_MS);
         flushDeadline.unref?.();
-      } catch {
+      } catch (error) {
         if (!stopped) {
-          fail('source-error');
+          fail(sourceFailure(error));
         }
       }
     })();

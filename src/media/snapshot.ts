@@ -389,8 +389,21 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       return current;
     }
     const generation = this.retentionGeneration(scope.serial);
+    /**
+     * A still holds the station while it captures, so a live view opened on a sibling can ask it to yield.
+     * Yielding aborts the acquisition rather than waiting it out: an abandoned burst that keeps asking for the
+     * channel is exactly the contention the hold exists to remove, and the last good image answers the request
+     * in its place.
+     */
+    const abandonment = new AbortController();
+    const releaseStation =
+      scope.stationSn !== undefined
+        ? this.stations?.hold(scope.stationSn, scope.serial, 'snapshot', () =>
+            abandonment.abort(new Error('a live view took the station')),
+          )
+        : undefined;
     const pending = Promise.resolve()
-      .then(snapshotLive)
+      .then(() => snapshotLive({ signal: abandonment.signal }))
       .then(({ jpeg }) => {
         const retained = this.retain(scope, jpeg, 'live', generation);
         this.failedLive.delete(scope.serial);
@@ -402,6 +415,7 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
         throw new UnansweredSnapshot(failure, errorMessage(error));
       })
       .finally(() => {
+        releaseStation?.();
         claim.release();
         if (this.pendingLive.get(scope.identity) === pending) {
           this.pendingLive.delete(scope.identity);
