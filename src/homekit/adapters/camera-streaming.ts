@@ -261,6 +261,14 @@ const NIGHT_VISION_MODES: ReadonlySet<number> = new Set(Object.values(NightVisio
  */
 const ENABLEMENT_SUPERVISION_INTERVAL_MS = 5_000;
 
+/**
+ * How long a started request is given to reach an outcome before it is reported as having reached none.
+ *
+ * Comfortably past the longest legitimate start: a camera on a base costs a second or two to acquire, and the
+ * adaptation a moment more. Anything still owing an outcome here is not slow, it is lost.
+ */
+const UNACCOUNTED_REQUEST_MS = 30_000;
+
 const CAMERA_LIVE = {
   id: 'camera.live.momentary-action',
   kind: 'momentary-action',
@@ -1890,6 +1898,8 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   private readonly claims = new Map<string, MediaSessionClaim>();
   /** Station holds taken for the life of a session, so opportunistic work elsewhere on it stands aside. */
   private readonly stationHolds = new Map<string, () => void>();
+  /** Started requests still waiting for an outcome, so one that never reaches either can say so. */
+  private readonly unaccounted = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly snapshotScope: SnapshotAcquisitionScope;
   private acceptingSessions = true;
   private refused = false;
@@ -2076,6 +2086,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
         if (switchedOff) {
           this.refused = true;
         }
+        this.settleOutcome(request.sessionID);
         this.binding.reportSession(outcome, switchedOff);
         if (
           outcome.outcome === 'streaming' &&
@@ -2152,6 +2163,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     session.selection = request;
     const video = negotiatedVideo(request.video, session.videoSsrc, this.hap);
     this.traceSelection('start', video);
+    this.watchForOutcome(request.sessionID);
     const source = this.binding.source;
     session.source = source;
     this.supervise();
@@ -2178,6 +2190,34 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
           callback(error instanceof Error ? error : new Error('stream failed'));
         },
       );
+  }
+
+  /**
+   * Report a started request that reached neither a streaming outcome nor a failure.
+   *
+   * Every request is supposed to end in one or the other, and a controller badges the camera either way. One
+   * that ends in neither leaves the operator looking at a failure the log has no record of, which is
+   * unfixable by anyone: measured once as a selection followed by no adaptation, no source command and no
+   * outcome at all. This does not repair that request. It makes it visible, which is the prerequisite.
+   */
+  private watchForOutcome(sessionID: string): void {
+    this.settleOutcome(sessionID);
+    const armed = Date.now();
+    const timer = setTimeout(() => {
+      this.unaccounted.delete(sessionID);
+      this.binding.reportSelection?.({ event: 'live-request-unaccounted', afterMs: Date.now() - armed });
+    }, UNACCOUNTED_REQUEST_MS);
+    timer.unref?.();
+    this.unaccounted.set(sessionID, timer);
+  }
+
+  /** A request has reached an outcome, or is gone, so it is no longer owed one. */
+  private settleOutcome(sessionID: string): void {
+    const timer = this.unaccounted.get(sessionID);
+    if (timer) {
+      clearTimeout(timer);
+      this.unaccounted.delete(sessionID);
+    }
   }
 
   private traceSelection(operation: 'start' | 'reconfigure', video: NegotiatedLiveVideo): void {
@@ -2216,6 +2256,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
    * before it was recorded releases itself where it completes.
    */
   private release(sessionID: string): void {
+    this.settleOutcome(sessionID);
     this.prepareGenerations.delete(sessionID);
     const session = this.sessions.get(sessionID);
     this.sessions.delete(sessionID);

@@ -147,3 +147,46 @@ describe('the pull a live trace belongs to', () => {
     expect(traceOf(undefined)).not.toHaveProperty('source');
   });
 });
+
+/**
+ * A started request that reached neither a streaming outcome nor a failure.
+ *
+ * Every request is meant to end in one or the other, and a controller badges the camera either way. One ending
+ * in neither leaves an operator looking at a failure this log has no record of, and nobody can diagnose what
+ * was never written down. Observed once on a real controller: a selection, then no adaptation, no source
+ * command, and no outcome at all.
+ */
+describe('a request that reached no outcome', () => {
+  it('is recorded, with how long was waited', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, { adapter: 'camera.streaming', event: 'live-request-unaccounted', afterMs: 30_000 });
+
+    expect(records(debug)[0]).toMatchObject({
+      scope: 'homekit',
+      event: 'live-request-unaccounted',
+      afterMs: 30_000,
+    });
+  });
+
+  it('carries nothing beyond the wait, the path that dropped it having left nothing else', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, { adapter: 'camera.streaming', event: 'live-request-unaccounted', afterMs: 12_345 });
+
+    const record = records(debug)[0]!;
+    expect(Object.keys(record).sort()).toEqual(['adapter', 'afterMs', 'event', 'level', 'scope']);
+  });
+
+  it('is withheld where the wait is not a finite number, rather than logged as nonsense', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, {
+      adapter: 'camera.streaming',
+      event: 'live-request-unaccounted',
+      afterMs: Number.NaN,
+    } as never);
+
+    expect(debug).not.toHaveBeenCalled();
+  });
+});

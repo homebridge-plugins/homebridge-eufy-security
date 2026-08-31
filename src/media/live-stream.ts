@@ -66,6 +66,9 @@ const SOURCE_ACQUISITION_TIMEOUT = Symbol('source-acquisition-timeout');
  * from a transport that failed.
  */
 function sourceFailure(error: unknown): LiveSessionFailure {
+  if (error instanceof Error && error.name === 'StationBusyError') {
+    return 'station-busy';
+  }
   return error instanceof LiveStreamStartError && error.stage === 'audio-only' ? 'source-audio-only' : 'source-error';
 }
 

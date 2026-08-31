@@ -82,7 +82,16 @@ export type AdapterLiveSessionTrace =
   | (Extract<LiveSessionOutcome, { outcome: 'failed' }> & { event: 'live-session-failed' })
   | { event: 'live-session-released' }
   /** The first adapted output reached the negotiated destination, which is when a picture can appear. */
-  | { event: 'live-session-streaming' };
+  | { event: 'live-session-streaming' }
+  /**
+   * A started request reached neither a streaming outcome nor a failure.
+   *
+   * Every request is meant to end in one or the other, and a controller badges the camera either way. One
+   * ending in neither leaves an operator looking at a failure the log has no record of, which nobody can
+   * diagnose. This states that it happened and how long was waited; it says nothing about why, because the
+   * path that dropped it left nothing to say.
+   */
+  | { event: 'live-request-unaccounted'; afterMs: number };
 
 export type AdapterTrace = AdapterEventTrace | AdapterLiveVideoTrace | AdapterLiveSessionTrace;
 

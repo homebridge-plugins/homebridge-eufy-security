@@ -58,6 +58,14 @@ export interface NegotiatedLiveMedia {
  * those describes it, which is the output pipe failing while the process itself is still reported as alive.
  */
 export type LiveSessionFailure =
+  /**
+   * The station was serving another of its cameras and did not free it in time.
+   *
+   * Distinct from every other failure here because nothing is broken: a base serves one camera at a time and
+   * the SDK refuses a second rather than degrading both. Collapsing it into `source-error` made a camera that
+   * was merely waiting its turn read as a camera that failed, and left no way to tell the two apart in a log.
+   */
+  | 'station-busy'
   | 'source-acquisition-timeout'
   | 'no-video-within-backstop'
   | 'source-audio-only'

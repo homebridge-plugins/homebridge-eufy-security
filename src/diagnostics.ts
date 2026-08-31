@@ -86,7 +86,15 @@ export type HomeKitEventTrace =
    * nothing from one whose output a controller did not display. Carries the fact alone: a session identity,
    * a port and a key all travel in the same neighbourhood.
    */
-  | { adapter: string; event: 'live-session-streaming' };
+  | { adapter: string; event: 'live-session-streaming' }
+  /**
+   * A started request reached neither a streaming outcome nor a failure.
+   *
+   * Every request is meant to end in one or the other. One ending in neither leaves an operator looking at a
+   * failure this log has no record of, and nobody can diagnose what was never written down. Carries how long
+   * was waited and nothing else: the path that dropped the request left nothing else to carry.
+   */
+  | { adapter: string; event: 'live-request-unaccounted'; afterMs: number };
 
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
@@ -117,6 +125,7 @@ const SDK_EVENT_KEYS = new Set([
   'connection-closed',
   'connection-opened',
   'connection-retrying',
+  'live-request-unaccounted',
   'live-session-streaming',
   'live-start-trace',
   'media-error',
@@ -2142,7 +2151,8 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
   if (
     trace.event === 'live-session-released' ||
     trace.event === 'live-session-failed' ||
-    trace.event === 'live-session-streaming'
+    trace.event === 'live-session-streaming' ||
+    trace.event === 'live-request-unaccounted'
   ) {
     const lifecycle = sanitizeLiveSessionTrace(trace as unknown as Record<string, unknown>);
     if (target.debug && lifecycle) {
@@ -2301,6 +2311,11 @@ function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string
   }
   if (value.event === 'live-session-released' || value.event === 'live-session-streaming') {
     return { adapter: value.adapter, event: value.event };
+  }
+  if (value.event === 'live-request-unaccounted') {
+    return typeof value.afterMs === 'number' && Number.isFinite(value.afterMs)
+      ? { adapter: value.adapter, event: value.event, afterMs: Math.round(value.afterMs) }
+      : undefined;
   }
   if (
     value.event !== 'live-session-failed' ||
