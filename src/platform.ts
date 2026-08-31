@@ -62,7 +62,16 @@ export function createEufyPlatform(
       const configuredConfig = parseConfig(config);
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       const diagnosticLog = createDiagnosticLogger(log, storageRoot);
-      const diagnostics = new DiagnosticConditions(diagnosticLog);
+      // Names for the CONSOLE line only, resolved off the accessories this platform already holds. The retained
+      // record keeps carrying no identity; see `DiagnosticConditions`.
+      const diagnostics = new DiagnosticConditions(
+        diagnosticLog,
+        (serial) =>
+          this.cachedAccessories.find((accessory) => {
+            const context = accessory.context as { homebridgeEufy?: { version?: number; serial?: string } };
+            return context.homebridgeEufy?.version === 1 && context.homebridgeEufy.serial === serial;
+          })?.displayName,
+      );
       const adaptationDiagnostics: AdaptationDiagnostics = {
         report: (notice) => reportAdaptationNotice(diagnosticLog, notice),
       };

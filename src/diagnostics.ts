@@ -2394,7 +2394,15 @@ export class DiagnosticConditions {
   private readonly aliases = new Map<string, string>();
   private runtimeState?: RuntimeState;
 
-  constructor(private readonly log: PlatformLogger) {}
+  /**
+   * @param nameFor Resolves a device serial to the accessory name the owner sees, for the CONSOLE line only.
+   *   The console line goes to the owner's own log, where Homebridge prints accessory names on every other
+   *   line, and a count is not something an owner can act on. The retained record keeps carrying no identity.
+   */
+  constructor(
+    private readonly log: PlatformLogger,
+    private readonly nameFor?: (serial: string) => string | undefined,
+  ) {}
 
   reportRuntimeState(state: RuntimeState): void {
     if (state === this.runtimeState) {
@@ -2455,6 +2463,15 @@ export class DiagnosticConditions {
         ...(accessoryAliases.length === uniqueDeviceIds.length ? {} : { aliasesTruncated: true }),
       },
       `${condition.code}:${condition.capability ?? ''}:${condition.member ?? ''}`,
+      // Name paired with alias: the archive carries the alias and no identity, and the owner's own log carries
+      // the pairing — so an alias in a support case is resolvable by the one person who can be asked for it.
+      uniqueDeviceIds
+        .map((serial) => {
+          const name = this.nameFor?.(serial);
+          const alias = this.aliases.get(serial);
+          return name === undefined ? undefined : alias === undefined ? name : `${name} (${alias})`;
+        })
+        .filter((named): named is string => named !== undefined),
     );
   }
 
@@ -2476,6 +2493,8 @@ export class DiagnosticConditions {
     level: 'info' | 'warn' | 'error',
     fields: Readonly<Record<string, unknown>> = {},
     conditionKey = code,
+    /** Accessory names for the console line only — never retained, see {@link DiagnosticConditions}. */
+    names?: readonly string[],
   ): void {
     const fingerprint = JSON.stringify({ active, reason, ...fields });
     if (active) {
@@ -2490,11 +2509,15 @@ export class DiagnosticConditions {
       typeof fields.affectedAccessoryCount === 'number' ? fields.affectedAccessoryCount : undefined;
     const summary = localize(this.log, summaryKey);
     const action = localize(this.log, actionKey);
-    const affected = affectedAccessoryCount
-      ? localize(this.log, affectedAccessoryCount === 1 ? 'log.condition.affectedOne' : 'log.condition.affectedMany', {
-          count: affectedAccessoryCount,
-        })
-      : '';
+    const affected = names?.length
+      ? localize(this.log, 'log.condition.affectedNamed', { names: names.join(', ') })
+      : affectedAccessoryCount
+        ? localize(
+            this.log,
+            affectedAccessoryCount === 1 ? 'log.condition.affectedOne' : 'log.condition.affectedMany',
+            { count: affectedAccessoryCount },
+          )
+        : '';
     const message = localize(this.log, active ? 'log.condition.active' : 'log.condition.recovered', {
       action,
       affected,

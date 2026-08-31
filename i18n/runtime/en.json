@@ -35,6 +35,7 @@
   "log.action.waitTalkback": "Wait for complete camera talkback capability evidence",
   "log.condition.active": "{summary}. {affected} {action}.",
   "log.condition.affectedMany": "{count} accessories are affected.",
+  "log.condition.affectedNamed": "Affected: {names}.",
   "log.condition.affectedOne": "1 accessory is affected.",
   "log.condition.recovered": "Recovered: {summary}.",
   "log.diagnosticFileFailed": "Diagnostic file logging failed; check storage permissions.",

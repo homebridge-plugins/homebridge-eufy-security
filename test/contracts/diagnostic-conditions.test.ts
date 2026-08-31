@@ -90,6 +90,43 @@ describe('diagnostic conditions', () => {
     expect(JSON.stringify(record), 'the serial is never emitted').not.toContain('T8170T10230000000');
   });
 
+  /**
+   * A condition names the cameras it is about, in the owner's own log.
+   *
+   * The console line and the retained record have different readers. The line goes to the owner's log, where
+   * Homebridge prints accessory names on every other line, and a count is not something an owner can act on:
+   * "1 accessory is affected" on an eight-camera account says only that one of them failed. The record goes to
+   * a support archive and keeps carrying no identity at all.
+   */
+  it('names the affected accessories on the console, and still keeps them out of the record', () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+    const conditions = new DiagnosticConditions({ debug, error: vi.fn(), info: vi.fn(), warn }, (serial) =>
+      serial === 'T8170T10230000000' ? 'Jardin' : undefined,
+    );
+
+    conditions.reportHomeKit(unconfirmedWriteCondition('enabled')!, ['T8170T10230000000']);
+
+    const line = String(warn.mock.calls[0]![0]);
+    const record = JSON.parse(debug.mock.calls[0]![0]);
+    expect(line, 'the owner reads a name, not a tally').toContain('Jardin');
+    // The archive carries the alias and no identity; the owner's own log carries the pairing. So an alias in a
+    // support case is resolvable by the one person who can be asked, and by nobody else.
+    expect(line, 'paired with the alias the archive will carry').toContain(record.accessoryAliases[0]);
+    expect(JSON.stringify(record), 'the record still names nothing').not.toContain('Jardin');
+  });
+
+  it('falls back to the count where a name is not known, rather than saying nothing', () => {
+    const warn = vi.fn();
+    const conditions = new DiagnosticConditions({ debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn });
+
+    conditions.reportHomeKit(unconfirmedWriteCondition('enabled')!, ['T8170T10230000000']);
+
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain('1 accessory');
+    expect(line, 'and never the serial it was handed').not.toContain('T8170T10230000000');
+  });
+
   it('uses stable support-case accessory aliases and never emits supplied identity', () => {
     const warn = vi.fn();
     const info = vi.fn();
