@@ -91,7 +91,19 @@ export type AdapterLiveSessionTrace =
    * diagnose. This states that it happened and how long was waited; it says nothing about why, because the
    * path that dropped it left nothing to say.
    */
-  | { event: 'live-request-unaccounted'; afterMs: number };
+  | { event: 'live-request-unaccounted'; afterMs: number }
+  /**
+   * A stream request refused before it reached the source at all.
+   *
+   * Every one of these answers a controller instantly, and a controller badges the camera instantly with it.
+   * None of them was recorded before, so the badge an operator saw at the moment of a switch had no counterpart
+   * in a log, and five separate explanations for it were proposed and ruled out by measurement instead.
+   *
+   * `cancelled` and `at-capacity` are the two a fast switch produces: a controller prepares the next camera
+   * before the last has given its port back, so the preparation is superseded or the declared ceiling is
+   * momentarily full. Neither is a fault, and both are indistinguishable from one without this.
+   */
+  | { event: 'live-request-refused'; reason: 'disabled' | 'at-capacity' | 'cancelled' | 'prepare-failed' };
 
 export type AdapterTrace = AdapterEventTrace | AdapterLiveVideoTrace | AdapterLiveSessionTrace;
 

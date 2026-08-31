@@ -1980,10 +1980,12 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
    */
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
     if (this.refuseWhenDisabled('disabled')) {
+      this.traceRefusal('disabled');
       callback(new Error('camera is disabled'));
       return;
     }
     if (!this.claimCapacity(request.sessionID)) {
+      this.traceRefusal('at-capacity');
       callback(new Error('the declared concurrent media limit is reached'));
       return;
     }
@@ -1994,6 +1996,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
         if (!this.acceptingSessions || this.prepareGenerations.get(request.sessionID) !== generation) {
           session.prepared.stop();
           this.releaseUnheldClaim(request.sessionID);
+          this.traceRefusal('cancelled');
           callback(new Error('live media preparation was cancelled'));
           return;
         }
@@ -2011,6 +2014,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
           this.prepareGenerations.delete(request.sessionID);
         }
         this.releaseUnheldClaim(request.sessionID);
+        this.traceRefusal('prepare-failed');
         callback(error instanceof Error ? error : new Error('failed to prepare live media'));
       },
     );
@@ -2190,6 +2194,17 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
           callback(error instanceof Error ? error : new Error('stream failed'));
         },
       );
+  }
+
+  /**
+   * Report a request refused before it reached the source.
+   *
+   * A controller is answered instantly and badges the camera instantly, so without this the badge an operator
+   * sees at the moment of a switch has no counterpart anywhere. `cancelled` and `at-capacity` are the two a
+   * fast switch produces, and neither is a fault.
+   */
+  private traceRefusal(reason: 'disabled' | 'at-capacity' | 'cancelled' | 'prepare-failed'): void {
+    this.binding.reportSelection?.({ event: 'live-request-refused', reason });
   }
 
   /**

@@ -190,3 +190,42 @@ describe('a request that reached no outcome', () => {
     expect(debug).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A request refused before it reached the source.
+ *
+ * Each of these answers a controller instantly and is badged instantly, and none was recorded. That is why a
+ * badge appearing at the moment of a switch had no counterpart in any log, and why five explanations for it
+ * were proposed and ruled out by measurement rather than read off a record.
+ */
+describe('a request refused before the source', () => {
+  it('records each bounded reason', () => {
+    for (const reason of ['disabled', 'at-capacity', 'cancelled', 'prepare-failed'] as const) {
+      const debug = vi.fn();
+
+      reportHomeKitEvent({ debug }, { adapter: 'camera.streaming', event: 'live-request-refused', reason });
+
+      expect(records(debug)[0]).toMatchObject({ scope: 'homekit', event: 'live-request-refused', reason });
+    }
+  });
+
+  it('carries the reason alone, no port, key or session identity travelling with it', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, { adapter: 'camera.streaming', event: 'live-request-refused', reason: 'cancelled' });
+
+    expect(Object.keys(records(debug)[0]!).sort()).toEqual(['adapter', 'event', 'level', 'reason', 'scope']);
+  });
+
+  it('withholds a reason outside the bounded set rather than logging it', () => {
+    const debug = vi.fn();
+
+    reportHomeKitEvent({ debug }, {
+      adapter: 'camera.streaming',
+      event: 'live-request-refused',
+      reason: 'something-invented',
+    } as never);
+
+    expect(debug).not.toHaveBeenCalled();
+  });
+});

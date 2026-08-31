@@ -94,7 +94,17 @@ export type HomeKitEventTrace =
    * failure this log has no record of, and nobody can diagnose what was never written down. Carries how long
    * was waited and nothing else: the path that dropped the request left nothing else to carry.
    */
-  | { adapter: string; event: 'live-request-unaccounted'; afterMs: number };
+  | { adapter: string; event: 'live-request-unaccounted'; afterMs: number }
+  /**
+   * A stream request refused before it reached the source.
+   *
+   * Answered to a controller instantly, and badged by it instantly. Carries the bounded reason alone, which is
+   * enough to tell a momentary switch collision from a camera that is genuinely off or a host genuinely full.
+   */
+  | { adapter: string; event: 'live-request-refused'; reason: string };
+
+/** The bounded reasons a stream request is refused before it reaches the source. */
+const REFUSAL_REASONS = new Set(['disabled', 'at-capacity', 'cancelled', 'prepare-failed']);
 
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
@@ -125,6 +135,7 @@ const SDK_EVENT_KEYS = new Set([
   'connection-closed',
   'connection-opened',
   'connection-retrying',
+  'live-request-refused',
   'live-request-unaccounted',
   'live-session-streaming',
   'live-start-trace',
@@ -2152,7 +2163,8 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
     trace.event === 'live-session-released' ||
     trace.event === 'live-session-failed' ||
     trace.event === 'live-session-streaming' ||
-    trace.event === 'live-request-unaccounted'
+    trace.event === 'live-request-unaccounted' ||
+    trace.event === 'live-request-refused'
   ) {
     const lifecycle = sanitizeLiveSessionTrace(trace as unknown as Record<string, unknown>);
     if (target.debug && lifecycle) {
@@ -2311,6 +2323,11 @@ function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string
   }
   if (value.event === 'live-session-released' || value.event === 'live-session-streaming') {
     return { adapter: value.adapter, event: value.event };
+  }
+  if (value.event === 'live-request-refused') {
+    return typeof value.reason === 'string' && REFUSAL_REASONS.has(value.reason)
+      ? { adapter: value.adapter, event: value.event, reason: value.reason }
+      : undefined;
   }
   if (value.event === 'live-request-unaccounted') {
     return typeof value.afterMs === 'number' && Number.isFinite(value.afterMs)
