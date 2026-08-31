@@ -47,6 +47,12 @@ import { openCameraSession, shortSerial } from './eufy-camera-session.mjs';
  * count first, and a sample entry carries a fixed record whose width depends on the track's media type,
  * so a walk that treats either as a plain container never reaches the codec configuration inside it.
  */
+/**
+ * How much adapted media a recording must carry before its rate is held to the negotiated ceiling. Below this
+ * a VBV buffer's allowance has not amortized, so a short run carrying a keyframe is legitimately over.
+ */
+const RECORDED_RATE_WINDOW_SECONDS = 10;
+
 const CHILD_OFFSETS = new Map([
   ...['moov', 'trak', 'mdia', 'minf', 'stbl', 'mvex', 'edts', 'moof', 'traf', 'dinf'].map((type) => [type, 0]),
   ['stsd', 8],
@@ -228,6 +234,58 @@ export function fragmentSpans(fragments) {
       const next = fragments[index + 1]?.tracks[track.index];
       return next ? next.startSeconds - track.startSeconds : undefined;
     }),
+  );
+}
+
+/**
+ * The rate a fragmented recording's own bytes may carry, in kbps.
+ *
+ * A recording is one file carrying both tracks, so the whole of what a controller stores is bounded by the
+ * whole of what it negotiated: the video bit rate AND, where a track was negotiated, the audio bit rate. The
+ * video figure alone is the wrong denominator, and comparing against it reports a compliant recording as
+ * over by roughly the audio rate.
+ */
+export function recordedRateCeiling(negotiated) {
+  return negotiated.maxBitRate + (negotiated.audio?.maxBitRate ?? 0);
+}
+
+/**
+ * Reports and judges the rate the adapted recording actually carried against what it negotiated.
+ *
+ * The measured bytes are the fragments as they leave adaptation, so they include the MP4 boxes each one
+ * carries. That is what a controller stores and therefore the honest figure. Unlike the live path nothing is
+ * reserved for that overhead, because a recording is not packetized into RTP and the container's cost has no
+ * measurement behind it yet; it currently fits inside the combined ceiling rather than beside it.
+ *
+ * The rate is measured over every fragment whose span is known, because only a fragment followed by another
+ * has a span a muxer cannot inflate by rounding sample durations. It is judged only where enough media exists
+ * for a VBV buffer's allowance to have amortized; below that a fragment carrying a keyframe is legitimately
+ * over, and a rule that failed it would be measuring H.264 rather than this plugin.
+ */
+function judgeRecordedRate(results, spans, negotiated) {
+  const seconds = spans.reduce((total, span) => total + span.seconds, 0);
+  const bytes = spans.reduce((total, span) => total + span.bytes, 0);
+  if (seconds <= 0) {
+    results.unverified('  recorded rate=not-measured (no fragment had a measurable span)');
+    return;
+  }
+  const ceiling = recordedRateCeiling(negotiated);
+  const kilobitsPerSecond = (bytes * 8) / 1_000 / seconds;
+  console.log(
+    `recorded rate=${kilobitsPerSecond.toFixed(0)}kbps over ${seconds.toFixed(2)}s of media ` +
+      `in ${spans.length} fragment(s) of ${ceiling}kbps negotiated ` +
+      `(video ${negotiated.maxBitRate} + audio ${negotiated.audio?.maxBitRate ?? 0})`,
+  );
+  if (seconds < RECORDED_RATE_WINDOW_SECONDS) {
+    results.unverified(
+      `  recorded ceiling over ${seconds.toFixed(2)}s=not-established` +
+        ` (needs ${RECORDED_RATE_WINDOW_SECONDS}s, below which the VBV allowance has not amortized)`,
+    );
+    return;
+  }
+  results.check(
+    kilobitsPerSecond <= ceiling,
+    `the recording carried no more than the negotiated ${ceiling}kbps over ${seconds.toFixed(2)}s`,
   );
 }
 
@@ -437,6 +495,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         } else {
           fragments.push({
             boxes: topLevelBoxes(unit.data),
+            bytes: unit.data.length,
             tracks: describeFragment(unit.data, timescales, defaults),
           });
         }
@@ -505,9 +564,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     );
     const selectedSeconds = negotiated.fragmentLengthMs / 1_000;
     const spans = fragmentSpans(fragments)
-      .map((tracks, index) => ({ seconds: tracks[0], samples: fragments[index].tracks[0]?.samples ?? 0 }))
+      .map((tracks, index) => ({
+        seconds: tracks[0],
+        samples: fragments[index].tracks[0]?.samples ?? 0,
+        bytes: fragments[index].bytes,
+      }))
       .filter(({ seconds, samples }) => seconds !== undefined && samples > 0)
-      .map(({ seconds, samples }) => ({ seconds, frameSeconds: seconds / samples }));
+      .map(({ seconds, samples, bytes }) => ({ seconds, bytes, frameSeconds: seconds / samples }));
     const skews = fragments
       .filter(({ tracks }) => tracks.length > 1)
       .map(({ tracks }) => tracks[1].startSeconds - tracks[0].startSeconds);
@@ -517,6 +580,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         `selected=${selectedSeconds.toFixed(3)}s`,
     );
     results.check(spans.length > 0, 'the recording produced enough fragments to measure a fragment span');
+    judgeRecordedRate(results, spans, negotiated);
     results.check(
       spans.every((span) => withinSelectedFragment(span, selectedSeconds)),
       `no media fragment spans more than the selected ${negotiated.fragmentLengthMs}ms of video ` +

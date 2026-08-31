@@ -6,6 +6,7 @@ import {
   describeInitialization,
   fragmentSpans,
   preEventMedia,
+  recordedRateCeiling,
   topLevelBoxes,
   trackDefaults,
   walkBoxes,
@@ -306,5 +307,25 @@ describe('HKSV recording measurement', () => {
     expect(withinSelectedFragment({ seconds: 3.933, frameSeconds: 1 / 15 }, 4)).toBe(true);
     expect(withinSelectedFragment({ seconds: 4.5, frameSeconds: 1 / 30 }, 4)).toBe(false);
     expect(withinSelectedFragment({ seconds: 8.0, frameSeconds: 1 / 15 }, 4)).toBe(false);
+  });
+});
+
+/**
+ * What a recording's measured rate is compared against.
+ *
+ * A recording is one file carrying both tracks, so the denominator is the whole of what was negotiated. The
+ * first live run of this measurement used the video figure alone and reported a compliant recording as over:
+ * measured on two wired cameras at a negotiated 800 kbps of video and 32 of audio, the fragments carried 777
+ * and 818 kbps, and 818 is inside 832 while being outside 800.
+ */
+describe('recorded rate ceiling', () => {
+  it('is the negotiated video and audio rates together, because one file carries both', () => {
+    expect(recordedRateCeiling({ maxBitRate: 800, audio: { maxBitRate: 32 } })).toBe(832);
+    expect(818).toBeLessThanOrEqual(recordedRateCeiling({ maxBitRate: 800, audio: { maxBitRate: 32 } }));
+  });
+
+  it('is the video rate alone for a recording that negotiated no audio track', () => {
+    expect(recordedRateCeiling({ maxBitRate: 800 })).toBe(800);
+    expect(recordedRateCeiling({ maxBitRate: 2000, audio: undefined })).toBe(2000);
   });
 });
