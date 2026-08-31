@@ -1412,7 +1412,20 @@ function sanitizeSdkLiveStartTrace(value: unknown): Record<string, unknown> | un
   const phase = String(candidate.phase);
   if (!Object.hasOwn(LIVE_TRACE_PHASES, phase)) return undefined;
   const fields = LIVE_TRACE_PHASES[phase as LiveTrace['phase']](candidate);
-  return fields ? { phase, ...fields } : undefined;
+  if (!fields) return undefined;
+  const source = opaquePullHandle(candidate.source);
+  return { phase, ...(source === undefined ? {} : { source }), ...fields };
+}
+
+/**
+ * The SDK's per-process handle for a pull, or nothing where the value is not one.
+ *
+ * Matched against the shape a handle has rather than searched for what a serial looks like: this record is
+ * what a support archive keeps, and a redaction that depends on recognising a secret fails on the first
+ * message shape nobody predicted. `pull-3` and `station-1:2` pass; anything else, a serial included, does not.
+ */
+function opaquePullHandle(value: unknown): string | undefined {
+  return typeof value === 'string' && /^(?:pull|station)-\d{1,6}(?::\d{1,3})?$/.test(value) ? value : undefined;
 }
 
 /**

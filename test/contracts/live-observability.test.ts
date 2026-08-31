@@ -113,3 +113,37 @@ describe('what a recording reports about the media it was handed', () => {
     expect(records(debug)[0]).not.toHaveProperty('sourceFragments');
   });
 });
+
+/**
+ * Which pull a live trace belongs to, so several cameras' records can be told apart.
+ *
+ * A phase says what happened and nothing about where. Four cameras warming off one HomeBase produced four
+ * identical `warming` records on a real fleet, and the only way to attribute them was to correlate the
+ * surrounding media commands by time — which is guesswork, and it read one camera's failure onto another.
+ *
+ * The SDK now states an opaque per-process handle. It is retained verbatim BECAUSE it is opaque: it resolves
+ * to no device, means nothing in the next run, and is bounded in shape — a value shaped like a serial is
+ * dropped rather than passed through, since this record is the one a support archive keeps.
+ */
+describe('the pull a live trace belongs to', () => {
+  const traceOf = (source: unknown) => {
+    const debug = vi.fn();
+    const sdk = createSdkLogger({ debug })!;
+    sdk.debug('[live] start trace', { phase: 'warming', retryMs: 2000, deadlineMs: 20000, source });
+    return records(debug)[0];
+  };
+
+  it('is retained, so two cameras warming together are two records and not one repeated', () => {
+    expect(traceOf('pull-3')).toMatchObject({ phase: 'warming', source: 'pull-3' });
+    expect(traceOf('station-1:2')).toMatchObject({ source: 'station-1:2' });
+  });
+
+  it('is dropped where it is not an opaque handle, a serial being what this record may never carry', () => {
+    expect(traceOf('T8010P2320172199:2')).not.toHaveProperty('source');
+    expect(traceOf('T8010P2320172199')).not.toHaveProperty('source');
+  });
+
+  it('is absent where the SDK sent none, rather than invented', () => {
+    expect(traceOf(undefined)).not.toHaveProperty('source');
+  });
+});
