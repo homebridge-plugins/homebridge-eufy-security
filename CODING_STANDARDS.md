@@ -1,7 +1,7 @@
 # Code practice
 
-The rules for writing code in this repository. They apply to everyone. This file is named
-`AGENTS.md` because AI coding tools load it automatically; `CODING_STANDARDS.md` is the same file.
+The rules for writing code in this repository. They apply to everyone. `AGENTS.md` is a symlink to this
+file, so AI coding tools that look for that name load these same rules.
 
 Setup, the development workflow, and the pull request process are in
 [CONTRIBUTING.md](./CONTRIBUTING.md).
@@ -159,8 +159,17 @@ The canonical vocabulary is defined in [CONTEXT.md](./CONTEXT.md).
   a command or reach into raw transport data.
 - Keep runtime dependencies few. Prefer `node:*` APIs and existing dependencies before adding another
   package; document the transitive and audit footprint of any addition.
-- Comments are declaration-level JSDoc that state ground truth. Avoid inline body narration and
-  iteration-history comments.
+- Every comment in `src/` is JSDoc sitting immediately above the declaration it documents, and states that
+  declaration's ground truth: what it is, and what it guarantees. Nothing else is a comment. No comment
+  inside a body, no comment beside a statement, and no trailing comment. In `test/contracts/`, the same
+  applies to the JSDoc above a `describe` or an `it`, which states the contract under test.
+- A JSDoc does not narrate. It does not say what an earlier version did, why that was wrong, what was
+  tried, what a caller might do with the declaration, or what could be built on it later. Prose that would
+  need editing when the next change lands is not ground truth; durable architectural reasoning goes in
+  `docs/architecture.md`, and everything else goes nowhere.
+- A constraint worth stating is stated as the constraint, not as the failure that motivated it. Where the
+  consequence of breaking an invariant is itself ground truth about the declaration, one sentence carries
+  it.
 - Do not cite planning Markdown from shipped source. Put durable behavior in code and JSDoc, and keep
   durable architectural reasoning in `docs/architecture.md`.
 - Once V5 state exists, preserve its `HomebridgeEufy` platform identity, accessory UUIDs,
