@@ -252,6 +252,20 @@ button.diagnostics-secondary-action {
   color: var(--ink);
 }
 
+/*
+ * The keyboard focus ring for every control in the diagnostics panel.
+ *
+ * Stated once for the panel because its buttons carry no class of their own and are styled by descent, so
+ * without this they fall back to the user agent's own ring. That ring is a 1px hairline with no offset, which
+ * is thinner and lower in contrast than the 2px accent ring the rest of this interface already uses.
+ */
+.diagnostics-panel button:focus-visible,
+.diagnostics-panel select:focus-visible,
+.diagnostics-panel input:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
 button.diagnostics-quiet-action {
   width: fit-content;
   min-height: 30px;
