@@ -219,15 +219,38 @@ already off so it can only ever restore what it changed.
 node scripts/live-hap-disabled-camera-check.mjs \
   --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
   --serial T8XXXXXXXXXXXXXX --eufy-storage /tmp/hb-check/homebridge-eufy \
-  --homebridge-pid <homebridge pid> --instance-log /tmp/hb-check/instance.log
+  --width 1152 --height 648 --seconds 30 --homebridge-pid <homebridge pid> \
+  --instance-log /tmp/hb-check/instance.log \
+  --jsonl /tmp/hb-check/homebridge-eufy/logs/homebridge-eufy.jsonl
 ```
 
 Refusal is proven by an `ERROR` status from `SetupEndpoints` together with the
 `camera-live-session-refused` condition in the Homebridge log; a `BUSY` status means a session was still
-holding that stream management service and proves nothing. Mid-session termination depends on the
-enablement observation actually changing inside a running plugin, which
-[eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) currently prevents, so expect that step to
-report a timeout until it is fixed.
+holding that stream management service and proves nothing.
+
+Pass `--jsonl` as well as `--instance-log`. The two carry different facts: the instance log has one printed
+`[code]` line per condition, while the reason behind a code and the announcement trace naming the path exist
+only as records in the plugin's own JSONL log. This run refuses twice under one code — once mid-session and
+once at the `SetupEndpoints` that follows — so without the reason it cannot tell the mid-session gate from
+the refusal, and reports that rather than passing on the code they share.
+
+Measured on a wired `T8400` at `1152x648@30`, plugin at `8cc1e77` with the SDK at `2b9b11d`: the write was
+acknowledged in 1.6 s; the plugin ended the session 10.6 s after that acknowledgement, leaving no adaptation
+process and the stream management service back to `STREAMING_AVAILABLE`; it recorded
+`camera-live-session-refused` with reason `disabled-mid-session` exactly once and no `camera-live-session-failed`
+beside it; it presented the camera as off at 15.6 s; it refused a new session with `ERROR` while the camera
+stayed off; snapshots stayed reachable throughout; and it admitted a streaming session again 16.5 s after the
+power-on. A second instrumented run minutes earlier ended at 10.7 s with the same path, and an earlier run
+predating `--jsonl` ended at 5.5 s and measured no path, so it corroborates the delay only. All three fall
+inside one SDK freshness window, so the delay reflects where in that window the write landed rather than the
+gate.
+
+The path both instrumented runs measured was `camera.controls/poll` then `camera.streaming/poll` — the SDK's
+generic property announcement, with the supervision read as the backstop it did not need. Two upstream changes
+are needed together: the device-list fallback of
+[eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47), before which the observation could not move
+inside a running plugin and this step timed out by design, and the generic property announcement the same
+re-read now emits.
 
 `live-hap-prepared-session-check.mjs` covers the case a Home app cannot be asked for: a controller that
 negotiates endpoints and then never starts. It holds one prepared session idle for `--idle-seconds`,

@@ -11,7 +11,9 @@ import * as harness from '../../scripts/hap-live-harness.mjs';
 
 const {
   MeasuredVideoStream,
+  raisedConditions,
   adaptationProcessRoles,
+  announcedEnablement,
   classifyLiveStartFailure,
   describeSequenceParameterSet,
   appendedLines,
@@ -277,6 +279,56 @@ describe('observed live conditions', () => {
     expect(appendedLines(mark)).toHaveLength(2);
     expect(conditionCodes(appendedLines(mark))).toEqual(new Set(['camera-live-session-refused']));
     expect(logMark(undefined)).toBeUndefined();
+  });
+
+  it('will not name the path that ended a session from a section that does not carry the ending', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'live-harness-announce-')), 'plugin.jsonl');
+    writeFileSync(file, `${JSON.stringify({ event: 'camera-enabled-changed', announcedBy: 'write' })}\n`);
+    const mark = logMark(file);
+
+    expect(announcedEnablement(mark, 'disabled-mid-session')).toBeUndefined();
+
+    appendFileSync(
+      file,
+      '[9/1/2026, 8:10:06 AM] [HomebridgeEufy] not a bare record\n' +
+        `${JSON.stringify({ scope: 'homekit', event: 'live-session-streaming' })}\n` +
+        `${JSON.stringify({ code: 'camera-live-session-refused', active: false, reason: 'disabled-mid-session' })}\n`,
+    );
+    expect(announcedEnablement(mark, 'disabled-mid-session')).toBeUndefined();
+
+    appendFileSync(
+      file,
+      `${JSON.stringify({ code: 'camera-live-session-refused', active: true, reason: 'disabled-mid-session' })}\n`,
+    );
+    expect(announcedEnablement(mark, 'disabled-mid-session')).toEqual([]);
+
+    appendFileSync(
+      file,
+      `${JSON.stringify({ adapter: 'camera.streaming', event: 'camera-enabled-changed', announcedBy: 'poll' })}\n` +
+        `${JSON.stringify({ event: 'camera-enabled-changed', announcedBy: 'poll' })}\n`,
+    );
+    expect(announcedEnablement(mark, 'disabled-mid-session')).toEqual([
+      { adapter: 'camera.streaming', announcedBy: 'poll' },
+    ]);
+  });
+
+  it('separates the conditions of a run by reason, not only by code', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'live-harness-reason-')), 'plugin.jsonl');
+    writeFileSync(
+      file,
+      `${JSON.stringify({ code: 'camera-live-session-refused', active: true, reason: 'disabled-mid-session' })}\n`,
+    );
+
+    const mark = logMark(file);
+    appendFileSync(
+      file,
+      `${JSON.stringify({ code: 'camera-live-session-refused', active: true, reason: 'disabled' })}\n` +
+        `${JSON.stringify({ code: 'camera-live-session-failed', active: false, reason: 'recovered' })}\n` +
+        `${JSON.stringify({ code: 'camera-live-session-refused', active: true })}\n` +
+        'not a record at all\n',
+    );
+
+    expect(raisedConditions(mark)).toEqual([{ code: 'camera-live-session-refused', reason: 'disabled' }]);
   });
 
   it('reads the presented disabled state from the accessory, distinguishing published from unpublished', async () => {

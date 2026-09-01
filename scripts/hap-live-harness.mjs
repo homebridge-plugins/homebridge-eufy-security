@@ -488,6 +488,49 @@ export function conditionCodes(lines) {
 }
 
 /**
+ * The `{ code, reason }` pairs of the conditions a run raised, in the order the plugin recorded them.
+ *
+ * A code alone does not identify what happened, because one code carries several reasons and a run that
+ * exercises more than one of them cannot be judged by the code it shares. Withdrawals are excluded: an
+ * `active: false` record says a condition ended, and counting it as an occurrence would read a recovery as
+ * the fault. Reads the plugin's own JSONL log rather than the Homebridge instance log, whose lines carry a
+ * timestamp and plugin prefix and are therefore not records.
+ */
+export function raisedConditions(mark) {
+  return appendedJsonRecords(mark)
+    .filter((record) => record.active === true && typeof record.code === 'string' && typeof record.reason === 'string')
+    .map((record) => ({ code: record.code, reason: record.reason }));
+}
+
+/** The trace each camera bundle records for one observed enablement change, whichever path announced it. */
+const ENABLEMENT_CHANGED_TRACE = 'camera-enabled-changed';
+
+/**
+ * Which paths announced a camera enablement change, or nothing when the marked section cannot answer it.
+ *
+ * A host learns a change either from an announcement or from the plugin's own supervision read, and the two
+ * produce the same delay, so the only honest way to name one is to read the records. The hazard is the
+ * negative answer: an empty result would credit the supervision read, and a section that is empty because it
+ * was marked on a rotated file, on the wrong path, or before the change would produce exactly that. So the
+ * caller names the condition the gate records when it acts, and a section that does not carry it is one that
+ * demonstrably does not cover the termination and answers `undefined` rather than guessing which path acted.
+ */
+export function announcedEnablement(mark, actedReason) {
+  const records = appendedJsonRecords(mark);
+  if (!records.some((record) => record.active === true && record.reason === actedReason)) {
+    return undefined;
+  }
+  return records
+    .filter(
+      (record) =>
+        record.event === ENABLEMENT_CHANGED_TRACE &&
+        typeof record.adapter === 'string' &&
+        typeof record.announcedBy === 'string',
+    )
+    .map((record) => ({ adapter: record.adapter, announcedBy: record.announcedBy }));
+}
+
+/**
  * Whether an image is a structurally complete JPEG: a start-of-image marker and an end-of-image marker.
  * Enough to tell a served or retained image from a truncated one without decoding it.
  */

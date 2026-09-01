@@ -23,9 +23,18 @@
  *      delay before each is measured rather than assumed.
  *
  * The detection delay is a property of how the change reaches the plugin, not of the gate: this run's write
- * is issued by a second SDK client, so the plugin learns it from its own cloud poll or from the supervision
- * read rather than from the change event a write of its own would announce. The delay is measured; no bound
- * is asserted, because the bound belongs to whatever the measurement shows.
+ * is issued by a second SDK client, so the plugin learns it either from the SDK's generic property
+ * announcement or from its own supervision read, never from the write confirmation a write of its own would
+ * announce. Which of the two acted is printed rather than asserted, because either satisfies the gate and
+ * the measured delay cannot tell them apart. The delay is measured; no bound is asserted, because the bound
+ * belongs to whatever the measurement shows.
+ *
+ * `--instance-log` and `--jsonl` are read for different facts and neither substitutes for the other. The
+ * Homebridge instance log carries one printed `[code]` line per condition, which is what proves a gate acted
+ * and that no media failure did. The reason behind a code, and the announcement trace that names the path,
+ * exist only as records in the plugin's own JSONL log, because an instance-log line is prefixed with a
+ * timestamp and is therefore not a record. Without `--jsonl` this run cannot separate the mid-session gate
+ * from the `SetupEndpoints` refusal that follows it, and says so rather than passing on the shared code.
  *
  * DEVICE WRITE. Unlike every other live script here, this one turns a real camera off and on again
  * through the typed SDK, so it needs explicit maintainer approval and a camera named by serial. It always
@@ -42,7 +51,8 @@
  *     --device-id AA:BB:CC:DD:EE:FF --address 127.0.0.1 --port 51955 --pin 000-00-000 \
  *     --serial T8400XXXXXXXXXXX --eufy-storage /tmp/hb-check/homebridge-eufy \
  *     [--seconds 15] [--detect-timeout 180] [--admit-timeout 180] [--homebridge-pid 12345] \
- *     [--instance-log /tmp/hb-check/instance.log]
+ *     [--instance-log /tmp/hb-check/instance.log] \
+ *     [--jsonl /tmp/hb-check/homebridge-eufy/logs/homebridge-eufy.jsonl]
  *
  * It prints a model and the last four characters of the serial it was given, never a full serial, name,
  * address, image, or log line, and it removes its own pairing before exiting.
@@ -61,6 +71,7 @@ import {
   adaptationProcesses,
   adaptationProcessRoles,
   advertisedVideo,
+  announcedEnablement,
   appendedLines,
   conditionCodes,
   hasBattery,
@@ -70,6 +81,7 @@ import {
   observations,
   cameraEnabled,
   options,
+  raisedConditions,
   refuseUnadvertised,
   reportAdvertisedVideo,
   required,
@@ -85,6 +97,7 @@ const STATUS_POLL_INTERVAL_MS = 1_000;
 const ADMISSION_POLL_INTERVAL_MS = 5_000;
 const REFUSAL_CONDITION = 'camera-live-session-refused';
 const FAILURE_CONDITION = 'camera-live-session-failed';
+const MID_SESSION_REASON = 'disabled-mid-session';
 
 const parsed = options(process.argv.slice(2));
 const address = required(parsed, 'address');
@@ -126,18 +139,62 @@ function observeAdaptation(label, { video, audio }) {
 }
 
 /**
- * Judges the conditions the plugin recorded for this run by code alone. The refusal code proves the gate
- * acted; the absence of the media failure code proves the session was not simply starved of frames.
+ * Judges the conditions the plugin recorded for this run. The refusal code proves a gate acted at all and
+ * the absence of the media failure code proves the session was not simply starved of frames; both are read
+ * from the instance log's printed condition lines, so a host without the plugin's JSONL log still answers
+ * them.
+ *
+ * Which gate acted needs the reason rather than the code, and the reason is only in the JSONL records:
+ * this run legitimately refuses twice under one code, once mid-session and once at the `SetupEndpoints`
+ * that follows, so a code-only judgement passes on the second even when the mid-session gate never fired,
+ * which is the single claim this run exists to establish. Required exactly once, because a second would
+ * mean the supervision read kept firing at sessions it had already ended.
  */
-function judgeConditions(mark) {
-  if (!mark) {
+function judgeConditions(instanceMark, pluginMark) {
+  if (instanceMark) {
+    const codes = conditionCodes(appendedLines(instanceMark));
+    console.log(`instance-log conditions=[${[...codes].join(',')}]`);
+    check(codes.has(REFUSAL_CONDITION), `the plugin recorded ${REFUSAL_CONDITION} for the disabled camera`);
+    check(!codes.has(FAILURE_CONDITION), `the plugin recorded no ${FAILURE_CONDITION}, so the gate ended the session`);
+  } else {
     results.unverified(`instance-log=not-observed (pass --instance-log to verify ${REFUSAL_CONDITION})`);
+  }
+  if (!pluginMark) {
+    results.unverified(`condition reasons=not-observed (pass --jsonl to verify ${MID_SESSION_REASON})`);
     return;
   }
-  const codes = conditionCodes(appendedLines(mark));
-  console.log(`instance-log conditions=[${[...codes].join(',')}]`);
-  check(codes.has(REFUSAL_CONDITION), `the plugin recorded ${REFUSAL_CONDITION} for the disabled camera`);
-  check(!codes.has(FAILURE_CONDITION), `the plugin recorded no ${FAILURE_CONDITION}, so the gate ended the session`);
+  const conditions = raisedConditions(pluginMark);
+  console.log(`plugin-log reasons=[${conditions.map(({ code, reason }) => `${code}:${reason}`).join(',')}]`);
+  check(
+    conditions.filter(({ code, reason }) => code === REFUSAL_CONDITION && reason === MID_SESSION_REASON).length === 1,
+    `the plugin recorded ${MID_SESSION_REASON} exactly once, so the mid-session gate ended the session`,
+  );
+}
+
+/**
+ * Which inbound path the plugin learned the change on, recorded rather than required.
+ *
+ * The plugin ends the session both from an announced change and from its own supervision read, and the
+ * measured delay alone cannot tell them apart. This run's write is issued by a second SDK client, so an
+ * announcement here is the SDK's generic property announcement (`poll`) rather than the write confirmation
+ * (`write`) a write of the plugin's own would produce, and a section that carries the refusal but no
+ * announcement is one the supervision read ended. Anchored on that refusal so a log this run never read
+ * cannot be mistaken for one in which nothing was announced, and read while only the power-off change has
+ * been announced, because the power-on later in this run announces on the same trace.
+ */
+function reportEnablementPath(mark) {
+  const announced = mark ? announcedEnablement(mark, MID_SESSION_REASON) : undefined;
+  if (announced === undefined) {
+    results.unverified(
+      `enablement change path=not-observed (needs a --jsonl section carrying ${MID_SESSION_REASON} to name the path that acted)`,
+    );
+    return;
+  }
+  console.log(
+    announced.length === 0
+      ? 'enablement change announced=none, so the supervision read is what ended the session'
+      : `enablement change announced=[${announced.map(({ adapter, announcedBy }) => `${adapter}/${announcedBy}`).join(',')}]`,
+  );
 }
 
 /**
@@ -173,6 +230,7 @@ console.log('paired one temporary controller');
 
 const sessions = [];
 const instanceLog = logMark(parsed.get('instance-log'));
+const pluginLog = logMark(parsed.get('jsonl'));
 try {
   const { accessories } = await client.getAccessories();
   const accessory = selectCameras(accessories, { serial })[0];
@@ -224,6 +282,7 @@ try {
   );
   const detectedMs = Date.now() - disabledAt;
   check(ended !== undefined, `the plugin ended the session within ${detectTimeoutMs / 1_000}s of the camera going off`);
+  reportEnablementPath(pluginLog);
   if (ended !== undefined) {
     console.log(`session ended ${detectedMs}ms after the power-off command was acknowledged`);
     const stopped = streaming.measured.report;
@@ -308,7 +367,7 @@ try {
     observeAdaptation('after-end', { video: 0, audio: 0 });
   }
 
-  judgeConditions(instanceLog);
+  judgeConditions(instanceLog, pluginLog);
 } finally {
   for (const session of sessions) {
     session.close();

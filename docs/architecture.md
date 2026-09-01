@@ -382,14 +382,29 @@ SDK's warm-up deadline is twenty, so the race that produces it is not reachable 
 The freshness this rests on is now measured rather than assumed, and it changed: a write is acknowledged
 before it converges, the reading follows within about half a second, and the SDK emits its change event once
 per landed write ([eufy-sdk#79](https://github.com/mega-yfue/eufy-sdk/pull/79)). End to end on a wired
-camera, with the switch thrown by a second SDK client so nothing was announced to the plugin: the streaming
-session ended 12.6 s after the power-off was acknowledged, the accessory presented the camera as disabled
-17.7 s after it, a later setup was refused with HAP's `ERROR` status while snapshots stayed reachable, and a
-session was admitted again 11.6 s after power-on with the presented state following. The mid-session half was
-formerly gated on [eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) and its qualification,
+camera, with the switch thrown by a second SDK client: the streaming session ended 12.6 s after the power-off
+was acknowledged, the accessory presented the camera as disabled 17.7 s after it, a later setup was refused
+with HAP's `ERROR` status while snapshots stayed reachable, and a session was admitted again 11.6 s after
+power-on with the presented state following. The mid-session half was formerly gated on
+[eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47) and its qualification,
 [#1043](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1043), now passes end to end.
 What no controller can observe is what Apple Home renders from the presented state, which stays a human
 check.
+
+Which of the two mechanisms ends that session is now read off the run rather than inferred from the delay.
+A write issued by another client cannot reach this plugin as the write confirmation, so the supervision read
+looked like the only candidate — but the SDK announces a change on any inbound path it applies, including the
+read-through re-read, and two later qualifications measured that announcement arriving on both camera bundles
+and ending the session 10.6 s and 10.7 s after the acknowledged write, with the stream management service back
+to available and no adaptation process, `disabled-mid-session` recorded exactly once and no session failure
+beside it, presentation at 15.6 s, and readmission 16.5 s after power-on. The supervision read is therefore
+the backstop rather than the mechanism. The delay belongs to the SDK's freshness window rather than to either:
+a third run minutes apart ended at 5.5 s, all of them inside one window. Two upstream changes are required
+together, and naming only the first credits the wrong one — the device-list fallback in
+[eufy-sdk#47](https://github.com/mega-yfue/eufy-sdk/issues/47), without which the re-read landed the same
+value forever, and the generic property announcement the same re-read now emits, without which a landed value
+still had to be waited for. The distinction is worth measuring because both paths satisfy the gate and produce
+the same delay, so a run reporting only the delay credits whichever one the reader already believed.
 
 One reading is still acted on directly, deliberately. The upstream advice is not to treat a single stale
 reading as authority for withdrawing a camera, and the reading can lag: a write made elsewhere is confirmed

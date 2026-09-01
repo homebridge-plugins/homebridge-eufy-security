@@ -36,6 +36,7 @@ import {
   hasBattery,
   logMark,
   options,
+  raisedConditions,
   refuseUnadvertised,
   required,
   selectCameras,
@@ -74,11 +75,8 @@ function positiveInteger(value, option) {
 }
 
 function diagnosticReason(mark) {
-  return appendedJsonRecords(mark).findLast(
-    (record) =>
-      record.active === true &&
-      ['camera-live-session-failed', 'camera-live-session-refused'].includes(record.code) &&
-      typeof record.reason === 'string',
+  return raisedConditions(mark).findLast(({ code }) =>
+    ['camera-live-session-failed', 'camera-live-session-refused'].includes(code),
   )?.reason;
 }
 
