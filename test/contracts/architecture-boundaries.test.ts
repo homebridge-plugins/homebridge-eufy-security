@@ -88,18 +88,25 @@ describe('source architecture', () => {
   const files = sourceFiles(sourceRoot);
 
   /**
-   * `CODING_STANDARDS.md` holds the rules and `AGENTS.md` is a symlink to it.
+   * `CODING_STANDARDS.md` holds the rules, and every name a coding tool looks for is a symlink to it.
    *
-   * One file rather than two copies, so the rules an AI coding tool loads under the name it looks for cannot
-   * differ from the rules a contributor reads.
+   * One file rather than copies, so the rules a tool loads under the name it searches for cannot differ from
+   * the rules a contributor reads. Each entry is the exact link target, so a copy committed over one of them
+   * fails here rather than drifting.
    */
   it('serves human and agent coding rules from one file', () => {
     expect(lstatSync(resolve(repository, 'CODING_STANDARDS.md')).isFile()).toBe(true);
-    expect(lstatSync(resolve(repository, 'AGENTS.md')).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(resolve(repository, 'AGENTS.md'))).toBe('CODING_STANDARDS.md');
-    expect(readFileSync(resolve(repository, 'AGENTS.md'), 'utf8')).toBe(
-      readFileSync(resolve(repository, 'CODING_STANDARDS.md'), 'utf8'),
-    );
+    const rules = readFileSync(resolve(repository, 'CODING_STANDARDS.md'), 'utf8');
+
+    for (const [name, target] of [
+      ['AGENTS.md', 'CODING_STANDARDS.md'],
+      ['CLAUDE.md', 'CODING_STANDARDS.md'],
+      ['.claude/CLAUDE.md', '../CODING_STANDARDS.md'],
+    ] as const) {
+      expect(lstatSync(resolve(repository, name)).isSymbolicLink(), name).toBe(true);
+      expect(readlinkSync(resolve(repository, name)), name).toBe(target);
+      expect(readFileSync(resolve(repository, name), 'utf8'), name).toBe(rules);
+    }
   });
 
   it('keeps a closed set of domain modules without generic sharing buckets', () => {

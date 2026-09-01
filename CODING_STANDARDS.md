@@ -239,3 +239,8 @@ Use the canonical labels `needs-triage`, `needs-info`, `ready-for-agent`, `ready
 ### Domain docs
 
 This is a single-context repository using root `CONTEXT.md`.
+
+### Stale bundled skills
+
+The skills under `.claude/skills/` predate V5 and may assume V4 behaviour or `eufy-security-client`
+APIs. This file and `CONTEXT.md` are authoritative wherever they conflict.
