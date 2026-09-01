@@ -8,7 +8,7 @@ import {
   publicEncrypt,
   randomBytes,
 } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -399,7 +399,7 @@ describe('guided diagnostics session', () => {
     try {
       const review = await diagnostics.reviewSupportArchive();
       expect(review.manifest).toMatchObject({
-        version: 1,
+        version: 2,
         profile: 'startup-authentication',
         reproductionMode: 'now',
       });
@@ -422,7 +422,7 @@ describe('guided diagnostics session', () => {
       );
       expect(
         JSON.parse(readFileSync(join(archivePath.replace(/\.eufysupport\.gz$/, ''), 'manifest.json'), 'utf8')),
-      ).toMatchObject({ version: 1, reproductionMode: 'now' });
+      ).toMatchObject({ version: 2, reproductionMode: 'now' });
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -661,7 +661,7 @@ describe('guided diagnostics session', () => {
 
       const review = await diagnostics.reviewSupportArchive();
       expect(review.manifest).toMatchObject({
-        version: 1,
+        version: 2,
         archiveFormat: 'homebridge-eufy-support-archive',
         keyId: 'test-support-key',
         profile: 'control-state',
@@ -741,7 +741,11 @@ describe('guided diagnostics session', () => {
       const legacyPayload = JSON.parse(JSON.stringify(payload)) as {
         manifest: Record<string, unknown>;
       } & Record<string, unknown>;
+      // A genuine version-1 manifest: no reproduction mode, and none of the coverage facts version 2 added.
+      legacyPayload.manifest.version = 1;
       delete legacyPayload.manifest.reproductionMode;
+      delete legacyPayload.manifest.coversReproduction;
+      delete legacyPayload.manifest.retainedFrom;
       const legacyArchivePath = join(legacyDirectory, exported.filename);
       const legacyKeyPath = join(legacyDirectory, 'test-private.pem');
       writeFileSync(legacyArchivePath, encryptSupportPayload(legacyPayload, publicKey, 'test-support-key'), {
@@ -773,6 +777,116 @@ describe('guided diagnostics session', () => {
       await expect(invalidKeyDiagnostics.exportSupportArchive(invalidKeyReview.reviewId)).rejects.toThrow(
         'key integrity',
       );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  /**
+   * Whether the retained evidence still reaches back to the fault the reproduction marked.
+   *
+   * The reproduction interval is unbounded and the evidence budget is not, and the read fills that budget
+   * newest-first — so exhausting it drops the OLDEST end, which is where the fault a session was opened for
+   * is. Every class still reports `included`, because a class is judged on having been observed rather than on
+   * still being carried, and a maintainer opening the archive concludes the fault left no trace.
+   */
+  it('reports that the retained window no longer reaches the reproduction it was opened for', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-coverage-'));
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    const fingerprint = createHash('sha256').update(publicKey.trim()).digest('hex');
+    const startedAt = Date.parse('2026-08-30T12:00:00.000Z');
+    let now = startedAt;
+    const diagnostics = new GuidedDiagnostics(root, () => now, {
+      keyId: 'coverage-key',
+      publicKey,
+      sha256: fingerprint,
+    });
+
+    try {
+      await diagnostics.authorize('startup-authentication', 'now');
+      await diagnostics.startReproduction();
+
+      // One record per second from the reproduction's start, past the archive's byte budget.
+      const line = (at: number) =>
+        JSON.stringify({
+          scope: 'sdk',
+          level: 'debug',
+          subsystem: 'p2p',
+          event: 'sdk-diagnostic',
+          timestamp: new Date(at).toISOString(),
+        });
+      const bytesPerLine = Buffer.byteLength(line(startedAt)) + 1;
+      const lines = Math.ceil((17 * 1024 * 1024) / bytesPerLine);
+      mkdirSync(join(root, 'logs'), { mode: 0o700, recursive: true });
+      writeFileSync(
+        join(root, 'logs', 'homebridge-eufy.jsonl'),
+        `${Array.from({ length: lines }, (_, index) => line(startedAt + index * 1_000)).join('\n')}\n`,
+        { mode: 0o600 },
+      );
+
+      now = startedAt + lines * 1_000;
+      await diagnostics.endReproduction();
+      const review = await diagnostics.reviewSupportArchive();
+
+      const sdk = review.manifest.evidence.find(({ evidence }) => evidence === 'sdk-log');
+      expect(sdk).toMatchObject({ status: 'included', truncated: true });
+      expect(review.manifest.version).toBe(2);
+      expect(review.manifest.retainedFrom).toEqual(expect.any(String));
+      expect(Date.parse(review.manifest.retainedFrom!)).toBeGreaterThan(
+        Date.parse(review.manifest.reproductionStartedAt),
+      );
+      expect(review.manifest.coversReproduction).toBe(false);
+
+      // The maintainer reading the archive is told, rather than left to compare two timestamps themselves.
+      const exported = await diagnostics.exportSupportArchive(review.reviewId);
+      const archivePath = join(root, exported.filename);
+      const keyPath = join(root, 'private.pem');
+      writeFileSync(archivePath, exported.archive, { mode: 0o600 });
+      writeFileSync(keyPath, privateKey, { mode: 0o600 });
+      const run = spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL('../../scripts/decrypt-diagnostics.mjs', import.meta.url)), archivePath, keyPath],
+        { encoding: 'utf8', env: { ...process.env, HOMEBRIDGE_EUFY_SUPPORT_KEY_SHA256: fingerprint } },
+      );
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('Authenticated V5 support archive');
+      expect(run.stderr).toContain(`evidence older than ${review.manifest.retainedFrom} was dropped`);
+      expect(run.stderr).toContain('nothing here covers the reproduction');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  }, 30_000);
+
+  /**
+   * A window that fits its budget covers the reproduction, and says so rather than staying silent.
+   */
+  it('reports full coverage where nothing was dropped, quiet minutes not being a gap', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-coverage-ok-'));
+    let now = Date.parse('2026-08-30T12:00:00.000Z');
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+
+    try {
+      await diagnostics.authorize('startup-authentication', 'now');
+      await diagnostics.startReproduction();
+      const logger = createDiagnosticLogger(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        root,
+        undefined,
+        () => now,
+      );
+      now += 60_000;
+      reportRuntimeNotice(logger, 'status-publication-failed');
+      await logger.flush?.();
+      now += 60_000;
+      await diagnostics.endReproduction();
+
+      const review = await diagnostics.reviewSupportArchive();
+      expect(review.manifest.coversReproduction).toBe(true);
+      expect(review.manifest.retainedFrom).toBeUndefined();
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

@@ -213,14 +213,31 @@ function validatePayload(payload, envelope, archivePath) {
   const reproductionStartedAt = Date.parse(manifest.reproductionStartedAt);
   const reproductionEndedAt = Date.parse(manifest.reproductionEndedAt);
   const manifestFields = Object.keys(manifest).sort().join(',');
+  // Version 2 states whether the retained evidence still reaches the start of the reproduction, so it carries
+  // `coversReproduction` always and `retainedFrom` only where truncation dropped the oldest end. Version 1 is
+  // still read: an archive already exported cannot be re-made.
+  const coverageManifestFields =
+    'archiveExpiresAt,archiveFormat,coversReproduction,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,supportCaseId,version';
+  const truncatedCoverageManifestFields =
+    'archiveExpiresAt,archiveFormat,coversReproduction,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,retainedFrom,supportCaseId,version';
   const currentManifestFields =
     'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,supportCaseId,version';
   const legacyManifestFields =
     'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionStartedAt,supportCaseId,version';
+  const expectedFields = {
+    2: [coverageManifestFields, truncatedCoverageManifestFields],
+    1: [currentManifestFields, legacyManifestFields],
+  }[manifest.version];
+  const retainedFrom = manifest.retainedFrom === undefined ? undefined : Date.parse(manifest.retainedFrom);
   const reproductionMode = manifestFields === legacyManifestFields ? 'now' : manifest.reproductionMode;
   if (
-    (manifestFields !== currentManifestFields && manifestFields !== legacyManifestFields) ||
-    manifest.version !== 1 ||
+    expectedFields === undefined ||
+    !expectedFields.includes(manifestFields) ||
+    (manifest.version === 2 && typeof manifest.coversReproduction !== 'boolean') ||
+    (manifest.retainedFrom !== undefined &&
+      (!Number.isFinite(retainedFrom) || new Date(retainedFrom).toISOString() !== manifest.retainedFrom)) ||
+    (manifest.version === 2 &&
+      manifest.coversReproduction !== (retainedFrom === undefined || retainedFrom <= reproductionStartedAt)) ||
     manifest.archiveFormat !== envelope.format ||
     manifest.keyId !== envelope.keyId ||
     !supportCasePattern.test(manifest.supportCaseId) ||
@@ -323,6 +340,15 @@ function validatePayload(payload, envelope, archivePath) {
     throw new Error('Manifest declares evidence that is absent from the payload');
   }
   if (expiresAt <= Date.now()) console.warn(`WARNING: support archive expired at ${manifest.archiveExpiresAt}`);
+  // The reproduction interval is unbounded and the evidence budget is not, and the budget is filled
+  // newest-first — so an interval left open longer than the budget can hold loses its OLDEST end, which is
+  // where the reported fault is. Every evidence class still reads `included`, so without this the archive
+  // looks complete and the fault looks like it left no trace.
+  if (manifest.coversReproduction === false) {
+    console.warn(
+      `WARNING: evidence older than ${manifest.retainedFrom} was dropped, so nothing here covers the reproduction from ${manifest.reproductionStartedAt}. Ask for a shorter reproduction.`,
+    );
+  }
   return { manifest: { ...manifest, reproductionMode }, extracted };
 }
 

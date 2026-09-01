@@ -428,10 +428,13 @@ async function renderUi(
             reviewId: 'review-synthetic',
             manifest: {
               archiveFormat: 'synthetic',
-              version: 1,
+              version: 2,
               keyId: 'synthetic-key',
               reproductionMode: diagnosticsReproductionMode,
               archiveExpiresAt: '2026-08-20T10:18:42.832Z',
+              reproductionStartedAt: '2026-08-19T09:00:00.000Z',
+              retainedFrom: '2026-08-19T10:00:00.000Z',
+              coversReproduction: false,
               evidence: [
                 {
                   evidence: 'plugin-log',
@@ -921,6 +924,7 @@ describe('packed plugin', () => {
         'diagnosticOnly',
         'diagnosticsAuthorized',
         'diagnosticsAuthorize',
+        'diagnosticsArchiveCoverageGap',
         'diagnosticsArchiveExcluded',
         'diagnosticsArchiveExpires',
         'diagnosticsArchiveFields',
@@ -1398,10 +1402,12 @@ describe('packed plugin', () => {
         children?: Array<{ textContent: string }>;
         textContent: string;
       }>;
-      expect(manifestChildren[0].textContent).toContain('synthetic v1');
+      expect(manifestChildren[0].textContent).toContain('synthetic v2');
       expect(manifestChildren[1].children?.[0].textContent).toContain('plugin-log · diagnostic · included');
       expect(manifestChildren[1].children?.[0].textContent).toContain('event: diagnostic');
       expect(manifestChildren[2].textContent).toContain('credentials-and-authentication');
+      // The reader is warned that the archive does not reach the fault, before they confirm the export.
+      expect(manifestChildren[3].textContent).toContain('does not reach the start of the reproduction');
       completedDiagnosticsUi.diagnosticsReviewConfirm.checked = true;
       await completedDiagnosticsUi.diagnosticsReviewConfirm.dispatch('change');
       expect(completedDiagnosticsUi.diagnosticsExport.disabled).toBe(false);

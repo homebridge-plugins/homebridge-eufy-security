@@ -335,6 +335,14 @@ function renderArchiveManifest(manifest) {
   const exclusions = document.createElement('p');
   exclusions.textContent = `${messages.diagnosticsArchiveExcluded ?? ''} ${(manifest.excludedClasses ?? []).join(', ')}`;
   diagnosticsManifest.append(summary, evidence, exclusions);
+  if (manifest.coversReproduction === false) {
+    const gap = document.createElement('p');
+    gap.textContent = (messages.diagnosticsArchiveCoverageGap ?? '').replace(
+      '{retainedFrom}',
+      new Date(manifest.retainedFrom).toLocaleString(shell.lang || 'en'),
+    );
+    diagnosticsManifest.append(gap);
+  }
   diagnosticsManifest.hidden = false;
 }
 

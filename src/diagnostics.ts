@@ -190,7 +190,7 @@ export type DiagnosticsUiEvent =
 export type DiagnosticEvidence = 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log' | 'ui-log';
 
 export interface SupportArchiveManifest {
-  version: 1;
+  version: 2;
   archiveFormat: 'homebridge-eufy-support-archive';
   keyId: string;
   supportCaseId: string;
@@ -200,6 +200,19 @@ export interface SupportArchiveManifest {
   archiveExpiresAt: string;
   reproductionStartedAt: string;
   reproductionEndedAt: string;
+  /**
+   * The oldest record the byte budget left room for, present only where it dropped older ones.
+   *
+   * The read fills the budget newest-first, so what it drops is the oldest end of the interval.
+   */
+  retainedFrom?: string;
+  /**
+   * Whether the retained evidence still reaches the start of the reproduction interval.
+   *
+   * False only where truncation moved the oldest retained record past {@link reproductionStartedAt}. An
+   * interval whose early minutes were simply quiet is covered: nothing was dropped, so nothing is absent.
+   */
+  coversReproduction: boolean;
   evidence: readonly {
     evidence: DiagnosticEvidence | 'environment' | 'reproduction-markers';
     privacyClass: 'diagnostic' | 'operational';
@@ -620,11 +633,11 @@ export class GuidedDiagnostics {
     if (!session?.reproductionStartedAt || !session.reproductionEndedAt) {
       throw new Error('A completed reproduction is required before archive review');
     }
-    const collected = await this.collectSupportEvidence(session);
+    const { evidence: collected, retainedFrom } = await this.collectSupportEvidence(session);
     const selected = DIAGNOSTICS_PROFILES[session.profile];
     const createdAt = this.now();
     const manifest: SupportArchiveManifest = {
-      version: 1,
+      version: 2,
       archiveFormat: 'homebridge-eufy-support-archive',
       keyId: this.supportArchiveKey.keyId,
       supportCaseId: session.supportCaseId,
@@ -634,6 +647,9 @@ export class GuidedDiagnostics {
       archiveExpiresAt: new Date(createdAt + SUPPORT_ARCHIVE_RETENTION_MS).toISOString(),
       reproductionStartedAt: session.reproductionStartedAt,
       reproductionEndedAt: session.reproductionEndedAt,
+      ...(retainedFrom === undefined ? {} : { retainedFrom }),
+      coversReproduction:
+        retainedFrom === undefined || Date.parse(retainedFrom) <= Date.parse(session.reproductionStartedAt),
       evidence: [
         ...collected.map(({ evidence, privacyClass, contentType, content, truncated, fields }) => ({
           evidence,
@@ -717,7 +733,9 @@ export class GuidedDiagnostics {
     }
   }
 
-  private async collectSupportEvidence(session: PersistedDiagnosticsSession): Promise<SupportArchiveEvidence[]> {
+  private async collectSupportEvidence(
+    session: PersistedDiagnosticsSession,
+  ): Promise<{ evidence: SupportArchiveEvidence[]; retainedFrom?: string }> {
     const ffmpeg = readFfmpegEnvironment(this.storageRoot);
     const evidence: SupportArchiveEvidence[] = [
       {
@@ -797,7 +815,11 @@ export class GuidedDiagnostics {
         });
       }
     }
-    return evidence;
+    const oldest = log.records.find((record) => typeof record.timestamp === 'string')?.timestamp;
+    return {
+      evidence,
+      ...(log.truncated && typeof oldest === 'string' ? { retainedFrom: oldest } : {}),
+    };
   }
 
   private async readUiEvents(session: PersistedDiagnosticsSession): Promise<string> {
