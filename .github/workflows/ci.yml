@@ -4,9 +4,18 @@ on:
   push:
     branches:
       - beta-5.0.0
+  pull_request:
+    branches:
+      - beta-5.0.0
 
 permissions:
   contents: read
+
+# A force-push to a pull request supersedes the run already in flight, and only the newest head is a
+# result anyone acts on.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -25,6 +34,19 @@ jobs:
         run: |
           npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           printf '\n@mega-yfue:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}\n' >> "$npmrc"
+
+      # The SDK is a private package, and a pull request from a fork is not given repository secrets. The
+      # install would then fail as ENEEDAUTH several lines into npm's output, which reads as a broken
+      # workflow rather than as the one thing it is. This names it instead.
+      - name: Ensure the SDK registry can be read
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GITHUB_TOKEN}" ]; then
+            echo "::error::No GitHub Packages token in scope, so @mega-yfue/eufy-sdk cannot be installed. A pull request from a fork cannot run this gate until the SDK is published publicly; push the branch to this repository instead."
+            exit 1
+          fi
 
       - name: Install dependencies
         env:
