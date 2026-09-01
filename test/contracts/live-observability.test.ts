@@ -1,6 +1,16 @@
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { createSdkLogger, reportAdaptationNotice, reportHomeKitEvent } from '../../src/diagnostics.js';
+import {
+  createDiagnosticLogger,
+  createSdkLogger,
+  GuidedDiagnostics,
+  reportAdaptationNotice,
+  reportHomeKitEvent,
+} from '../../src/diagnostics.js';
 
 /**
  * The two facts a stream nobody can see is diagnosed from.
@@ -227,5 +237,110 @@ describe('a request refused before the source', () => {
     } as never);
 
     expect(debug).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What a live record says once the file sink has retained it, rather than what its reporter emitted.
+ *
+ * The reporter and the sink each rebuild the record from an allowlist, so a spy on the reporter cannot show
+ * what the log a support archive is assembled from actually holds.
+ */
+describe('a live record that reached the support archive', () => {
+  /**
+   * Drives the production logger over an authorized live-media window and returns what the log file holds.
+   *
+   * The retained `timestamp` is dropped so the remaining keys can be compared exactly rather than as a subset.
+   */
+  const retained = async (record: Readonly<Record<string, unknown>>) => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-live-retained-'));
+    await new GuidedDiagnostics(root).authorize('live-media', 'now');
+    const logger = createDiagnosticLogger({ debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() }, root);
+    if ('scope' in record) {
+      logger.debug?.(JSON.stringify(record));
+    } else {
+      reportHomeKitEvent(logger, record as Parameters<typeof reportHomeKitEvent>[1]);
+    }
+    await logger.flush?.();
+    const path = join(root, 'logs', 'homebridge-eufy.jsonl');
+    if (!existsSync(path)) {
+      return [];
+    }
+    return readFileSync(path, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const { timestamp, ...rest } = JSON.parse(line) as Record<string, unknown>;
+        expect(timestamp).toEqual(expect.any(String));
+        return rest;
+      });
+  };
+
+  it('keeps a request refused before the source, the badge an operator saw having no other counterpart', async () => {
+    await expect(
+      retained({ adapter: 'camera.streaming', event: 'live-request-refused', reason: 'at-capacity' }),
+    ).resolves.toEqual([
+      {
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'live-request-refused',
+        reason: 'at-capacity',
+      },
+    ]);
+  });
+
+  it('keeps a request that reached no outcome, with the wait that is all it carries', async () => {
+    await expect(
+      retained({ adapter: 'camera.streaming', event: 'live-request-unaccounted', afterMs: 30_000 }),
+    ).resolves.toEqual([
+      {
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'live-request-unaccounted',
+        afterMs: 30_000,
+      },
+    ]);
+  });
+
+  it('keeps a session that reached the negotiated output', async () => {
+    await expect(retained({ adapter: 'camera.streaming', event: 'live-session-streaming' })).resolves.toEqual([
+      { scope: 'homekit', level: 'debug', adapter: 'camera.streaming', event: 'live-session-streaming' },
+    ]);
+  });
+
+  it('keeps the geometry a camera-native camera negotiated, which is the shape the fault is about', async () => {
+    await expect(
+      retained({
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'high',
+        level: '4.0',
+        width: 1600,
+        height: 1200,
+        fps: 30,
+      }),
+    ).resolves.toEqual([
+      {
+        scope: 'homekit',
+        level: 'debug',
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'high',
+        levelName: '4.0',
+        width: 1600,
+        height: 1200,
+        fps: 30,
+      },
+    ]);
+  });
+
+  it('refuses a HomeKit event name arriving under the SDK scope, the two vocabularies being separate', async () => {
+    await expect(
+      retained({ scope: 'sdk', level: 'debug', subsystem: 'p2p', event: 'live-request-refused' }),
+    ).resolves.toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -87,9 +87,18 @@ function isHomeKitMediaContractReference(source: string, target: string, referen
 describe('source architecture', () => {
   const files = sourceFiles(sourceRoot);
 
-  it('keeps human and agent coding rules identical', () => {
-    expect(readFileSync(resolve(repository, 'CODING_STANDARDS.md'), 'utf8')).toBe(
-      readFileSync(resolve(repository, 'AGENTS.md'), 'utf8'),
+  /**
+   * `CODING_STANDARDS.md` holds the rules and `AGENTS.md` is a symlink to it.
+   *
+   * One file rather than two copies, so the rules an AI coding tool loads under the name it looks for cannot
+   * differ from the rules a contributor reads.
+   */
+  it('serves human and agent coding rules from one file', () => {
+    expect(lstatSync(resolve(repository, 'CODING_STANDARDS.md')).isFile()).toBe(true);
+    expect(lstatSync(resolve(repository, 'AGENTS.md')).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(resolve(repository, 'AGENTS.md'))).toBe('CODING_STANDARDS.md');
+    expect(readFileSync(resolve(repository, 'AGENTS.md'), 'utf8')).toBe(
+      readFileSync(resolve(repository, 'CODING_STANDARDS.md'), 'utf8'),
     );
   });
 

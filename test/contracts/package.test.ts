@@ -200,6 +200,8 @@ async function renderUi(
   const advancedStatus = { textContent: '' };
   const browserWindow = interactiveElement({});
   const requests: Array<{ path: string; body: unknown }> = [];
+  /** Every element the shell built for itself, the archive download link among them. */
+  const createdElements: Array<Record<string, unknown>> = [];
   let updatedConfig: Array<Record<string, unknown>> | undefined;
   let saves = 0;
   let saveButtonDisables = 0;
@@ -323,7 +325,7 @@ async function renderUi(
         return selector === '[data-i18n]' ? translatedNodes : translatedLabels;
       },
       createElement() {
-        return {
+        const element = {
           children: [] as unknown[],
           attributes: {} as Record<string, string>,
           append(...children: unknown[]) {
@@ -338,6 +340,8 @@ async function renderUi(
           textContent: '',
           type: '',
         };
+        createdElements.push(element as Record<string, unknown>);
+        return element;
       },
       body: { appendChild() {}, removeChild() {} },
     },
@@ -445,8 +449,8 @@ async function renderUi(
         if (path === '/diagnostics/archive/export') {
           return {
             archive: 'c3ludGhldGlj',
-            filename: 'synthetic.age',
-            mediaType: 'application/octet-stream',
+            filename: 'homebridge-eufy-support-00000000-0000-4000-8000-000000000000.eufysupport.gz',
+            mediaType: 'application/gzip',
           };
         }
         return { status: 'restart-required' };
@@ -541,6 +545,7 @@ async function renderUi(
     legacyAcknowledge,
     legacyNotice,
     legacySettings,
+    createdElements,
     requests,
     setupContent,
     shell,
@@ -1405,6 +1410,12 @@ describe('packed plugin', () => {
         path: '/diagnostics/archive/export',
         body: { reviewId: 'review-synthetic' },
       });
+      expect(completedDiagnosticsUi.createdElements.filter((element) => typeof element.download === 'string')).toEqual([
+        expect.objectContaining({
+          download: 'homebridge-eufy-support-00000000-0000-4000-8000-000000000000.eufysupport.gz',
+          href: 'data:application/gzip;base64,c3ludGhldGlj',
+        }),
+      ]);
       await completedDiagnosticsUi.diagnosticsStartAnother.dispatch('click');
       expect(completedDiagnosticsUi).toMatchObject({
         diagnosticsResult: { hidden: true },

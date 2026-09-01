@@ -35,6 +35,12 @@ interface Session {
   asked?: boolean;
 }
 
+/**
+ * The one registry of live sessions a station is serving, keyed by station serial.
+ *
+ * Both sides of the question read it: HomeKit records a live session on its camera's station, and snapshot
+ * acquisition asks whether a station is already serving one before opening a burst on it.
+ */
 export class StationLiveSessions implements StationLiveSessionRegistry {
   private readonly sessions = new Map<string, Set<Session>>();
 

@@ -173,4 +173,37 @@ describe('diagnostic vocabulary', () => {
     ).toEqual([]);
     expect(demonstrated.length).toBe(declared.length - undemonstrated.size);
   });
+
+  /**
+   * The same drop one level up: a whole scope, rather than one field of a record.
+   *
+   * A scope a reporter emits and the file sink has no acceptance branch for reaches the owner's console and no
+   * archive, while the containing evidence class still reports itself as included. The one exception is the
+   * scope the sink writes about itself after the sanitizer has run, which passes through no branch.
+   */
+  it('accepts every scope a reporter emits, so a notice cannot reach the console and nothing else', () => {
+    const sinkOwned = new Set(['diagnostics']);
+    const emitted = new Set([...diagnostics.matchAll(/scope: '([a-z-]+)'/g)].map(([, scope]) => scope!));
+    const accepted = new Set([...diagnostics.matchAll(/value\.scope === '([a-z-]+)'/g)].map(([, scope]) => scope!));
+
+    expect(emitted.has('media-notice'), 'the scope whose absent branch dropped every image notice').toBe(true);
+    expect([...accepted].sort(), 'the scopes the sink can rebuild').toEqual([
+      'configuration-notice',
+      'diagnostic-condition',
+      'ffmpeg',
+      'homekit',
+      'media-notice',
+      'runtime',
+      'runtime-notice',
+      'sdk',
+    ]);
+    expect(
+      [...emitted].filter((scope) => !accepted.has(scope) && !sinkOwned.has(scope)),
+      'a scope the sink cannot rebuild is written to the console and dropped from every archive',
+    ).toEqual([]);
+    expect(
+      [...sinkOwned].filter((scope) => !emitted.has(scope)),
+      'a stale exception',
+    ).toEqual([]);
+  });
 });

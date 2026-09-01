@@ -22,6 +22,8 @@ import {
   GuidedDiagnostics,
   recordFfmpegEnvironment,
   reportAdaptationNotice,
+  reportHomeKitEvent,
+  reportInvalidSnapshotCache,
   reportRuntimeNotice,
 } from '../../src/diagnostics.js';
 
@@ -771,6 +773,133 @@ describe('guided diagnostics session', () => {
       await expect(invalidKeyDiagnostics.exportSupportArchive(invalidKeyReview.reviewId)).rejects.toThrow(
         'key integrity',
       );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  /**
+   * A record a reporter emitted reaches the decrypted archive, not merely the log.
+   *
+   * A record crosses two allowlists: the reporter builds it and the file sink rebuilds it. An event only one
+   * half names is dropped between them, and because the loss is per record rather than per class the manifest
+   * still reports the containing evidence class as `included`. Asserting at the log proves the sink; only the
+   * decrypted archive proves what a maintainer receives.
+   */
+  it('carries a refusal, an unaccounted request, a camera-native geometry and a media notice into the archive', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    let now = Date.parse('2026-08-17T08:00:00.000Z');
+    const diagnostics = new GuidedDiagnostics(root, () => now, {
+      keyId: 'test-support-key',
+      publicKey,
+      sha256: createHash('sha256').update(publicKey.trim()).digest('hex'),
+    });
+
+    try {
+      await diagnostics.authorize('live-media', 'now');
+      await diagnostics.startReproduction();
+      const logger = createDiagnosticLogger(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        root,
+        undefined,
+        () => now,
+      );
+
+      reportHomeKitEvent(logger, {
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'high',
+        level: '4.0',
+        width: 1600,
+        height: 1200,
+        fps: 30,
+      });
+      reportHomeKitEvent(logger, { adapter: 'camera.streaming', event: 'live-request-refused', reason: 'at-capacity' });
+      reportHomeKitEvent(logger, {
+        adapter: 'camera.streaming',
+        event: 'live-request-unaccounted',
+        afterMs: 30_000,
+      });
+      reportInvalidSnapshotCache(logger);
+      await logger.flush?.();
+      now += 5_000;
+      await diagnostics.endReproduction();
+
+      const review = await diagnostics.reviewSupportArchive();
+      const homekitRow = review.manifest.evidence.find(({ evidence }) => evidence === 'homekit-log');
+      const pluginRow = review.manifest.evidence.find(({ evidence }) => evidence === 'plugin-log');
+      expect(homekitRow).toMatchObject({ status: 'included', contentType: 'application/x-ndjson' });
+      expect(pluginRow).toMatchObject({ status: 'included', contentType: 'application/x-ndjson' });
+      expect(homekitRow?.fields?.map(({ field }) => field)).toEqual(
+        expect.arrayContaining([
+          'event',
+          'operation',
+          'profile',
+          'levelName',
+          'width',
+          'height',
+          'fps',
+          'reason',
+          'afterMs',
+        ]),
+      );
+      expect(pluginRow?.fields?.map(({ field }) => field)).toEqual(expect.arrayContaining(['code', 'messageKey']));
+
+      const exported = await diagnostics.exportSupportArchive(review.reviewId);
+      const payload = decryptSupportArchive(exported.archive, privateKey) as {
+        evidence: readonly { evidence: string; content: string }[];
+      };
+      const retained = (evidence: string) =>
+        (payload.evidence.find((row) => row.evidence === evidence)?.content ?? '')
+          .trim()
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => {
+            const { timestamp, ...rest } = JSON.parse(line) as Record<string, unknown>;
+            expect(timestamp).toEqual(expect.any(String));
+            return rest;
+          });
+
+      expect(retained('homekit-log')).toEqual([
+        {
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-video-selected',
+          operation: 'start',
+          profile: 'high',
+          levelName: '4.0',
+          width: 1600,
+          height: 1200,
+          fps: 30,
+        },
+        {
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-request-refused',
+          reason: 'at-capacity',
+        },
+        {
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-request-unaccounted',
+          afterMs: 30_000,
+        },
+      ]);
+      expect(retained('plugin-log')).toContainEqual({
+        scope: 'media-notice',
+        level: 'warn',
+        code: 'camera-snapshot-cache-invalid',
+        messageKey: 'log.snapshotCacheInvalid',
+      });
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

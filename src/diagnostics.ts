@@ -106,6 +106,19 @@ export type HomeKitEventTrace =
 /** The bounded reasons a stream request is refused before it reaches the source. */
 const REFUSAL_REASONS = new Set(['disabled', 'at-capacity', 'cancelled', 'prepare-failed']);
 
+/**
+ * The live request and session events {@link sanitizeLiveSessionTrace} reconstructs a record from.
+ *
+ * Read by both halves of the path: {@link reportHomeKitEvent} builds the record and the file sink rebuilds it.
+ */
+const HOMEKIT_LIVE_REQUEST_EVENTS = new Set([
+  'live-request-refused',
+  'live-request-unaccounted',
+  'live-session-failed',
+  'live-session-released',
+  'live-session-streaming',
+]);
+
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
 const MAX_CURRENT_LOG_BYTES = 50 * 1024 * 1024;
@@ -130,14 +143,16 @@ const DEBUG_AUTHORIZATION_MS = 72 * 60 * 60 * 1_000;
 const gzip = promisify(gzipCallback);
 const gunzip = promisify(gunzipCallback);
 const SDK_SUBSYSTEMS = new Set(['device', 'mega', 'mqtt', 'p2p', 'push', 'webrtc', 'sdk']);
+/**
+ * The events an SDK-scoped record may name, being the ones {@link createSdkLogger} classifies a message as.
+ *
+ * Disjoint from {@link HOMEKIT_LIVE_REQUEST_EVENTS}, which this plugin's own adapters report under `homekit`.
+ */
 const SDK_EVENT_KEYS = new Set([
   'client-warning',
   'connection-closed',
   'connection-opened',
   'connection-retrying',
-  'live-request-refused',
-  'live-request-unaccounted',
-  'live-session-streaming',
   'live-start-trace',
   'media-error',
   'media-warning',
@@ -1657,16 +1672,24 @@ const HOMEKIT_OBSERVATIONS = new Set(['malformed', 'missing', 'valid']);
 /**
  * What announced a change, for an adapter that follows more than one announcement for the same state.
  *
- * Consulted by both halves of the write path, and it has to be: the reporter builds the record, and the file
- * sink then rebuilds a homekit record from its own allowlist rather than forwarding what it was given. A field
- * only one half names is produced and then discarded, silently, and only in the artifact a support case reads.
+ * Read by both halves of the write path: the reporter builds the record and the file sink rebuilds it. The
+ * field is omitted where an adapter states no announcement and refused where it states one absent from here.
  */
 const HOMEKIT_ANNOUNCEMENTS = new Set(['write', 'poll']);
 const HOMEKIT_LIVE_VIDEO_OPERATIONS = new Set(['start', 'reconfigure']);
 const HOMEKIT_LIVE_VIDEO_PROFILES = new Set(['baseline', 'main', 'high']);
 const HOMEKIT_LIVE_VIDEO_LEVELS = new Set(['3.1', '3.2', '4.0']);
-const HOMEKIT_LIVE_VIDEO_GEOMETRIES = new Set(['320x180', '640x360', '1280x720', '1920x1080']);
-const HOMEKIT_LIVE_VIDEO_FRAME_RATES = new Set([15, 30]);
+/**
+ * The inclusive bounds a controller-selected live geometry and frame rate are retained within.
+ *
+ * Bounds rather than an enumeration, because the matrix a controller selects from is derived per camera from
+ * that camera's own reported shape. The ceiling exceeds what the recorded H.264 level codes, so a selection its
+ * own level cannot carry is retained.
+ */
+const MIN_LIVE_VIDEO_DIMENSION = 120;
+const MAX_LIVE_VIDEO_DIMENSION = 4096;
+const MIN_LIVE_VIDEO_FRAME_RATE = 1;
+const MAX_LIVE_VIDEO_FRAME_RATE = 120;
 const HOMEKIT_LIVE_SESSION_STAGES = new Set([
   'sdk-source-acquisition',
   'first-source-keyframe',
@@ -1722,6 +1745,18 @@ const ADAPTATION_SIGNALS = new Set([
  */
 const MAX_ADAPTATION_STDERR_LINES = 8;
 const MAX_ADAPTATION_STDERR_LINE_LENGTH = 200;
+/**
+ * The media notices this module retains, read by both halves of the path.
+ *
+ * Operational rather than verbose, so each is `plugin-log` evidence that every profile declares.
+ */
+const MEDIA_NOTICES = {
+  'camera-snapshot-cache-invalid': {
+    level: 'warn',
+    messageKey: 'log.snapshotCacheInvalid',
+  },
+} as const;
+type MediaNoticeCode = keyof typeof MEDIA_NOTICES;
 const RUNTIME_NOTICES = {
   'status-publication-failed': {
     level: 'warn',
@@ -2014,12 +2049,18 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
     };
   }
 
+  if (value.scope === 'media-notice') {
+    if (typeof value.code !== 'string' || !Object.hasOwn(MEDIA_NOTICES, value.code)) return undefined;
+    const notice = MEDIA_NOTICES[value.code as MediaNoticeCode];
+    return { scope: 'media-notice', level: notice.level, code: value.code, messageKey: notice.messageKey };
+  }
+
   if (value.scope === 'homekit') {
     if (value.adapter === 'camera.streaming' && value.event === 'live-video-selected') {
       const selection = sanitizeLiveVideoSelection(value);
       return selection ? { scope: 'homekit', level: 'debug', ...selection } : undefined;
     }
-    if (value.adapter === 'camera.streaming' && String(value.event).startsWith('live-session-')) {
+    if (value.adapter === 'camera.streaming' && HOMEKIT_LIVE_REQUEST_EVENTS.has(String(value.event))) {
       const lifecycle = sanitizeLiveSessionTrace(value);
       return lifecycle ? { scope: 'homekit', level: 'debug', ...lifecycle } : undefined;
     }
@@ -2155,9 +2196,9 @@ export function reportInvalidSnapshotCache(
   target: Pick<PlatformLogger, 'warn'> & Partial<Pick<PlatformLogger, 'debug'>>,
 ): void {
   const code = 'camera-snapshot-cache-invalid';
-  const messageKey = 'log.snapshotCacheInvalid';
-  target.warn(`[${code}] ${localize(target, messageKey)}`);
-  target.debug?.(JSON.stringify({ scope: 'media-notice', level: 'warn', code, messageKey }));
+  const { level, messageKey } = MEDIA_NOTICES[code];
+  target[level](`[${code}] ${localize(target, messageKey)}`);
+  target.debug?.(JSON.stringify({ scope: 'media-notice', level, code, messageKey }));
 }
 
 /** Emits one allowlisted HomeKit event trace only when host debug output is available. */
@@ -2169,13 +2210,7 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
     }
     return;
   }
-  if (
-    trace.event === 'live-session-released' ||
-    trace.event === 'live-session-failed' ||
-    trace.event === 'live-session-streaming' ||
-    trace.event === 'live-request-unaccounted' ||
-    trace.event === 'live-request-refused'
-  ) {
+  if (HOMEKIT_LIVE_REQUEST_EVENTS.has(trace.event)) {
     const lifecycle = sanitizeLiveSessionTrace(trace as unknown as Record<string, unknown>);
     if (target.debug && lifecycle) {
       target.debug(JSON.stringify({ scope: 'homekit', level: 'debug', ...lifecycle }));
@@ -2198,8 +2233,6 @@ export function reportHomeKitEvent(target: Pick<PlatformLogger, 'debug'>, trace:
       adapter: trace.adapter,
       event: trace.event,
       observation: trace.observation,
-      // Omitted rather than guessed where the adapter states none, and refused where it states one this
-      // build does not know: a value invented here would read as fact in a support case.
       ...(typeof trace.announcedBy === 'string' && HOMEKIT_ANNOUNCEMENTS.has(trace.announcedBy)
         ? { announcedBy: trace.announcedBy }
         : {}),
@@ -2219,6 +2252,13 @@ export interface AdaptationTrace {
   event: string;
   code?: number;
   signal?: string;
+  /**
+   * How many source fragments a recording wrote to this process.
+   *
+   * Separates a source that delivered nothing from an adaptation that could not read what it was given, which
+   * FFmpeg words identically as `moov atom not found`.
+   */
+  sourceFragments?: number;
   stderr?: readonly string[];
 }
 
@@ -2312,8 +2352,6 @@ function sanitizeAdaptationNotice(value: Record<string, unknown>, level: string)
     .map(redactAdaptationStderr)
     .filter((line): line is string => line !== undefined)
     .slice(-MAX_ADAPTATION_STDERR_LINES);
-  // A tally of fragments handed to the process, which separates a source that delivered nothing from an
-  // adaptation that could not read what it was given — FFmpeg words both as `moov atom not found`.
   const sourceFragments = nonNegativeInteger(value.sourceFragments);
   return {
     scope: 'ffmpeg',
@@ -2363,14 +2401,20 @@ function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string
   };
 }
 
+/** A whole number within an inclusive range, or nothing — a negotiated geometry or frame rate a controller chose. */
+function integerWithin(value: unknown, min: number, max: number): number | undefined {
+  const integer = boundedInteger(value, max);
+  return integer !== undefined && integer >= min ? integer : undefined;
+}
+
 function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<string, unknown> | undefined {
   const operation = typeof value.operation === 'string' ? value.operation : undefined;
   const profile = typeof value.profile === 'string' ? value.profile : undefined;
   const codecLevel =
     typeof value.levelName === 'string' ? value.levelName : typeof value.level === 'string' ? value.level : undefined;
-  const width = typeof value.width === 'number' ? value.width : undefined;
-  const height = typeof value.height === 'number' ? value.height : undefined;
-  const fps = typeof value.fps === 'number' ? value.fps : undefined;
+  const width = integerWithin(value.width, MIN_LIVE_VIDEO_DIMENSION, MAX_LIVE_VIDEO_DIMENSION);
+  const height = integerWithin(value.height, MIN_LIVE_VIDEO_DIMENSION, MAX_LIVE_VIDEO_DIMENSION);
+  const fps = integerWithin(value.fps, MIN_LIVE_VIDEO_FRAME_RATE, MAX_LIVE_VIDEO_FRAME_RATE);
   if (
     !operation ||
     !HOMEKIT_LIVE_VIDEO_OPERATIONS.has(operation) ||
@@ -2380,9 +2424,7 @@ function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<stri
     !HOMEKIT_LIVE_VIDEO_LEVELS.has(codecLevel) ||
     width === undefined ||
     height === undefined ||
-    !HOMEKIT_LIVE_VIDEO_GEOMETRIES.has(`${width}x${height}`) ||
-    fps === undefined ||
-    !HOMEKIT_LIVE_VIDEO_FRAME_RATES.has(fps)
+    fps === undefined
   ) {
     return undefined;
   }
@@ -2441,6 +2483,12 @@ export class DiagnosticConditions {
     }
   }
 
+  /**
+   * Records one HomeKit condition against the accessories it affects.
+   *
+   * The retained record carries aliases and no identity. The owner's own console line carries each name paired
+   * with its alias, which is what makes an alias in a support case resolvable by the owner and by nobody else.
+   */
   reportHomeKit(condition: HomeKitCondition, affectedDeviceIds: readonly string[]): void {
     const definition = Object.hasOwn(HOMEKIT_CONDITIONS, condition.code)
       ? HOMEKIT_CONDITIONS[condition.code as HomeKitConditionCode]
@@ -2473,8 +2521,6 @@ export class DiagnosticConditions {
         ...(accessoryAliases.length === uniqueDeviceIds.length ? {} : { aliasesTruncated: true }),
       },
       `${condition.code}:${condition.capability ?? ''}:${condition.member ?? ''}`,
-      // Name paired with alias: the archive carries the alias and no identity, and the owner's own log carries
-      // the pairing — so an alias in a support case is resolvable by the one person who can be asked for it.
       uniqueDeviceIds
         .map((serial) => {
           const name = this.nameFor?.(serial);

@@ -62,8 +62,6 @@ export function createEufyPlatform(
       const configuredConfig = parseConfig(config);
       const storageRoot = api.user ? resolveStorageRoot(api.user.storagePath()) : undefined;
       const diagnosticLog = createDiagnosticLogger(log, storageRoot);
-      // Names for the CONSOLE line only, resolved off the accessories this platform already holds. The retained
-      // record keeps carrying no identity; see `DiagnosticConditions`.
       const diagnostics = new DiagnosticConditions(
         diagnosticLog,
         (serial) =>
@@ -82,8 +80,6 @@ export function createEufyPlatform(
         ? new FfmpegRecordingMedia(configuredConfig.ffmpegPath, adaptationDiagnostics)
         : undefined;
       const mediaBudget = new DeclaredMediaSessionBudget(configuredConfig.maxConcurrentMediaSessions);
-      // One registry for both sides of the question: HomeKit records a live session on its camera's station,
-      // and snapshot acquisition asks whether a station is serving one before opening a burst on it.
       const stationLiveSessions = new StationLiveSessions();
       const snapshotMedia = new SnapshotAcquisition(
         storageRoot

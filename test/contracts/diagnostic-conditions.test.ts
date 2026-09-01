@@ -16,6 +16,7 @@ import {
   GuidedDiagnostics,
   reportAdaptationNotice,
   reportHomeKitEvent,
+  reportInvalidSnapshotCache,
   unconfirmedWriteCondition,
   reportRuntimeNotice,
 } from '../../src/diagnostics.js';
@@ -1513,6 +1514,40 @@ describe('diagnostic conditions', () => {
       expect(archived).toContain('"scope":"runtime-notice"');
       expect(statSync(`${logPath}.1.gz`).mode & 0o777).toBe(0o600);
       expect(JSON.parse(readFileSync(logPath, 'utf8').trim())).toMatchObject({ scope: 'sdk', level: 'warn' });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it('retains a discarded camera image as plugin evidence, the warning alone naming no camera', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-media-notice-'));
+    await new GuidedDiagnostics(root).authorize('startup-authentication', 'now');
+    const warn = vi.fn();
+    const logger = createDiagnosticLogger({ debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn }, root);
+
+    try {
+      reportInvalidSnapshotCache(logger);
+      await logger.flush?.();
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        '[camera-snapshot-cache-invalid] An invalid retained camera image was removed',
+      );
+      const records = readFileSync(join(root, 'logs', 'homebridge-eufy.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const { timestamp, ...rest } = JSON.parse(line) as Record<string, unknown>;
+          expect(timestamp).toEqual(expect.any(String));
+          return rest;
+        });
+      expect(records).toEqual([
+        {
+          scope: 'media-notice',
+          level: 'warn',
+          code: 'camera-snapshot-cache-invalid',
+          messageKey: 'log.snapshotCacheInvalid',
+        },
+      ]);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
