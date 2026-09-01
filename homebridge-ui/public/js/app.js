@@ -140,6 +140,17 @@ continueButton.addEventListener('click', () => {
   setupContent.hidden = false;
 });
 
+/**
+ * Declares the resolved locale on both the document root and the shell.
+ *
+ * The root element is what assistive technology reads to choose pronunciation and what a translation tool
+ * reads to identify the page's language; the shell attribute is what this script's own date formatting reads.
+ */
+function applyLocale(locale) {
+  document.documentElement.lang = locale;
+  shell.lang = locale;
+}
+
 async function loadMessages(locale) {
   const response = await fetch(`i18n/${locale}.json`);
   if (!response.ok) {
@@ -157,12 +168,12 @@ async function applyTranslations(language) {
     try {
       messages = await loadMessages(locale);
     } catch {
-      shell.lang = locale;
+      applyLocale(locale);
       return;
     }
   }
 
-  shell.lang = locale;
+  applyLocale(locale);
   document.querySelectorAll('[data-i18n]').forEach((element) => {
     element.textContent = messages[element.dataset.i18n] ?? element.textContent;
   });

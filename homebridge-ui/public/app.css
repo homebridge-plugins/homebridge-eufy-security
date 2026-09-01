@@ -253,15 +253,17 @@ button.diagnostics-secondary-action {
 }
 
 /*
- * The keyboard focus ring for every control in the diagnostics panel.
+ * The keyboard focus ring for the controls that carry no ring of their own.
  *
- * Stated once for the panel because its buttons carry no class of their own and are styled by descent, so
- * without this they fall back to the user agent's own ring. That ring is a 1px hairline with no offset, which
- * is thinner and lower in contrast than the 2px accent ring the rest of this interface already uses.
+ * The device tiles are the dashboard's primary interaction and the diagnostics panel's buttons carry no class,
+ * so both fell through every other rule here to the user agent's own ring — a 1px hairline with no offset,
+ * thinner and lower in contrast than the 2px accent ring this interface uses everywhere else.
  */
 .diagnostics-panel button:focus-visible,
 .diagnostics-panel select:focus-visible,
-.diagnostics-panel input:focus-visible {
+.diagnostics-panel input:focus-visible,
+.device-flip-control:focus-visible,
+.device-mobile-close:focus-visible {
   outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
