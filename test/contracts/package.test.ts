@@ -433,14 +433,15 @@ async function renderUi(
               reproductionMode: diagnosticsReproductionMode,
               archiveExpiresAt: '2026-08-20T10:18:42.832Z',
               reproductionStartedAt: '2026-08-19T09:00:00.000Z',
-              retainedFrom: '2026-08-19T10:00:00.000Z',
-              coversReproduction: false,
               evidence: [
                 {
                   evidence: 'plugin-log',
                   privacyClass: 'diagnostic',
                   status: 'included',
                   bytes: 42,
+                  truncated: true,
+                  retainedFrom: '2026-08-19T10:00:00.000Z',
+                  coversReproduction: false,
                   fields: [{ field: 'event', privacyClass: 'diagnostic' }],
                 },
               ],
@@ -1407,7 +1408,8 @@ describe('packed plugin', () => {
       expect(manifestChildren[1].children?.[0].textContent).toContain('event: diagnostic');
       expect(manifestChildren[2].textContent).toContain('credentials-and-authentication');
       // The reader is warned that the archive does not reach the fault, before they confirm the export.
-      expect(manifestChildren[3].textContent).toContain('does not reach the start of the reproduction');
+      expect(manifestChildren[3].textContent).toContain('plugin-log');
+      expect(manifestChildren[3].textContent).toContain('do not reach the start of the reproduction');
       completedDiagnosticsUi.diagnosticsReviewConfirm.checked = true;
       await completedDiagnosticsUi.diagnosticsReviewConfirm.dispatch('change');
       expect(completedDiagnosticsUi.diagnosticsExport.disabled).toBe(false);

@@ -124,6 +124,14 @@ const MAX_LOG_RECORD_BYTES = 64 * 1024;
 const MAX_CURRENT_LOG_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_LOG_BYTES = 200 * 1024 * 1024;
 const MAX_QUEUED_LOG_BYTES = 1024 * 1024;
+/**
+ * How much of one evidence class a support archive carries, applied to each class on its own.
+ *
+ * Per class rather than as one shared pool. The classes a fault is diagnosed from are small and the SDK's is
+ * not, so one pool let the noisiest class decide how far back any of them reached — and because the read fills
+ * newest-first, a long session lost the diagnostic classes at their oldest end while SDK records stayed. Only
+ * the SDK's class reaches this bound in practice.
+ */
 const MAX_SUPPORT_ARCHIVE_LOG_BYTES = 16 * 1024 * 1024;
 const MAX_SUPPORT_ARCHIVE_MARKER_BYTES = 1024 * 1024;
 const MAX_UI_EVENTS_BYTES = 64 * 1024;
@@ -189,6 +197,9 @@ export type DiagnosticsUiEvent =
 
 export type DiagnosticEvidence = 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log' | 'ui-log';
 
+/** The evidence classes assembled from the rotating JSONL log, each budgeted on its own. */
+type LogEvidence = Extract<DiagnosticEvidence, 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log'>;
+
 export interface SupportArchiveManifest {
   version: 2;
   archiveFormat: 'homebridge-eufy-support-archive';
@@ -200,19 +211,6 @@ export interface SupportArchiveManifest {
   archiveExpiresAt: string;
   reproductionStartedAt: string;
   reproductionEndedAt: string;
-  /**
-   * The oldest record the byte budget left room for, present only where it dropped older ones.
-   *
-   * The read fills the budget newest-first, so what it drops is the oldest end of the interval.
-   */
-  retainedFrom?: string;
-  /**
-   * Whether the retained evidence still reaches the start of the reproduction interval.
-   *
-   * False only where truncation moved the oldest retained record past {@link reproductionStartedAt}. An
-   * interval whose early minutes were simply quiet is covered: nothing was dropped, so nothing is absent.
-   */
-  coversReproduction: boolean;
   evidence: readonly {
     evidence: DiagnosticEvidence | 'environment' | 'reproduction-markers';
     privacyClass: 'diagnostic' | 'operational';
@@ -252,6 +250,7 @@ interface SupportArchiveEvidence {
   contentType: 'application/json' | 'application/x-ndjson';
   content: string;
   truncated?: true;
+  retainedFrom?: string;
   fields: readonly {
     field: string;
     privacyClass: 'diagnostic' | 'operational' | 'pseudonymous';
@@ -462,6 +461,20 @@ function readFfmpegEnvironment(storageRoot: string): PersistedFfmpegEnvironment 
   }
 }
 
+/**
+ * The one log evidence class a retained record belongs to.
+ *
+ * The four classes partition the records: each verbose scope owns its own and everything else is the plugin's,
+ * so a record counts against exactly one class's budget.
+ */
+function evidenceClassOf(record: Readonly<Record<string, unknown>>): LogEvidence {
+  const scope = String(record.scope);
+  if (scope === 'sdk') return 'sdk-log';
+  if (scope === 'homekit') return 'homekit-log';
+  if (scope === 'ffmpeg') return 'ffmpeg-log';
+  return 'plugin-log';
+}
+
 function evidenceForEvent(event: Readonly<Record<string, unknown>>): DiagnosticEvidence[] {
   const evidence: DiagnosticEvidence[] = ['plugin-log'];
   if (event.scope === 'sdk') evidence.push('sdk-log');
@@ -633,7 +646,8 @@ export class GuidedDiagnostics {
     if (!session?.reproductionStartedAt || !session.reproductionEndedAt) {
       throw new Error('A completed reproduction is required before archive review');
     }
-    const { evidence: collected, retainedFrom } = await this.collectSupportEvidence(session);
+    const collected = await this.collectSupportEvidence(session);
+    const reproductionStartedAt = Date.parse(session.reproductionStartedAt);
     const selected = DIAGNOSTICS_PROFILES[session.profile];
     const createdAt = this.now();
     const manifest: SupportArchiveManifest = {
@@ -647,11 +661,8 @@ export class GuidedDiagnostics {
       archiveExpiresAt: new Date(createdAt + SUPPORT_ARCHIVE_RETENTION_MS).toISOString(),
       reproductionStartedAt: session.reproductionStartedAt,
       reproductionEndedAt: session.reproductionEndedAt,
-      ...(retainedFrom === undefined ? {} : { retainedFrom }),
-      coversReproduction:
-        retainedFrom === undefined || Date.parse(retainedFrom) <= Date.parse(session.reproductionStartedAt),
       evidence: [
-        ...collected.map(({ evidence, privacyClass, contentType, content, truncated, fields }) => ({
+        ...collected.map(({ evidence, privacyClass, contentType, content, truncated, retainedFrom, fields }) => ({
           evidence,
           privacyClass,
           status: 'included' as const,
@@ -659,6 +670,10 @@ export class GuidedDiagnostics {
           bytes: Buffer.byteLength(content),
           fields,
           ...(truncated ? { truncated: true as const } : {}),
+          ...(retainedFrom === undefined ? {} : { retainedFrom }),
+          ...(retainedFrom !== undefined && Date.parse(retainedFrom) > reproductionStartedAt
+            ? { coversReproduction: false as const }
+            : {}),
         })),
         ...selected
           .filter((evidence) => !collected.some((candidate) => candidate.evidence === evidence))
@@ -691,7 +706,14 @@ export class GuidedDiagnostics {
       throw new Error('Support archive key integrity check failed');
     }
     const compressed = await gzip(
-      Buffer.from(JSON.stringify({ manifest: pending.manifest, evidence: pending.evidence }), 'utf8'),
+      Buffer.from(
+        JSON.stringify({
+          manifest: pending.manifest,
+          // Coverage is manifest metadata; the payload row is the content it describes.
+          evidence: pending.evidence.map(({ retainedFrom: _retainedFrom, ...row }) => row),
+        }),
+        'utf8',
+      ),
     );
     const contentKey = randomBytes(32);
     try {
@@ -733,9 +755,7 @@ export class GuidedDiagnostics {
     }
   }
 
-  private async collectSupportEvidence(
-    session: PersistedDiagnosticsSession,
-  ): Promise<{ evidence: SupportArchiveEvidence[]; retainedFrom?: string }> {
+  private async collectSupportEvidence(session: PersistedDiagnosticsSession): Promise<SupportArchiveEvidence[]> {
     const ffmpeg = readFfmpegEnvironment(this.storageRoot);
     const evidence: SupportArchiveEvidence[] = [
       {
@@ -785,41 +805,26 @@ export class GuidedDiagnostics {
       });
     }
     const log = await this.readReproductionLog(session.reproductionStartedAt!, session.reproductionEndedAt!);
-    const scopes: Readonly<
-      Record<Extract<DiagnosticEvidence, 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log'>, string>
-    > = {
-      'plugin-log': 'plugin',
-      'sdk-log': 'sdk',
-      'homekit-log': 'homekit',
-      'ffmpeg-log': 'ffmpeg',
-    };
     for (const selected of DIAGNOSTICS_PROFILES[session.profile]) {
-      if (!(selected in scopes)) continue;
-      const scope = scopes[selected as keyof typeof scopes];
-      const selectedRecords = log.records.filter((record) =>
-        scope === 'plugin' ? !VERBOSE_SCOPES.has(String(record.scope)) : record.scope === scope,
-      );
-      const content = selectedRecords.map((record) => JSON.stringify(record)).join('\n');
-      if (content) {
-        evidence.push({
-          evidence: selected,
-          privacyClass: 'diagnostic',
-          contentType: 'application/x-ndjson',
-          content: `${content}\n`,
-          ...(log.truncated ? { truncated: true } : {}),
-          fields: [...new Set(selectedRecords.flatMap((record) => Object.keys(record)))].sort().map((field) => ({
-            field,
-            privacyClass:
-              field === 'accessoryAliases' ? 'pseudonymous' : field === 'timestamp' ? 'operational' : 'diagnostic',
-          })),
-        });
-      }
+      const carried = log.get(selected as LogEvidence);
+      if (!carried) continue;
+      const content = carried.records.map((record) => JSON.stringify(record)).join('\n');
+      if (!content) continue;
+      evidence.push({
+        evidence: selected,
+        privacyClass: 'diagnostic',
+        contentType: 'application/x-ndjson',
+        content: `${content}\n`,
+        ...(carried.truncated ? { truncated: true } : {}),
+        ...(carried.retainedFrom === undefined ? {} : { retainedFrom: carried.retainedFrom }),
+        fields: [...new Set(carried.records.flatMap((record) => Object.keys(record)))].sort().map((field) => ({
+          field,
+          privacyClass:
+            field === 'accessoryAliases' ? 'pseudonymous' : field === 'timestamp' ? 'operational' : 'diagnostic',
+        })),
+      });
     }
-    const oldest = log.records.find((record) => typeof record.timestamp === 'string')?.timestamp;
-    return {
-      evidence,
-      ...(log.truncated && typeof oldest === 'string' ? { retainedFrom: oldest } : {}),
-    };
+    return evidence;
   }
 
   private async readUiEvents(session: PersistedDiagnosticsSession): Promise<string> {
@@ -884,10 +889,17 @@ export class GuidedDiagnostics {
     }
   }
 
+  /**
+   * The records of each log evidence class inside the reproduction interval, budgeted per class.
+   *
+   * Fills newest-first, so a class that exhausts its budget loses its oldest end and `retainedFrom` states
+   * where it then begins. Each class is budgeted alone, so the noisiest one cannot decide how far back another
+   * reaches.
+   */
   private async readReproductionLog(
     startedAt: string,
     endedAt: string,
-  ): Promise<{ records: Record<string, unknown>[]; truncated: boolean }> {
+  ): Promise<Map<LogEvidence, { records: Record<string, unknown>[]; truncated: boolean; retainedFrom?: string }>> {
     const directory = join(this.storageRoot, LOG_DIRECTORY);
     const paths = [
       join(directory, LOG_FILE),
@@ -895,15 +907,18 @@ export class GuidedDiagnostics {
     ];
     const started = Date.parse(startedAt);
     const ended = Date.parse(endedAt);
-    const records: Record<string, unknown>[] = [];
-    let retainedBytes = 0;
-    let truncated = false;
-    let budgetExhausted = false;
+    const carried = new Map<LogEvidence, { records: Record<string, unknown>[]; bytes: number; truncated: boolean }>(
+      (['plugin-log', 'sdk-log', 'homekit-log', 'ffmpeg-log'] as const).map((evidence) => [
+        evidence,
+        { records: [], bytes: 0, truncated: false },
+      ]),
+    );
     for (const path of paths) {
+      if ([...carried.values()].every(({ truncated }) => truncated)) break;
       try {
         const file = await stat(path);
         if (file.size > MAX_CURRENT_LOG_BYTES) {
-          truncated = true;
+          for (const state of carried.values()) state.truncated = true;
           continue;
         }
         const content = path.endsWith('.gz')
@@ -916,28 +931,38 @@ export class GuidedDiagnostics {
         const lines = content.trim().split('\n');
         for (let index = lines.length - 1; index >= 0; index -= 1) {
           const line = lines[index]!;
+          let record: Record<string, unknown>;
           try {
-            const record = JSON.parse(line) as Record<string, unknown>;
-            const timestamp = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : Number.NaN;
-            if (timestamp < started || timestamp > ended) continue;
-            const bytes = Buffer.byteLength(line) + 1;
-            if (retainedBytes + bytes > MAX_SUPPORT_ARCHIVE_LOG_BYTES) {
-              truncated = true;
-              budgetExhausted = true;
-              break;
-            }
-            retainedBytes += bytes;
-            records.push(record);
+            record = JSON.parse(line) as Record<string, unknown>;
           } catch {
             continue;
           }
+          const timestamp = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : Number.NaN;
+          if (timestamp < started || timestamp > ended) continue;
+          const state = carried.get(evidenceClassOf(record))!;
+          if (state.truncated) continue;
+          const bytes = Buffer.byteLength(line) + 1;
+          if (state.bytes + bytes > MAX_SUPPORT_ARCHIVE_LOG_BYTES) {
+            state.truncated = true;
+            continue;
+          }
+          state.bytes += bytes;
+          state.records.push(record);
         }
-        if (budgetExhausted || retainedBytes >= MAX_SUPPORT_ARCHIVE_LOG_BYTES) break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
     }
-    return { records: records.reverse(), truncated };
+    return new Map(
+      [...carried].map(([evidence, { records, truncated }]) => {
+        const ordered = records.reverse();
+        const oldest = ordered.find(({ timestamp }) => typeof timestamp === 'string')?.timestamp;
+        return [
+          evidence,
+          { records: ordered, truncated, ...(truncated && typeof oldest === 'string' ? { retainedFrom: oldest } : {}) },
+        ];
+      }),
+    );
   }
 
   private async readFileTail(path: string, maximumBytes: number): Promise<string> {

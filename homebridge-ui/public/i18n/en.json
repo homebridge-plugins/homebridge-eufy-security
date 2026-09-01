@@ -73,7 +73,7 @@
   "diagnosticDescription": "This device is recognized, but its primary capabilities do not have a verified HomeKit representation yet.",
   "diagnosticOnly": "Diagnostic only",
   "diagnosticsActionLabel": "What to do",
-  "diagnosticsArchiveCoverageGap": "Evidence older than {retainedFrom} was dropped at the archive limit, so this archive does not reach the start of the reproduction you marked. Reproduce the fault again over a shorter interval.",
+  "diagnosticsArchiveCoverageGap": "{classes}: evidence older than {retainedFrom} was dropped at the archive limit, so those classes do not reach the start of the reproduction you marked. Reproduce the fault again over a shorter interval.",
   "diagnosticsArchiveExcluded": "Always excluded:",
   "diagnosticsArchiveExpires": "expires {expiresAt}",
   "diagnosticsArchiveExport": "Download encrypted archive",

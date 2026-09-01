@@ -832,14 +832,11 @@ describe('guided diagnostics session', () => {
       await diagnostics.endReproduction();
       const review = await diagnostics.reviewSupportArchive();
 
-      const sdk = review.manifest.evidence.find(({ evidence }) => evidence === 'sdk-log');
-      expect(sdk).toMatchObject({ status: 'included', truncated: true });
+      const sdk = review.manifest.evidence.find(({ evidence }) => evidence === 'sdk-log')!;
       expect(review.manifest.version).toBe(2);
-      expect(review.manifest.retainedFrom).toEqual(expect.any(String));
-      expect(Date.parse(review.manifest.retainedFrom!)).toBeGreaterThan(
-        Date.parse(review.manifest.reproductionStartedAt),
-      );
-      expect(review.manifest.coversReproduction).toBe(false);
+      expect(sdk).toMatchObject({ status: 'included', truncated: true, coversReproduction: false });
+      expect(sdk.retainedFrom).toEqual(expect.any(String));
+      expect(Date.parse(sdk.retainedFrom!)).toBeGreaterThan(Date.parse(review.manifest.reproductionStartedAt));
 
       // The maintainer reading the archive is told, rather than left to compare two timestamps themselves.
       const exported = await diagnostics.exportSupportArchive(review.reviewId);
@@ -852,10 +849,84 @@ describe('guided diagnostics session', () => {
         [fileURLToPath(new URL('../../scripts/decrypt-diagnostics.mjs', import.meta.url)), archivePath, keyPath],
         { encoding: 'utf8', env: { ...process.env, HOMEBRIDGE_EUFY_SUPPORT_KEY_SHA256: fingerprint } },
       );
-      expect(run.status).toBe(0);
+      expect(run.status, run.stderr).toBe(0);
       expect(run.stdout).toContain('Authenticated V5 support archive');
-      expect(run.stderr).toContain(`evidence older than ${review.manifest.retainedFrom} was dropped`);
-      expect(run.stderr).toContain('nothing here covers the reproduction');
+      expect(run.stderr).toContain(`sdk-log: evidence older than ${sdk.retainedFrom} was dropped`);
+      expect(run.stderr).toContain('does not cover the reproduction');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  }, 30_000);
+
+  /**
+   * One evidence class cannot spend another's budget.
+   *
+   * The classes a fault is diagnosed from are small and the SDK's is not: a measured 46-hour archive held
+   * 146,905 SDK records against 61 across the other three, so a single shared budget meant the noisiest class
+   * decided how far back any of them reached. A class whose own records fit is carried whole.
+   */
+  it('carries a quiet class whole while the noisiest one is truncated', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-starve-'));
+    const startedAt = Date.parse('2026-08-30T12:00:00.000Z');
+    let now = startedAt;
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+
+    try {
+      await diagnostics.authorize('live-media', 'now');
+      await diagnostics.startReproduction();
+
+      const at = (offsetMs: number) => new Date(startedAt + offsetMs).toISOString();
+      // The three diagnostic classes report at the very start of the window, where a shared budget lost them.
+      const quiet = [
+        { scope: 'runtime', level: 'info', event: 'ready', messageKey: 'log.runtime.state', timestamp: at(0) },
+        {
+          scope: 'homekit',
+          level: 'debug',
+          adapter: 'camera.streaming',
+          event: 'live-request-refused',
+          reason: 'at-capacity',
+          timestamp: at(1_000),
+        },
+        {
+          scope: 'ffmpeg',
+          level: 'debug',
+          role: 'recording',
+          event: 'output',
+          code: 183,
+          sourceFragments: 0,
+          timestamp: at(2_000),
+        },
+      ];
+      const noisy = (index: number) => ({
+        scope: 'sdk',
+        level: 'debug',
+        subsystem: 'p2p',
+        event: 'sdk-diagnostic',
+        timestamp: at(10_000 + index * 1_000),
+      });
+      const noisyLines = Math.ceil((17 * 1024 * 1024) / (Buffer.byteLength(JSON.stringify(noisy(0))) + 1));
+      mkdirSync(join(root, 'logs'), { mode: 0o700, recursive: true });
+      writeFileSync(
+        join(root, 'logs', 'homebridge-eufy.jsonl'),
+        `${[...quiet, ...Array.from({ length: noisyLines }, (_, index) => noisy(index))]
+          .map((record) => JSON.stringify(record))
+          .join('\n')}\n`,
+        { mode: 0o600 },
+      );
+
+      now = startedAt + 20_000 + noisyLines * 1_000;
+      await diagnostics.endReproduction();
+      const review = await diagnostics.reviewSupportArchive();
+      const row = (evidence: string) => review.manifest.evidence.find((item) => item.evidence === evidence)!;
+
+      // Only the noisy class loses its oldest end.
+      expect(row('sdk-log')).toMatchObject({ truncated: true, coversReproduction: false });
+      for (const evidence of ['plugin-log', 'homekit-log', 'ffmpeg-log']) {
+        expect({ evidence, ...row(evidence) }).toMatchObject({ evidence, status: 'included' });
+        expect(row(evidence).truncated, evidence).toBeUndefined();
+        expect(row(evidence).retainedFrom, evidence).toBeUndefined();
+        expect(row(evidence).coversReproduction ?? true, evidence).toBe(true);
+      }
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -885,8 +956,13 @@ describe('guided diagnostics session', () => {
       await diagnostics.endReproduction();
 
       const review = await diagnostics.reviewSupportArchive();
-      expect(review.manifest.coversReproduction).toBe(true);
-      expect(review.manifest.retainedFrom).toBeUndefined();
+      for (const row of review.manifest.evidence) {
+        expect({ evidence: row.evidence, retainedFrom: row.retainedFrom }).toEqual({
+          evidence: row.evidence,
+          retainedFrom: undefined,
+        });
+        expect(row.coversReproduction ?? true).toBe(true);
+      }
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

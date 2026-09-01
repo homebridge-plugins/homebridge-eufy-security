@@ -213,31 +213,21 @@ function validatePayload(payload, envelope, archivePath) {
   const reproductionStartedAt = Date.parse(manifest.reproductionStartedAt);
   const reproductionEndedAt = Date.parse(manifest.reproductionEndedAt);
   const manifestFields = Object.keys(manifest).sort().join(',');
-  // Version 2 states whether the retained evidence still reaches the start of the reproduction, so it carries
-  // `coversReproduction` always and `retainedFrom` only where truncation dropped the oldest end. Version 1 is
-  // still read: an archive already exported cannot be re-made.
-  const coverageManifestFields =
-    'archiveExpiresAt,archiveFormat,coversReproduction,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,supportCaseId,version';
-  const truncatedCoverageManifestFields =
-    'archiveExpiresAt,archiveFormat,coversReproduction,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,retainedFrom,supportCaseId,version';
+  // Version 2 states per evidence class whether it still reaches the start of the reproduction, because each
+  // class carries its own byte budget: what one class dropped says nothing about another. Its top level is
+  // shaped like version 1's, which is still read — an archive already exported cannot be re-made.
   const currentManifestFields =
     'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionMode,reproductionStartedAt,supportCaseId,version';
   const legacyManifestFields =
     'archiveExpiresAt,archiveFormat,createdAt,evidence,excludedClasses,keyId,profile,reproductionEndedAt,reproductionStartedAt,supportCaseId,version';
   const expectedFields = {
-    2: [coverageManifestFields, truncatedCoverageManifestFields],
+    2: [currentManifestFields],
     1: [currentManifestFields, legacyManifestFields],
   }[manifest.version];
-  const retainedFrom = manifest.retainedFrom === undefined ? undefined : Date.parse(manifest.retainedFrom);
   const reproductionMode = manifestFields === legacyManifestFields ? 'now' : manifest.reproductionMode;
   if (
     expectedFields === undefined ||
     !expectedFields.includes(manifestFields) ||
-    (manifest.version === 2 && typeof manifest.coversReproduction !== 'boolean') ||
-    (manifest.retainedFrom !== undefined &&
-      (!Number.isFinite(retainedFrom) || new Date(retainedFrom).toISOString() !== manifest.retainedFrom)) ||
-    (manifest.version === 2 &&
-      manifest.coversReproduction !== (retainedFrom === undefined || retainedFrom <= reproductionStartedAt)) ||
     manifest.archiveFormat !== envelope.format ||
     manifest.keyId !== envelope.keyId ||
     !supportCasePattern.test(manifest.supportCaseId) ||
@@ -274,6 +264,8 @@ function validatePayload(payload, envelope, archivePath) {
       'bytes',
       'fields',
       'truncated',
+      'retainedFrom',
+      'coversReproduction',
     ]);
     const missingFields = new Set(['evidence', 'privacyClass', 'status', 'missingReason']);
     const allowedFields = item?.status === 'included' ? includedFields : missingFields;
@@ -285,6 +277,16 @@ function validatePayload(payload, envelope, archivePath) {
       item.privacyClass !== EVIDENCE_FILES.get(item.evidence)[2] ||
       !['included', 'missing'].includes(item.status) ||
       (item.truncated !== undefined && item.truncated !== true) ||
+      (item.coversReproduction !== undefined && item.coversReproduction !== false) ||
+      // `retainedFrom` exists only where this class was truncated, and stating it does not cover the
+      // reproduction has to agree with the timestamp it reports rather than being asserted separately.
+      (item.retainedFrom !== undefined && item.truncated !== true) ||
+      (item.retainedFrom !== undefined &&
+        (!Number.isFinite(Date.parse(item.retainedFrom)) ||
+          new Date(Date.parse(item.retainedFrom)).toISOString() !== item.retainedFrom)) ||
+      (item.coversReproduction === false && item.retainedFrom === undefined) ||
+      (item.retainedFrom !== undefined &&
+        item.coversReproduction !== (Date.parse(item.retainedFrom) > reproductionStartedAt ? false : undefined)) ||
       (item.status === 'included' &&
         (typeof item.bytes !== 'number' ||
           item.bytes < 0 ||
@@ -316,6 +318,8 @@ function validatePayload(payload, envelope, archivePath) {
       typeof item.content !== 'string' ||
       item.privacyClass !== definition[2] ||
       (item.truncated !== undefined && item.truncated !== true) ||
+      item.retainedFrom !== undefined ||
+      item.coversReproduction !== undefined ||
       !Array.isArray(item.fields)
     ) {
       throw new Error('Invalid or duplicate support archive evidence');
@@ -344,10 +348,12 @@ function validatePayload(payload, envelope, archivePath) {
   // newest-first — so an interval left open longer than the budget can hold loses its OLDEST end, which is
   // where the reported fault is. Every evidence class still reads `included`, so without this the archive
   // looks complete and the fault looks like it left no trace.
-  if (manifest.coversReproduction === false) {
-    console.warn(
-      `WARNING: evidence older than ${manifest.retainedFrom} was dropped, so nothing here covers the reproduction from ${manifest.reproductionStartedAt}. Ask for a shorter reproduction.`,
-    );
+  for (const item of manifest.evidence) {
+    if (item.coversReproduction === false) {
+      console.warn(
+        `WARNING: ${item.evidence}: evidence older than ${item.retainedFrom} was dropped, so this class does not cover the reproduction from ${manifest.reproductionStartedAt}.`,
+      );
+    }
   }
   return { manifest: { ...manifest, reproductionMode }, extracted };
 }

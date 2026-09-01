@@ -73,7 +73,7 @@
   "diagnosticDescription": "Cet appareil est reconnu, mais ses fonctions principales ne disposent pas encore d’une représentation HomeKit vérifiée.",
   "diagnosticOnly": "Diagnostic uniquement",
   "diagnosticsActionLabel": "À faire",
-  "diagnosticsArchiveCoverageGap": "Les preuves antérieures à {retainedFrom} ont été écartées à la limite de l'archive : cette archive ne remonte donc pas au début de la reproduction que vous avez marquée. Reproduisez la panne sur un intervalle plus court.",
+  "diagnosticsArchiveCoverageGap": "{classes} : les preuves antérieures à {retainedFrom} ont été écartées à la limite de l'archive, donc ces classes ne remontent pas au début de la reproduction que vous avez marquée. Reproduisez la panne sur un intervalle plus court.",
   "diagnosticsArchiveExcluded": "Toujours exclus :",
   "diagnosticsArchiveExpires": "expire le {expiresAt}",
   "diagnosticsArchiveExport": "Télécharger l’archive chiffrée",
