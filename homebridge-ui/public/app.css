@@ -673,10 +673,22 @@ button.diagnostics-quiet-action {
   -webkit-backface-visibility: hidden;
 }
 
+/*
+ * The face turned away from the viewer, which must leave the tab order as well as the pointer's reach.
+ *
+ * `backface-visibility` and `opacity` hide it, and `pointer-events` puts it out of the mouse's reach, but none
+ * of those remove a control from the tab order or the accessibility tree. Without `visibility` the away-facing
+ * controls stayed reachable: tabbing a tile's front moved next into its own hidden back, where a keyboard user
+ * could switch a camera out of HomeKit without ever seeing the panel. `visibility` carries the same 210ms delay
+ * as the opacity swap, so the flip looks exactly as it did.
+ */
 .device-card-front {
   opacity: 1;
+  visibility: visible;
   transform: rotateY(0deg);
-  transition: opacity 0s linear 210ms;
+  transition:
+    opacity 0s linear 210ms,
+    visibility 0s linear 210ms;
 }
 
 .device-card-back {
@@ -684,19 +696,24 @@ button.diagnostics-quiet-action {
   align-items: center;
   background: var(--tile-bg);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
   transform: rotateY(180deg);
-  transition: opacity 0s linear 210ms;
+  transition:
+    opacity 0s linear 210ms,
+    visibility 0s linear 210ms;
   cursor: pointer;
 }
 
 .device-tile-flipped .device-card-front {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 
 .device-tile-flipped .device-card-back {
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
 }
 
