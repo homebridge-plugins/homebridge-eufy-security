@@ -1,6 +1,6 @@
 import { defineConfig } from "vitepress";
 
-const base = process.env.DOCS_BASE ?? "/homebridge-eufy-security/";
+const base = process.env.DOCS_BASE ?? "/homebridge-eufy/";
 
 export default defineConfig({
   title: "Homebridge Eufy",
@@ -82,7 +82,7 @@ export default defineConfig({
     },
     search: { provider: "local" },
     socialLinks: [
-      { icon: "github", link: "https://github.com/homebridge-plugins/homebridge-eufy-security" },
+      { icon: "github", link: "https://github.com/homebridge-plugins/homebridge-eufy" },
       { icon: "discord", link: "https://discord.gg/5wjQ2asb64" },
     ],
     footer: {
