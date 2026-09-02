@@ -30,6 +30,7 @@ const legacyAcknowledge = document.querySelector('[data-legacy-acknowledge]');
 const menuDiagnostics = document.querySelector('[data-menu-diagnostics]');
 const menuAdvanced = document.querySelector('[data-menu-advanced]');
 const diagnosticsPanel = document.querySelector('[data-diagnostics]');
+const mastheadDiagnostics = document.querySelector('[data-masthead-diagnostics]');
 const diagnosticsClose = document.querySelector('[data-diagnostics-close]');
 const diagnosticsWizardPanel = document.querySelector('[data-diagnostics-wizard]');
 const diagnosticsQuestion = document.querySelector('[data-diagnostics-question]');
@@ -92,6 +93,7 @@ let legacyAcknowledged = false;
 let diagnosticsState = { status: 'inactive', missingEvidence: [] };
 let diagnosticsReviewId = '';
 let diagnosticsStartingAnother = false;
+let panelReturn;
 let dashboardPanelTrigger;
 const dashboardView = window.HomebridgeEufyDashboard;
 const legacySettingsView = window.HomebridgeEufyLegacySettings;
@@ -536,25 +538,60 @@ diagnosticsReproduction.addEventListener('click', async () => {
   }
 });
 
+/**
+ * Opens one dashboard panel over whichever screen is currently showing.
+ *
+ * The diagnostics panel is a sibling of the dashboard rather than a child of it, so it can open before an
+ * account exists — a startup or sign-in failure is visible on the setup and authentication screens, which is
+ * exactly where the dashboard is hidden. The advanced panel still lives inside the dashboard, because every
+ * setting it holds needs an account to mean anything.
+ */
 function openDashboardPanel(panel, trigger) {
   dashboardPanelTrigger = trigger;
-  dashboardState.hidden = true;
-  dashboardSummary.hidden = true;
-  deviceGroups.hidden = true;
-  diagnosticsPanel.hidden = panel !== diagnosticsPanel;
-  advancedPanel.hidden = panel !== advancedPanel;
+  panelReturn = {
+    masthead: masthead.hidden,
+    firstSetup: firstSetup.hidden,
+    setupContent: setupContent.hidden,
+    dashboard: dashboard.hidden,
+  };
+  masthead.hidden = true;
+  firstSetup.hidden = true;
+  setupContent.hidden = true;
+  if (panel === diagnosticsPanel) {
+    dashboard.hidden = true;
+    diagnosticsPanel.hidden = false;
+    advancedPanel.hidden = true;
+  } else {
+    dashboard.hidden = false;
+    dashboardState.hidden = true;
+    dashboardSummary.hidden = true;
+    deviceGroups.hidden = true;
+    advancedPanel.hidden = false;
+    diagnosticsPanel.hidden = true;
+  }
   panel.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   (panel === diagnosticsPanel ? diagnosticsClose : advancedClose).focus?.();
 }
 
+/** Restores the screen a panel was opened over, rather than assuming it was the dashboard. */
 function closeDashboardPanel() {
   diagnosticsPanel.hidden = true;
   advancedPanel.hidden = true;
   dashboardState.hidden = false;
   dashboardSummary.hidden = false;
   deviceGroups.hidden = false;
+  const restored = panelReturn;
+  if (restored) {
+    masthead.hidden = restored.masthead;
+    firstSetup.hidden = restored.firstSetup;
+    setupContent.hidden = restored.setupContent;
+    dashboard.hidden = restored.dashboard;
+    panelReturn = undefined;
+  }
   dashboardPanelTrigger?.focus?.();
-  recordActiveUiEventBestEffort('dashboard-opened');
+  if (!restored || restored.dashboard === false) {
+    recordActiveUiEventBestEffort('dashboard-opened');
+  }
 }
 
 function openCompletedDiagnostics(trigger) {
@@ -594,6 +631,8 @@ diagnosticsBackgroundAction.addEventListener('click', async () => {
     diagnosticsBackgroundAction.disabled = false;
   }
 });
+
+mastheadDiagnostics.addEventListener('click', () => menuDiagnostics.click());
 
 menuDiagnostics.addEventListener('click', async () => {
   openDashboardPanel(diagnosticsPanel, menuDiagnostics);

@@ -1591,3 +1591,14 @@ button:disabled {
     justify-content: center;
   }
 }
+
+/*
+ * The diagnostics entry in the masthead, which is the header shown before an account exists.
+ *
+ * The dashboard's own entry disappears with the dashboard, so on the setup and authentication screens this is
+ * the only way to start collecting — and those are the screens a startup or sign-in failure is visible on.
+ */
+.masthead-action {
+  margin-inline-start: auto;
+  align-self: center;
+}
