@@ -115,8 +115,18 @@ export type AdaptationRole = 'live-video' | 'live-audio' | 'return-audio' | 'rec
  * `output` is a process that ended as its session intended, reported only because it had written diagnostics
  * of its own. A build that warns its way through a working session is what a "live view is unwatchable"
  * report needs, and it is not a failure, so no reason is raised for it.
+ *
+ * `input-failed` is a process that stopped accepting the media it was still being given, which is observed on
+ * the pipe rather than in an exit status: the process may still be running, and the exit that follows is the
+ * one this domain asked for. It is reported apart from an exit because it carries no status of its own.
  */
-export type AdaptationEvent = 'started' | 'spawn-failed' | 'exited-before-output' | 'exited-while-streaming' | 'output';
+export type AdaptationEvent =
+  | 'started'
+  | 'spawn-failed'
+  | 'input-failed'
+  | 'exited-before-output'
+  | 'exited-while-streaming'
+  | 'output';
 
 /**
  * One bounded FFmpeg fact a media session observed, in the terms a support archive may keep.

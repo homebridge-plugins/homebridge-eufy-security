@@ -724,7 +724,8 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         let producedOutput = false;
         child.stderr.on('data', (chunk: Buffer) => stderr.observe(chunk));
         child.stdin.on('error', () => {
-          if (!stoppingProcesses.has(child)) {
+          if (!stopped && !talkbackEnded && !stoppingProcesses.has(child)) {
+            reportAdaptation('return-audio', 'input-failed', stderr);
             failTalkback('adaptation-failed');
           }
         });
@@ -732,7 +733,12 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           producedOutput = true;
           writeReturnAudio(camera, child, chunk);
         });
-        child.stdout.on('error', () => failTalkback('adaptation-failed'));
+        child.stdout.on('error', () => {
+          if (!stopped && !talkbackEnded && !stoppingProcesses.has(child)) {
+            reportAdaptation('return-audio', 'input-failed', stderr);
+            failTalkback('adaptation-failed');
+          }
+        });
         child.on('error', () => {
           if (!stoppingProcesses.has(child)) {
             reportAdaptation('return-audio', producedOutput ? 'exited-while-streaming' : 'spawn-failed', stderr);

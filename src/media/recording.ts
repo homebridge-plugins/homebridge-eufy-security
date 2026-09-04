@@ -94,6 +94,11 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
    * A recording ends in exactly one of three ways: its consumer stops it, its source runs out of media
    * and the final unit is marked as last, or it fails and the iteration rejects. Every one of them
    * releases the SDK handle, the adaptation process, and the source's budget extension exactly once.
+   *
+   * An adaptation input that stops accepting media is a failure only while the source still has media to
+   * give. Once the source has ended, the input has been closed and what remains is a flush the adaptation
+   * is free to have already finished, so a recording whose media is complete is completed rather than
+   * failed.
    */
   record(
     source: RecordingMediaSource,
@@ -243,7 +248,8 @@ export class FfmpegRecordingMedia implements RecordingMediaAdapter {
       }
     });
     adaptation.stdin.on('error', () => {
-      if (!stopped) {
+      if (!stopped && !sourceEnded) {
+        report('input-failed');
         fail('adaptation-failed');
       }
     });

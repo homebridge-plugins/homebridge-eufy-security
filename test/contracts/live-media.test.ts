@@ -1791,6 +1791,31 @@ describe('isolated return-audio adaptation', () => {
     ]);
   });
 
+  /**
+   * A return-audio adaptation that stops accepting the media it is being given has ended the talkback, and
+   * says so on the pipe rather than in an exit status. It is reported in its own right, because the exit that
+   * follows is the one this session asked for and carries no cause of its own.
+   */
+  it('reports a return-audio adaptation that stops accepting media, on either of its pipes', async () => {
+    for (const pipe of ['stdin', 'stdout'] as const) {
+      const session = await talkbackSession(vi.fn(async () => new SyntheticTalkback()));
+      session.stream.video(KEYFRAME);
+      session.returned[0]!.stderr.write('Error during demuxing: Broken pipe\n');
+      await settle();
+
+      session.returned[0]![pipe].emit('error', Object.assign(new Error('EPIPE'), { code: 'EPIPE' }));
+      await settle();
+
+      expect(session.talkbackOutcomes, pipe).toEqual([{ outcome: 'failed', reason: 'adaptation-failed' }]);
+      expect(session.notices, pipe).toContainEqual({
+        role: 'return-audio',
+        event: 'input-failed',
+        stderr: ['Error during demuxing: Broken pipe'],
+      });
+      expect(session.onVideoFailure, pipe).not.toHaveBeenCalled();
+    }
+  });
+
   it('contains a synchronous SDK talkback acquisition failure inside return audio', async () => {
     const session = await talkbackSession(() => {
       throw new Error('synthetic synchronous talkback failure');

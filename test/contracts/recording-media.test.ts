@@ -643,6 +643,62 @@ describe('recording media adaptation', () => {
     expect(session.outcomes).toEqual([{ outcome: 'failed', reason: 'station-busy' }]);
   });
 
+  /**
+   * A recording whose source ran out has already had its input closed, and the adaptation is free to have
+   * finished reading before the last of it was flushed. The media the source gave is complete either way, so
+   * the recording is completed with it rather than failed for a write the adaptation no longer needed.
+   */
+  it('completes a recording whose input fails to flush after its source ended', async () => {
+    const session = recordingSession();
+    await settle();
+    session.children[0].stdout.write(INIT_SEGMENT);
+    await settle();
+    session.source.deliver({ init: INIT_SEGMENT, data: mediaFragment(1), keyframe: true });
+    await settle();
+    session.children[0].stdout.write(mediaFragment(1));
+    await settle();
+    session.source.complete();
+    await settle();
+
+    session.children[0].stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    await settle();
+    session.children[0].emit('exit', 0, null);
+    await session.consumed.iteration;
+
+    expect(session.outcomes).toEqual([{ outcome: 'recording' }]);
+    expect(session.consumed.failed()).toBe(false);
+    expect(session.consumed.finished()).toBe(true);
+    expect(session.notices).not.toContainEqual(expect.objectContaining({ event: 'input-failed' }));
+  });
+
+  /**
+   * An adaptation that stops accepting media its source is still producing has ended the recording, and says
+   * so on the pipe rather than in an exit status. It is reported in its own right, because the exit that
+   * follows is the one this domain asked for and carries no cause of its own.
+   */
+  it('reports an adaptation that stops accepting the media its source is still producing', async () => {
+    const session = recordingSession();
+    await settle();
+    session.children[0].stdout.write(INIT_SEGMENT);
+    await settle();
+    session.children[0].stderr.write('av_interleaved_write_frame(): Broken pipe\n');
+    session.source.deliver({ init: INIT_SEGMENT, data: mediaFragment(1), keyframe: true });
+    await settle();
+
+    session.children[0].stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    await session.consumed.iteration;
+
+    expect(session.outcomes).toEqual([{ outcome: 'recording' }, { outcome: 'failed', reason: 'adaptation-failed' }]);
+    expect(session.notices).toEqual([
+      {
+        role: 'recording',
+        event: 'input-failed',
+        sourceFragments: 1,
+        stderr: ['av_interleaved_write_frame(): Broken pipe'],
+      },
+    ]);
+  });
+
   it('fails a recording the source exposes no fragment recording for', async () => {
     const outcomes: RecordingOutcome[] = [];
     const media = new FfmpegRecordingMedia('/synthetic/ffmpeg', undefined, () => {

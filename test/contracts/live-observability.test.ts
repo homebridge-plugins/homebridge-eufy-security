@@ -50,9 +50,12 @@ describe('the level an adaptation record carries', () => {
     expect(levelOf('output', { code: 255, stderr: ['bitrate= 281.9kbits/s'] })).toBe('debug');
   });
 
-  it.each(['spawn-failed', 'exited-before-output', 'exited-while-streaming'])('is warn for %s', (event) => {
-    expect(levelOf(event, { stderr: ['Invalid data found'] })).toBe('warn');
-  });
+  it.each(['spawn-failed', 'input-failed', 'exited-before-output', 'exited-while-streaming'])(
+    'is warn for %s',
+    (event) => {
+      expect(levelOf(event, { stderr: ['Invalid data found'] })).toBe('warn');
+    },
+  );
 });
 
 describe('an adaptation that has started', () => {

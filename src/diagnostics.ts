@@ -1754,6 +1754,7 @@ const ADAPTATION_ROLES = new Set(['live-video', 'live-audio', 'return-audio', 'r
 const ADAPTATION_EVENTS = new Set([
   'started',
   'spawn-failed',
+  'input-failed',
   'exited-before-output',
   'exited-while-streaming',
   'output',
@@ -1766,7 +1767,12 @@ const ADAPTATION_EVENTS = new Set([
  * is something a reader must act on, and levelling the class rather than the record put four warnings in the
  * log for every session that succeeded.
  */
-const ADAPTATION_FAILURE_EVENTS = new Set<string>(['spawn-failed', 'exited-before-output', 'exited-while-streaming']);
+const ADAPTATION_FAILURE_EVENTS = new Set<string>([
+  'spawn-failed',
+  'input-failed',
+  'exited-before-output',
+  'exited-while-streaming',
+]);
 /**
  * The signals a terminated adaptation is reported under.
  *
