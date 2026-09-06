@@ -8,8 +8,9 @@ cannot be hermetic.
 
 ## What writes
 
-Most scripts are observation-only. These are not, and are excluded from the published package by
-`.npmignore`:
+No script in this directory reaches an installed plugin: `.npmignore` excludes the whole of it, and the
+packed contract pins the shipped set as empty. Most are observation-only. These are not, so they belong only
+to a host whose owner has approved a real-device write:
 
 | Script                                | What it writes                                                      |
 | ------------------------------------- | ------------------------------------------------------------------- |
@@ -130,8 +131,17 @@ ownership lease against a live storage root and belongs only to a throwaway inst
 
 ## Support and repository tooling
 
-| Script                    | Purpose                                                    |
-| ------------------------- | ---------------------------------------------------------- |
-| `decrypt-diagnostics.mjs` | Decrypts and extracts a support archive a user sent in     |
-| `sync-device-artwork.mjs` | Regenerates bundled device artwork                         |
-| `guard-no-ecs.sh`         | Repository gate: fails if `eufy-security-client` reappears |
+| Script                    | Purpose                                                              |
+| ------------------------- | -------------------------------------------------------------------- |
+| `decrypt-diagnostics.mjs` | Decrypts and extracts a support archive a user sent in               |
+| `sync-device-artwork.mjs` | Regenerates bundled device artwork                                   |
+| `guard-no-ecs.sh`         | Repository gate: fails if `eufy-security-client` reappears           |
+| `qualify-release.mjs`     | Release gate: refuses a tree whose SDK or contents cannot be shipped |
+
+`qualify-release.mjs` runs from `prepublishOnly`, after `npm run verify`, because it asserts what only a
+publishable tree can satisfy: the SDK resolves to one exact published version from a trusted registry, with
+the integrity the lockfile records, and is not the symbolic link a working checkout uses. It then scans the
+packed file list and the tracked sources for private keys, bearer tokens, cloud credentials, and retained
+support archives. It cannot detect real device data, because a serial or P2P identifier is required to be
+synthetic and correctly shaped, so a pattern matching a real one matches every fixture; that remains a review
+obligation.
