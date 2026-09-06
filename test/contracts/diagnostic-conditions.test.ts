@@ -1301,6 +1301,8 @@ describe('diagnostic conditions', () => {
       width: 1280,
       height: 720,
       fps: 30,
+      mtu: 1378,
+      addressVersion: 'ipv4',
       serial: 'T8000P0000000000',
     } as never);
     reportHomeKitEvent(
@@ -1314,6 +1316,8 @@ describe('diagnostic conditions', () => {
         width: 1920,
         height: 1080,
         fps: 30,
+        mtu: 1228,
+        addressVersion: 'ipv6',
       },
     );
     reportHomeKitEvent(
@@ -1354,6 +1358,8 @@ describe('diagnostic conditions', () => {
         width: 1280,
         height: 720,
         fps: 30,
+        mtu: 1378,
+        addressVersion: 'ipv4',
       }),
     );
     expect(debug).toHaveBeenNthCalledWith(
@@ -1369,6 +1375,8 @@ describe('diagnostic conditions', () => {
         width: 1920,
         height: 1080,
         fps: 30,
+        mtu: 1228,
+        addressVersion: 'ipv6',
       }),
     );
   });
@@ -1417,6 +1425,8 @@ describe('diagnostic conditions', () => {
       width: 1280,
       height: 720,
       fps: 30,
+      mtu: 1378,
+      addressVersion: 'ipv4',
     });
     reportHomeKitEvent(logger, {
       adapter: 'camera.streaming',
@@ -1448,6 +1458,8 @@ describe('diagnostic conditions', () => {
           width: 1280,
           height: 720,
           fps: 30,
+          mtu: 1378,
+          addressVersion: 'ipv4',
         }),
       ]),
     );

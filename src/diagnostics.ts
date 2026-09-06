@@ -72,6 +72,8 @@ export type HomeKitEventTrace =
       width: number;
       height: number;
       fps: number;
+      mtu: number;
+      addressVersion: 'ipv4' | 'ipv6';
     }
   | {
       adapter: string;
@@ -1732,6 +1734,16 @@ const MIN_LIVE_VIDEO_DIMENSION = 120;
 const MAX_LIVE_VIDEO_DIMENSION = 4096;
 const MIN_LIVE_VIDEO_FRAME_RATE = 1;
 const MAX_LIVE_VIDEO_FRAME_RATE = 120;
+/**
+ * The datagram size a controller negotiated, bounded to a jumbo frame rather than to a local path.
+ *
+ * A packet size the path between here and the controller cannot carry is the fault this field exists to
+ * expose, so the ceiling is above every plausible negotiation instead of at the one this host would choose.
+ * Filtering an unexpected value would discard the observation.
+ */
+const MIN_LIVE_VIDEO_MTU = 128;
+const MAX_LIVE_VIDEO_MTU = 9216;
+const HOMEKIT_LIVE_ADDRESS_VERSIONS = new Set(['ipv4', 'ipv6']);
 const HOMEKIT_LIVE_SESSION_STAGES = new Set([
   'sdk-source-acquisition',
   'first-source-keyframe',
@@ -2367,6 +2379,8 @@ function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<stri
   const width = boundedInteger(value.width, MAX_LIVE_VIDEO_DIMENSION, MIN_LIVE_VIDEO_DIMENSION);
   const height = boundedInteger(value.height, MAX_LIVE_VIDEO_DIMENSION, MIN_LIVE_VIDEO_DIMENSION);
   const fps = boundedInteger(value.fps, MAX_LIVE_VIDEO_FRAME_RATE, MIN_LIVE_VIDEO_FRAME_RATE);
+  const mtu = boundedInteger(value.mtu, MAX_LIVE_VIDEO_MTU, MIN_LIVE_VIDEO_MTU);
+  const addressVersion = typeof value.addressVersion === 'string' ? value.addressVersion : undefined;
   if (
     !operation ||
     !HOMEKIT_LIVE_VIDEO_OPERATIONS.has(operation) ||
@@ -2376,7 +2390,10 @@ function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<stri
     !HOMEKIT_LIVE_VIDEO_LEVELS.has(codecLevel) ||
     width === undefined ||
     height === undefined ||
-    fps === undefined
+    fps === undefined ||
+    mtu === undefined ||
+    !addressVersion ||
+    !HOMEKIT_LIVE_ADDRESS_VERSIONS.has(addressVersion)
   ) {
     return undefined;
   }
@@ -2389,6 +2406,8 @@ function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<stri
     width,
     height,
     fps,
+    mtu,
+    addressVersion,
   };
 }
 

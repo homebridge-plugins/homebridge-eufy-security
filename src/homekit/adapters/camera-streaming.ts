@@ -1191,6 +1191,13 @@ interface PendingSession {
   source?: CameraMediaSource;
   snapshotMedia?: SnapshotMediaAdapter;
   capturedFallback?: boolean;
+  /**
+   * The family of address this session's media is sent to.
+   *
+   * Retained from the prepare request because a selection is traced at start and at every reconfigure, and by
+   * then only the session carries where its output goes.
+   */
+  addressVersion: 'ipv4' | 'ipv6';
 }
 
 interface CameraMediaSource extends LiveMediaSource, SnapshotMediaSource, RecordingMediaSource {}
@@ -1475,6 +1482,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     session = {
       prepared,
       videoSsrc,
+      addressVersion: request.addressVersion,
       ...(audioSsrc === undefined ? {} : { audioSsrc }),
       ...(this.binding.snapshotMedia ? { snapshotMedia: this.binding.snapshotMedia } : {}),
     };
@@ -1521,7 +1529,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       const video = negotiatedVideo({ ...session.selection.video, ...request.video }, session.videoSsrc, this.hap);
       session.prepared.reconfigure(video);
       session.selection = { ...session.selection, video: { ...session.selection.video, ...request.video } };
-      this.traceSelection('reconfigure', video);
+      this.traceSelection('reconfigure', video, session.addressVersion);
       callback();
       return;
     }
@@ -1532,7 +1540,7 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     }
     session.selection = request;
     const video = negotiatedVideo(request.video, session.videoSsrc, this.hap);
-    this.traceSelection('start', video);
+    this.traceSelection('start', video, session.addressVersion);
     this.watchForOutcome(request.sessionID);
     const source = this.binding.source;
     session.source = source;
@@ -1601,7 +1609,11 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     }
   }
 
-  private traceSelection(operation: 'start' | 'reconfigure', video: NegotiatedLiveVideo): void {
+  private traceSelection(
+    operation: 'start' | 'reconfigure',
+    video: NegotiatedLiveVideo,
+    addressVersion: 'ipv4' | 'ipv6',
+  ): void {
     this.binding.reportSelection?.({
       event: 'live-video-selected',
       operation,
@@ -1610,6 +1622,8 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
       width: video.width,
       height: video.height,
       fps: video.fps,
+      mtu: video.mtu,
+      addressVersion,
     });
   }
 

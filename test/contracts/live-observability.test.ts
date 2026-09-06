@@ -324,6 +324,8 @@ describe('a live record that reached the support archive', () => {
         width: 1600,
         height: 1200,
         fps: 30,
+        mtu: 1378,
+        addressVersion: 'ipv6',
       }),
     ).resolves.toEqual([
       {
@@ -337,8 +339,50 @@ describe('a live record that reached the support archive', () => {
         width: 1600,
         height: 1200,
         fps: 30,
+        mtu: 1378,
+        addressVersion: 'ipv6',
       },
     ]);
+  });
+
+  /**
+   * A packet size larger than the path can carry is the fault this field exists to expose, so an unexpected
+   * value is retained rather than filtered for being unexpected. Only a value that is not a datagram size at
+   * all is refused.
+   */
+  it('keeps a packet size larger than any local path, that being the observation itself', async () => {
+    await expect(
+      retained({
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'high',
+        level: '4.0',
+        width: 1280,
+        height: 720,
+        fps: 30,
+        mtu: 9000,
+        addressVersion: 'ipv4',
+      }),
+    ).resolves.toMatchObject([{ mtu: 9000, addressVersion: 'ipv4' }]);
+  });
+
+  /** The address family is a closed set of two, so a record naming anything else is not a HomeKit selection. */
+  it('refuses a live selection whose address family is not one HomeKit negotiates', async () => {
+    await expect(
+      retained({
+        adapter: 'camera.streaming',
+        event: 'live-video-selected',
+        operation: 'start',
+        profile: 'high',
+        level: '4.0',
+        width: 1280,
+        height: 720,
+        fps: 30,
+        mtu: 1378,
+        addressVersion: 'carrier-pigeon',
+      }),
+    ).resolves.toEqual([]);
   });
 
   it('refuses a HomeKit event name arriving under the SDK scope, the two vocabularies being separate', async () => {

@@ -1028,6 +1028,8 @@ describe('guided diagnostics session', () => {
         width: 1600,
         height: 1200,
         fps: 30,
+        mtu: 1378,
+        addressVersion: 'ipv4',
       });
       reportHomeKitEvent(logger, { adapter: 'camera.streaming', event: 'live-request-refused', reason: 'at-capacity' });
       reportHomeKitEvent(logger, {
@@ -1087,6 +1089,8 @@ describe('guided diagnostics session', () => {
           width: 1600,
           height: 1200,
           fps: 30,
+          mtu: 1378,
+          addressVersion: 'ipv4',
         },
         {
           scope: 'homekit',

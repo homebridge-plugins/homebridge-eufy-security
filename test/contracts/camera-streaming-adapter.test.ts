@@ -1663,6 +1663,8 @@ describe('camera streaming bundle adapter', () => {
       width: 1280,
       height: 720,
       fps: 30,
+      mtu: 1200,
+      addressVersion: 'ipv4',
     });
 
     await callStream(controller.delegate, {
@@ -1679,6 +1681,8 @@ describe('camera streaming bundle adapter', () => {
       width: 640,
       height: 360,
       fps: 15,
+      mtu: 1200,
+      addressVersion: 'ipv4',
     });
 
     await callStream(controller.delegate, { sessionID: request.sessionID, type: StreamRequestTypes.STOP });

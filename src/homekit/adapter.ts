@@ -72,9 +72,19 @@ export interface AdapterEventTrace {
 }
 
 /** An identity-free account of one live video selection made by a HomeKit controller. */
-export type AdapterLiveVideoTrace = Pick<NegotiatedLiveVideo, 'profile' | 'level' | 'width' | 'height' | 'fps'> & {
+export type AdapterLiveVideoTrace = Pick<
+  NegotiatedLiveVideo,
+  'profile' | 'level' | 'width' | 'height' | 'fps' | 'mtu'
+> & {
   event: 'live-video-selected';
   operation: 'start' | 'reconfigure';
+  /**
+   * The family of address the negotiated output is sent to.
+   *
+   * A session that codes healthy media which never arrives is distinguishable only by the datagram size it
+   * was told to send and where it was sent, and the address itself cannot be recorded.
+   */
+  addressVersion: 'ipv4' | 'ipv6';
 };
 
 /** An identity-free live-session failure or release milestone. */
