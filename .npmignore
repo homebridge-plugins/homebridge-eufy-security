@@ -38,6 +38,20 @@ homebridge-ui/public/i18n/*
 # which is the copy that ships.
 *.xcf
 
+# Development material with no role on an installed host: the contract specifications, the documentation
+# site, the agent skill definitions, and editor and formatter configuration.
+test
+docs
+.claude
+.editorconfig
+.prettierrc.json
+.prettierignore
+.gitmessage
+.nvmrc
+FUNDING.yml
+CODING_STANDARDS.md
+CONTEXT.md
+
 # Maintainer acceptance tooling that writes to a real device, and the scripts that drive it. Every other
 # script here is observation-only; these change camera state or play camera audio, so they stay out of the
 # package a user installs.
@@ -150,7 +164,6 @@ web_modules/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 
 # Gatsby files
 .cache/

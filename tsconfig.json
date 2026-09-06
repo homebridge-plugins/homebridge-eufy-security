@@ -6,7 +6,7 @@
     "moduleResolution": "nodenext",
     "outDir": "dist",
     "rootDir": "src",
-    "declaration": true,
+    "declaration": false,
     "sourceMap": true,
     "strict": true,
     "noImplicitOverride": true,
