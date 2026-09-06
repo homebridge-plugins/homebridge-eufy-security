@@ -10,7 +10,6 @@ attached to a GitHub issue. Nothing is uploaded by the plugin.
 - Review the manifest before confirming the export.
 - Share only the encrypted archive through a channel agreed with a maintainer.
 - Delete downloaded archives when the support case is complete and within 24 hours where possible.
-- Keep debug media captures separate. Images, raw video, camera audio, and talkback are never included.
 - Never upload the Homebridge storage directory, account stores, raw logs, or raw SDK objects.
 - Never grant remote camera, account, or Homebridge access for diagnostics.
 

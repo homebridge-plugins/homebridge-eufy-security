@@ -239,10 +239,6 @@ _Avoid_: Debug mode, telemetry
 A user-exported, encrypted collection of allowlisted troubleshooting evidence and a manifest describing its contents, privacy classes, and any missing evidence.
 _Avoid_: Log bundle, raw device dump
 
-**Debug media capture**:
-A separately consented, bounded recording of one selected media session's source and adapted outputs for local quality assessment.
-_Avoid_: Support archive, HKSV recording
-
 **Support case identifier**:
-A random identifier scoped to one guided diagnostics session that correlates its logs, diagnostics, capture metadata, manifest, and issue report.
+A random identifier scoped to one guided diagnostics session that correlates its logs, diagnostics, manifest, and issue report.
 _Avoid_: Device identifier, account identifier
