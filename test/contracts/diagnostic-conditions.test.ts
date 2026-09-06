@@ -1813,6 +1813,83 @@ describe('diagnostic conditions', () => {
     expect(leaked, 'not one fragment of any key survives, however the base64 happened to fall').toEqual([]);
   });
 
+  /**
+   * An elapsed time and a compressed IPv6 address are both colon-separated groups of hexadecimal digits, and one
+   * retained FFmpeg line carries both: `out_time` is how long a session actually coded, and an address beside it
+   * is sensitive. Each address form here is redacted whole, leaving no group of one behind, and the clock, the
+   * timecode, and the stream index beside them are kept as FFmpeg stated them.
+   */
+  it('redacts every written form of an address while keeping an FFmpeg clock whole', () => {
+    const retained = (line: string): readonly string[] => {
+      const debug = vi.fn();
+      reportAdaptationNotice({ debug }, { role: 'sdk', event: 'output', stderr: [line] });
+      const record =
+        debug.mock.calls[0] === undefined
+          ? {}
+          : (JSON.parse(debug.mock.calls[0][0] as string) as { stderr?: string[] });
+      return record.stderr ?? [];
+    };
+
+    expect(retained('out_time=00:00:02.944000')).toEqual(['out_time=00:00:02.944000']);
+    expect(retained('frame= 74 time=10:59:59.94 speed=0.999x')).toEqual(['frame= 74 time=10:59:59.94 speed=0.999x']);
+    expect(retained('Duration: 00:00:00.04, start: 0.000000')).toEqual(['Duration: 00:00:00.04, start: 0.000000']);
+    expect(retained('timecode: 01:02:03:04')).toEqual(['timecode: 01:02:03:04']);
+    expect(retained('Stream #0:1: Audio: aac (LC), 16000 Hz')).toEqual(['Stream #0:1: Audio: aac (LC), 16000 Hz']);
+
+    for (const address of [
+      '2001:db8:85a3:0:0:8a2e:370:7334',
+      '2001:0db8:85a3:0000:0000:8a2e:0370:7334',
+      '1234:5678:9012:3456:7890:1234:5678:9012',
+      '2001:db8::1',
+      '2001:db8::1:2:3',
+      'fe80::1',
+      'fe80::',
+      '2001:db8:2::',
+      '::1',
+      '::ffff:c0a8:101',
+    ]) {
+      expect(retained(`Connection to ${address} failed`), `${address} is an address, whatever its form`).toEqual([
+        'Connection to <address> failed',
+      ]);
+    }
+
+    for (const embedded of ['2001:db8:0:0:0:0:192.0.2.10', '::ffff:192.0.2.10']) {
+      expect(retained(`Connection to ${embedded} failed`), 'an embedded IPv4 quad leaves no group beside it').toEqual([
+        'Connection to <address>:<address> failed',
+      ]);
+    }
+
+    expect(
+      retained('out_time=00:00:02.944000 peer 2001:db8::1'),
+      'one line carries both, and each is treated as what it is',
+    ).toEqual(['out_time=00:00:02.944000 peer <address>']);
+
+    const group = (): string => Math.floor(Math.random() * 65536).toString(16);
+    const quad = (): string => Array.from({ length: 4 }, () => Math.floor(Math.random() * 256)).join('.');
+    const written = (): readonly string[] => {
+      const groups = Array.from({ length: 8 }, group);
+      const compressed = 1 + Math.floor(Math.random() * 6);
+      return [
+        groups.join(':'),
+        groups.map((each) => each.padStart(4, '0')).join(':'),
+        groups.join(':').toUpperCase(),
+        `${groups.slice(0, compressed).join(':')}::${groups.slice(compressed + 2).join(':')}`,
+        `${groups.slice(0, compressed).join(':')}::`,
+        `::${groups.slice(compressed).join(':')}`,
+        `${groups.slice(0, 6).join(':')}:${quad()}`,
+        `${groups.slice(0, compressed).join(':')}::${quad()}`,
+      ];
+    };
+
+    const leaked = Array.from({ length: 200 }, written)
+      .flat()
+      .filter(
+        (address) => !/^peer (?:<address>[:.]?)+ unreachable$/.test(retained(`peer ${address} unreachable`)[0] ?? ''),
+      );
+
+    expect(leaked, 'no group of any address survives, in any form it can be written').toEqual([]);
+  });
+
   it('drops an FFmpeg record whose role, event, exit status, or signal it cannot name', () => {
     const debug = vi.fn();
 

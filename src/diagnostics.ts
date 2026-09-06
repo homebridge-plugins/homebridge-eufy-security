@@ -2276,6 +2276,23 @@ function redactAdaptationStderr(line: string): string | undefined {
 }
 
 /**
+ * Replaces one run of colon-separated hexadecimal groups with `<address>`, and returns an FFmpeg clock or
+ * timecode unchanged.
+ *
+ * A run carrying a `::`, or three or more groups, is an address, unless it is exactly three or four all-decimal
+ * groups: that is the shape FFmpeg states an elapsed time and an SMPTE timecode in, and no uncompressed address
+ * form is that short, including the six groups that precede an embedded IPv4 quad. Two groups are neither, and
+ * are kept, which leaves a stream index intact.
+ */
+function redactColonSeparatedRun(run: string): string {
+  const groups = run.split(':');
+  if ((groups.length === 3 || groups.length === 4) && groups.every((group) => /^\d{1,4}$/.test(group))) {
+    return run;
+  }
+  return run.includes('::') || groups.length > 2 ? '<address>' : run;
+}
+
+/**
  * Removes from one line everything a support case may not keep, leaving the sentence and its numbers.
  *
  * One rule set for every line this plugin retains, whether it came from an adaptation's stderr or from the
@@ -2303,7 +2320,10 @@ function redactSensitiveText(line: string): string | undefined {
     .replace(/[A-Za-z]:\\[^\s]*/g, '<path>')
     .replace(/(?:\/[\w.@-]+){2,}\/?/g, '<path>')
     .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '<address>')
-    .replace(/\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){2,}\b/gi, '<address>')
+    .replace(
+      /\b[0-9a-f]{1,4}(?:(?::{1,2}[0-9a-f]{1,4})+(?:::)?|::)|(?<![\w:])::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*/gi,
+      redactColonSeparatedRun,
+    )
     .replace(/\bT\d[0-9A-Z]{9,}\b/g, '<serial>')
     .trim();
   return redacted === '' ? undefined : redacted;
