@@ -434,10 +434,6 @@ function activeDiagnosticsSession(storageRoot: string, now: number): PersistedDi
   return session && Date.parse(session.expiresAt) > now ? session : undefined;
 }
 
-function observedEvidencePath(storageRoot: string, supportCaseId: string, evidence: DiagnosticEvidence): string {
-  return join(storageRoot, DIAGNOSTICS_DIRECTORY, 'evidence', supportCaseId, evidence);
-}
-
 /**
  * Collapses one supplied string to bounded printable text, or nothing where none of it survives.
  *
@@ -526,12 +522,17 @@ function evidenceClassOf(record: Readonly<Record<string, unknown>>): LogEvidence
   return 'plugin-log';
 }
 
-function evidenceForEvent(event: Readonly<Record<string, unknown>>): DiagnosticEvidence[] {
-  const evidence: DiagnosticEvidence[] = ['plugin-log'];
-  if (event.scope === 'sdk') evidence.push('sdk-log');
-  if (event.scope === 'homekit') evidence.push('homekit-log');
-  if (event.scope === 'ffmpeg') evidence.push('ffmpeg-log');
-  return evidence;
+/**
+ * The classes a profile selected that a collection of that session's evidence carries no content for.
+ *
+ * The status a session reports and the manifest an archive carries name the same classes because both ask
+ * here, against the same collection.
+ */
+function missingEvidenceClasses(
+  selected: readonly DiagnosticEvidence[],
+  collected: readonly SupportArchiveEvidence[],
+): DiagnosticEvidence[] {
+  return selected.filter((evidence) => !collected.some((candidate) => candidate.evidence === evidence));
 }
 
 /** The scopes whose records are only kept while a support profile that declares them is authorized. */
@@ -574,7 +575,7 @@ export class GuidedDiagnostics {
       };
       await this.writeSession(session);
       this.pendingSupportArchive = undefined;
-      return this.project(session);
+      return await this.project(session);
     } finally {
       this.uiEventsClosing = false;
     }
@@ -622,7 +623,7 @@ export class GuidedDiagnostics {
         await this.writeSession(session);
       }
       await this.ensureMarker(session, 'reproduction-ended', session.reproductionEndedAt);
-      return this.project(session);
+      return await this.project(session);
     } catch (error) {
       if (closesUiEvents) this.uiEventsClosing = false;
       throw error;
@@ -668,19 +669,6 @@ export class GuidedDiagnostics {
         await appendFile(path, record, { encoding: 'utf8', mode: 0o600 });
       }
       await chmod(path, 0o600);
-      const observedPath = observedEvidencePath(this.storageRoot, session.supportCaseId, 'ui-log');
-      await mkdir(dirname(observedPath), { mode: 0o700, recursive: true });
-      await writeFile(
-        observedPath,
-        `${JSON.stringify({
-          version: 1,
-          supportCaseId: session.supportCaseId,
-          evidence: 'ui-log',
-          observedAt: new Date(this.now()).toISOString(),
-        })}\n`,
-        { mode: 0o600 },
-      );
-      await chmod(observedPath, 0o600);
     });
     this.uiEventWrites = write
       .catch(() => undefined)
@@ -726,14 +714,12 @@ export class GuidedDiagnostics {
             ? { coversReproduction: false as const }
             : {}),
         })),
-        ...selected
-          .filter((evidence) => !collected.some((candidate) => candidate.evidence === evidence))
-          .map((evidence) => ({
-            evidence,
-            privacyClass: 'diagnostic' as const,
-            status: 'missing' as const,
-            missingReason: 'no-allowlisted-record-observed' as const,
-          })),
+        ...missingEvidenceClasses(selected, collected).map((evidence) => ({
+          evidence,
+          privacyClass: 'diagnostic' as const,
+          status: 'missing' as const,
+          missingReason: 'no-allowlisted-record-observed' as const,
+        })),
       ],
       excludedClasses: SUPPORT_ARCHIVE_EXCLUDED_CLASSES,
     };
@@ -1039,21 +1025,16 @@ export class GuidedDiagnostics {
     return session;
   }
 
-  private project(session: PersistedDiagnosticsSession | undefined): GuidedDiagnosticsStatus {
+  private async project(session: PersistedDiagnosticsSession | undefined): Promise<GuidedDiagnosticsStatus> {
     if (!session) {
       return { status: 'inactive', selectedEvidence: [], missingEvidence: [], partialExportAvailable: false };
     }
     const selectedEvidence = DIAGNOSTICS_PROFILES[session.profile];
-    const missingEvidence = session.reproductionEndedAt
-      ? selectedEvidence.filter((evidence) => {
-          try {
-            readFileSync(observedEvidencePath(this.storageRoot, session.supportCaseId, evidence));
-            return false;
-          } catch {
-            return true;
-          }
-        })
-      : [];
+    const collected =
+      session.reproductionStartedAt && session.reproductionEndedAt
+        ? await this.collectSupportEvidence(session)
+        : undefined;
+    const missingEvidence = collected ? missingEvidenceClasses(selectedEvidence, collected) : [];
     const expired = Date.parse(session.expiresAt) <= this.now();
     const status = expired
       ? 'expired'
@@ -1084,12 +1065,19 @@ export class GuidedDiagnostics {
     };
   }
 
+  /**
+   * Replaces the persisted session atomically, and drops the `diagnostics/evidence` tree with it.
+   *
+   * Nothing reads that tree: a session's completeness is one read of the evidence an archive would carry, so
+   * the only diagnostics state that outlives a session is the rotating log and the persisted session itself.
+   */
   private async writeSession(session: PersistedDiagnosticsSession): Promise<void> {
     const directory = join(this.storageRoot, DIAGNOSTICS_DIRECTORY);
     const path = diagnosticsSessionPath(this.storageRoot);
     const temporary = `${path}.${randomUUID()}.tmp`;
     await mkdir(directory, { mode: 0o700, recursive: true });
     await chmod(directory, 0o700);
+    await rm(join(directory, 'evidence'), { force: true, recursive: true });
     await writeFile(temporary, `${JSON.stringify(session)}\n`, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, path);
@@ -1167,7 +1155,7 @@ class JsonLineLog {
     this.path = join(this.directory, LOG_FILE);
   }
 
-  write(message: string, written?: () => void): void {
+  write(message: string): void {
     const payload = sanitizeStructuredEvent(message);
     if (!payload) {
       return;
@@ -1200,7 +1188,6 @@ class JsonLineLog {
           );
         }
         await this.append(record);
-        written?.();
       })
       .catch(() => this.onError())
       .finally(() => {
@@ -1314,29 +1301,11 @@ export function createDiagnosticLogger(
         const event = sanitizeStructuredEvent(message);
         if (!event) return;
         const session = activeDiagnosticsSession(storageRoot!, now());
-        const requiredEvidence = evidenceForEvent(event);
         const verbose = VERBOSE_SCOPES.has(String(event.scope));
-        if (
-          verbose &&
-          (!session || !requiredEvidence.every((evidence) => DIAGNOSTICS_PROFILES[session.profile].includes(evidence)))
-        ) {
+        if (verbose && (!session || !DIAGNOSTICS_PROFILES[session.profile].includes(evidenceClassOf(event)))) {
           return;
         }
-        file.write(JSON.stringify(event), () => {
-          if (session?.reproductionStartedAt && !session.reproductionEndedAt) {
-            for (const evidence of requiredEvidence.filter((candidate) =>
-              DIAGNOSTICS_PROFILES[session.profile].includes(candidate),
-            )) {
-              const path = observedEvidencePath(storageRoot!, session.supportCaseId, evidence);
-              mkdirSync(dirname(path), { mode: 0o700, recursive: true });
-              writeFileSync(
-                path,
-                `${JSON.stringify({ version: 1, supportCaseId: session.supportCaseId, evidence, observedAt: new Date(now()).toISOString() })}\n`,
-                { mode: 0o600 },
-              );
-            }
-          }
-        });
+        file.write(JSON.stringify(event));
       }
     : undefined;
   return {

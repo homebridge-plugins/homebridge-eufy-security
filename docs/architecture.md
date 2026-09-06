@@ -135,6 +135,12 @@ reproduction-marker paths, snapshots the exact evidence shown in a versioned rev
 permits one export of that reviewed snapshot. The UI receives evidence only as an RSA-OAEP-wrapped,
 AES-256-GCM encrypted envelope; it has no plaintext evidence export or upload route.
 
+The completeness a session reports before export is that same collection read once, so the status a user
+acts on and the manifest a maintainer receives cannot disagree about which class is missing. A second
+per-session record of what was observed would be both a rival answer and durable state outliving the
+session that produced it, so there is none: writing a session drops the whole `diagnostics/evidence`
+tree, and retention applies to the rotating log and to the reviewed snapshot one export consumes.
+
 ### FFmpeg attribution
 
 An adaptation failure names the build it came from and what that build did, because neither is inferable

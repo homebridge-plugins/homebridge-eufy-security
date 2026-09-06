@@ -449,6 +449,47 @@ describe('guided diagnostics session', () => {
     }
   });
 
+  /**
+   * A session reports exactly the classes its archive will carry, and authorizing one leaves no
+   * `diagnostics/evidence` tree behind for any support case.
+   */
+  it('reports the evidence an archive will carry and keeps no per-session marker state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    let now = Date.parse('2026-08-16T08:00:00.000Z');
+    const stale = join(root, 'diagnostics', 'evidence', 'support-00000000-0000-4000-8000-000000000000');
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, 'plugin-log'), '{"version":1}\n');
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+
+    try {
+      await diagnostics.authorize('control-state', 'now');
+      expect(() => statSync(join(root, 'diagnostics', 'evidence'))).toThrow();
+      await diagnostics.startReproduction();
+      const logger = createDiagnosticLogger(
+        { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        root,
+        undefined,
+        () => now,
+      );
+      logger.debug?.(JSON.stringify({ scope: 'sdk', level: 'warn', subsystem: 'p2p', event: 'media-error' }));
+      await logger.flush?.();
+      now += 5_000;
+      const complete = await diagnostics.endReproduction();
+      const review = await diagnostics.reviewSupportArchive();
+
+      expect(complete.missingEvidence).toEqual(['plugin-log', 'homekit-log']);
+      expect(complete.missingEvidence).toEqual(
+        review.manifest.evidence.filter(({ status }) => status === 'missing').map(({ evidence }) => evidence),
+      );
+      expect(review.manifest.evidence).toContainEqual(
+        expect.objectContaining({ evidence: 'sdk-log', status: 'included' }),
+      );
+      expect(() => statSync(join(root, 'diagnostics', 'evidence'))).toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it('marks a bounded reproduction and reports exact missing evidence with issue context', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
     let now = Date.parse('2026-08-16T08:00:00.000Z');
@@ -482,7 +523,7 @@ describe('guided diagnostics session', () => {
         status: 'complete',
         supportCaseId: authorized.supportCaseId,
         profile: 'control-state',
-        missingEvidence: ['sdk-log'],
+        missingEvidence: ['plugin-log', 'sdk-log'],
         partialExportAvailable: true,
       });
       expect(prepared.issueUrl).toContain(encodeURIComponent(authorized.supportCaseId));
