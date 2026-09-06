@@ -1191,12 +1191,7 @@ interface PendingSession {
   source?: CameraMediaSource;
   snapshotMedia?: SnapshotMediaAdapter;
   capturedFallback?: boolean;
-  /**
-   * The family of address this session's media is sent to.
-   *
-   * Retained from the prepare request because a selection is traced at start and at every reconfigure, and by
-   * then only the session carries where its output goes.
-   */
+  /** The family of address this session's media is sent to, as the prepare request declared it. */
   addressVersion: 'ipv4' | 'ipv6';
 }
 
@@ -1609,6 +1604,12 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     }
   }
 
+  /**
+   * Records one identity-free live video selection.
+   *
+   * A reconfigure carries the packet size the start selection negotiated: HomeKit's reconfigure request
+   * declares geometry, frame rate and bit rate but no MTU, so the merged selection keeps the original.
+   */
   private traceSelection(
     operation: 'start' | 'reconfigure',
     video: NegotiatedLiveVideo,

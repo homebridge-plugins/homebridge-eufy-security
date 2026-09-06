@@ -78,12 +78,7 @@ export type AdapterLiveVideoTrace = Pick<
 > & {
   event: 'live-video-selected';
   operation: 'start' | 'reconfigure';
-  /**
-   * The family of address the negotiated output is sent to.
-   *
-   * A session that codes healthy media which never arrives is distinguishable only by the datagram size it
-   * was told to send and where it was sent, and the address itself cannot be recorded.
-   */
+  /** The family of address this selection's adapted output is sent to. The address itself is never recorded. */
   addressVersion: 'ipv4' | 'ipv6';
 };
 

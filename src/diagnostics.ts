@@ -1735,14 +1735,15 @@ const MAX_LIVE_VIDEO_DIMENSION = 4096;
 const MIN_LIVE_VIDEO_FRAME_RATE = 1;
 const MAX_LIVE_VIDEO_FRAME_RATE = 120;
 /**
- * The datagram size a controller negotiated, bounded to a jumbo frame rather than to a local path.
+ * The datagram size a controller negotiated, bounded to what the field on the wire can carry.
  *
- * A packet size the path between here and the controller cannot carry is the fault this field exists to
- * expose, so the ceiling is above every plausible negotiation instead of at the one this host would choose.
- * Filtering an unexpected value would discard the observation.
+ * HomeKit transports the maximum MTU as an unsigned 16-bit integer, so every value a controller can ask for
+ * is inside these bounds and none is refused for being larger than this host would choose. A packet size the
+ * path cannot carry is the observation, not a reason to drop the record carrying it.
  */
-const MIN_LIVE_VIDEO_MTU = 128;
-const MAX_LIVE_VIDEO_MTU = 9216;
+const MIN_LIVE_VIDEO_MTU = 0;
+const MAX_LIVE_VIDEO_MTU = 65_535;
+/** The two address families HomeKit negotiates a destination in. */
 const HOMEKIT_LIVE_ADDRESS_VERSIONS = new Set(['ipv4', 'ipv6']);
 const HOMEKIT_LIVE_SESSION_STAGES = new Set([
   'sdk-source-acquisition',

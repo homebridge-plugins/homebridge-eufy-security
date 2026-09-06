@@ -24,16 +24,15 @@ const SECRETS = [
   { name: 'private key', pattern: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ },
   { name: 'bearer token', pattern: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./ },
   { name: 'cloud access key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { name: 'retained support archive', pattern: /homebridge-eufy-support-\w+\.eufysupport/ },
 ];
-const failures = [];
-
 /**
- * Records a failed qualification rather than throwing, so one run reports every reason a tree is unpublishable.
+ * Retained evidence, matched on the path rather than the content.
+ *
+ * A support archive is encrypted and a rotated log is gzipped, so neither answers a pattern read out of its
+ * bytes. What identifies them is where they are and what they are called.
  */
-function refuse(reason) {
-  failures.push(reason);
-}
+const EVIDENCE = /(?:\.eufysupport(?:\.gz)?|\.jsonl(?:\.\d+)?(?:\.gz)?)$/i;
+const failures = [];
 
 const manifest = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8'));
 const lockfile = JSON.parse(readFileSync(join(repository, 'package-lock.json'), 'utf8'));
@@ -41,36 +40,36 @@ const declared = manifest.dependencies?.[SDK] ?? '';
 const locked = lockfile.packages?.[`node_modules/${SDK}`] ?? {};
 
 if (!PUBLISHABLE_VERSION.test(declared)) {
-  refuse(`${SDK} is declared as "${declared}", which is not one exact published version`);
+  failures.push(`${SDK} is declared as "${declared}", which is not one exact published version`);
 }
 if (locked.version !== declared) {
-  refuse(`the lockfile resolves ${SDK} to "${locked.version}" while the manifest declares "${declared}"`);
+  failures.push(`the lockfile resolves ${SDK} to "${locked.version}" while the manifest declares "${declared}"`);
 }
 if (typeof locked.integrity !== 'string' || !locked.integrity.startsWith('sha512-')) {
-  refuse(`the lockfile carries no sha512 integrity for ${SDK}`);
+  failures.push(`the lockfile carries no sha512 integrity for ${SDK}`);
 }
 if (!TRUSTED_REGISTRIES.some((registry) => (locked.resolved ?? '').startsWith(registry))) {
-  refuse(`the lockfile resolves ${SDK} from an unexpected source: ${locked.resolved}`);
+  failures.push(`the lockfile resolves ${SDK} from an unexpected source: ${locked.resolved}`);
 }
 
 try {
   const installed = join(repository, 'node_modules', ...SDK.split('/'));
   if (lstatSync(installed).isSymbolicLink()) {
-    refuse(`${SDK} is installed as a symbolic link, so the tree builds against an unpublished working copy`);
+    failures.push(`${SDK} is installed as a symbolic link, so the tree builds against an unpublished working copy`);
   } else {
     const version = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8')).version;
     if (version !== declared) {
-      refuse(`the installed ${SDK} is ${version} while the manifest declares ${declared}`);
+      failures.push(`the installed ${SDK} is ${version} while the manifest declares ${declared}`);
     }
   }
 } catch {
-  refuse(`${SDK} is not installed, so its provenance cannot be qualified`);
+  failures.push(`${SDK} is not installed, so its provenance cannot be qualified`);
 }
 
 const packed = JSON.parse(
   execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], { cwd: repository, encoding: 'utf8' }),
 )[0].files.map((file) => file.path);
-const tracked = execFileSync('git', ['ls-files', 'src', 'test', 'homebridge-ui', 'i18n'], {
+const tracked = execFileSync('git', ['ls-files', 'src', 'test', 'scripts', 'docs', 'homebridge-ui', 'i18n'], {
   cwd: repository,
   encoding: 'utf8',
 })
@@ -78,6 +77,10 @@ const tracked = execFileSync('git', ['ls-files', 'src', 'test', 'homebridge-ui',
   .filter(Boolean);
 
 for (const path of new Set([...packed, ...tracked])) {
+  if (EVIDENCE.test(path)) {
+    failures.push(`${path} is retained evidence`);
+    continue;
+  }
   if (BINARY.test(path)) {
     continue;
   }
@@ -89,7 +92,7 @@ for (const path of new Set([...packed, ...tracked])) {
   }
   for (const { name, pattern } of SECRETS) {
     if (pattern.test(content)) {
-      refuse(`${path} carries a ${name}`);
+      failures.push(`${path} carries a ${name}`);
     }
   }
 }

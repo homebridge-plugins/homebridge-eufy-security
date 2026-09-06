@@ -11,19 +11,17 @@ interface PackResult {
   filename: string;
   files: Array<{ path: string }>;
   entryCount: number;
-  size: number;
   unpackedSize: number;
 }
 
 /**
- * Whether this checkout depends on a local SDK build instead of the published one.
+ * Whether a contract that only a published SDK can satisfy is excused here.
  *
- * The SDK is developed beside the plugin, so a `file:` specifier resolves a working copy that has no
- * published version, no lockfile integrity, and no resolution from outside the repository. Continuous
- * integration refuses the exemption, so a `file:` specifier that reaches a commit still fails the
- * provenance it is meant to guard.
+ * The SDK is developed beside the plugin, so a `file:` specifier resolves a working copy that has no published
+ * version, no lockfile integrity, and no resolution from outside the repository. Continuous integration sets
+ * `CI` and is never excused, so a `file:` specifier that reaches a commit fails the provenance it guards.
  */
-const LINKED_SDK_CHECKOUT: boolean = (() => {
+const LINKED_SDK_EXEMPTION: boolean = (() => {
   const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as {
     dependencies?: Record<string, string>;
   };
@@ -621,12 +619,11 @@ function baselineJpeg(image: Buffer): { width: number; height: number } {
 describe('packed plugin', () => {
   /**
    * The install surface is exactly the runtime, its presentation assets, and the documents a registry page
-   * renders, held inside a declared bound.
+   * renders, inside a declared file and byte ceiling.
    *
-   * The compiled tree is compared against `src/` rather than against a written list, because a list of every
-   * module is edited by every module that is added and so records what shipped rather than requiring it. The
-   * bound is a release fact of its own: 12.7 MB of the package is device artwork rendered at 56 px, so the
-   * ceiling holds that deliberate cost still and refuses an accidental addition beside it.
+   * The compiled tree is required to correspond to `src/`, so a module added there must ship and nothing else
+   * may. The ceiling stands above the current package, which device artwork dominates: it refuses an
+   * accidental addition rather than describing the size as small.
    */
   it('ships exactly the allowlisted install surface, within a declared bound', () => {
     const directory = mkdtempSync(join(tmpdir(), 'homebridge-eufy-security-bounds-'));
@@ -672,8 +669,8 @@ describe('packed plugin', () => {
         ),
         'no build byproduct, editable master, or recorded media ships',
       ).toEqual([]);
-      expect(result.entryCount, 'the package holds a bounded number of files').toBeLessThanOrEqual(280);
-      expect(result.unpackedSize, 'the package holds a bounded number of bytes').toBeLessThanOrEqual(15_000_000);
+      expect(result.entryCount, 'the package holds a bounded number of files').toBeLessThanOrEqual(240);
+      expect(result.unpackedSize, 'the package holds a bounded number of bytes').toBeLessThanOrEqual(14_000_000);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
@@ -703,7 +700,7 @@ describe('packed plugin', () => {
    * A published plugin resolves one exact SDK build, so the specifier names a version rather than a range and
    * the lockfile carries the integrity that build hashes to.
    */
-  it.skipIf(LINKED_SDK_CHECKOUT)('pins one exact published SDK build and the integrity it hashes to', () => {
+  it.skipIf(LINKED_SDK_EXEMPTION)('pins one exact published SDK build and the integrity it hashes to', () => {
     const repository = fileURLToPath(new URL('../..', import.meta.url));
     const packageJson = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>;
@@ -734,7 +731,6 @@ describe('packed plugin', () => {
       const [result] = JSON.parse(output) as PackResult[];
       execFileSync('tar', ['-xzf', join(directory, result.filename), '-C', directory]);
 
-      const entryPoint = pathToFileURL(join(directory, 'package', 'dist', 'index.js'));
       const packageDirectory = join(directory, 'package');
       const packedPackage = JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as {
         name: string;
@@ -1786,12 +1782,37 @@ describe('packed plugin', () => {
         firstSetup: { hidden: false },
         shell: { lang: 'en' },
       });
-      if (!LINKED_SDK_CHECKOUT) {
-        const plugin = (await import(entryPoint.href)) as { default: unknown };
-        expect(plugin.default).toBeTypeOf('function');
-      }
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
   }, 15_000);
+
+  /**
+   * The packed entry point loads and registers a platform, resolving its dependencies from outside this
+   * repository as an installed plugin does.
+   */
+  it.skipIf(LINKED_SDK_EXEMPTION)(
+    'exposes a registrable platform from the packed entry point',
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'homebridge-eufy-security-entry-'));
+      const repository = fileURLToPath(new URL('../..', import.meta.url));
+
+      try {
+        const output = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory], {
+          cwd: repository,
+          encoding: 'utf8',
+        });
+        const [result] = JSON.parse(output) as PackResult[];
+        execFileSync('tar', ['-xzf', join(directory, result.filename), '-C', directory]);
+        const plugin = (await import(pathToFileURL(join(directory, 'package', 'dist', 'index.js')).href)) as {
+          default: unknown;
+        };
+
+        expect(plugin.default).toBeTypeOf('function');
+      } finally {
+        rmSync(directory, { force: true, recursive: true });
+      }
+    },
+    15_000,
+  );
 });
