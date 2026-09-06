@@ -1,9 +1,10 @@
 name: Auto-close (project frozen)
 
 # The upstream eufy-security-client library has been deprecated by its maintainer.
-# Eufy has migrated its apps to a new "Mega" protocol, and a brand-new library is
-# being built against it. Until that lands, this plugin is frozen: no new features
-# or device support can be added, and most breakages originate upstream.
+# Eufy has migrated its apps to a new "Mega" protocol, and a new SDK was built
+# against it. The v5 rewrite on top of that SDK is in progress (tracked in #981),
+# so v4 is frozen: no new features or device support, and most breakages
+# originate upstream.
 #
 # This workflow posts an explanation on every newly opened issue and pull request
 # and closes it immediately.
@@ -54,19 +55,19 @@ jobs:
               "",
               "**This project is currently frozen.**",
               "",
-              "The plugin relies on [`eufy-security-client`](https://github.com/bropat/eufy-security-client), which its maintainer has **deprecated**. Eufy has moved its apps to a new **\"Mega\"** protocol, and a brand-new library is being built against it. All development effort is going there.",
+              "The plugin relies on [`eufy-security-client`](https://github.com/bropat/eufy-security-client), which its maintainer has **deprecated**. Eufy has moved its apps to a new **\"Mega\"** protocol, and a new SDK has been built against it. All development effort is going into the v5 rewrite on top of that SDK.",
               "",
               "What this means for now:",
               "- ✅ The current version keeps working as-is for devices still on the old protocol.",
-              "- 🧊 No new features or new device support can be added.",
+              "- 🧊 No new features or new device support can be added to v4.",
               "- 🩹 Only strictly necessary fixes for critical breakages will be considered.",
-              "- 🚀 Effort is focused on the new Mega-protocol library first. Work to adopt it in this plugin **has not started yet**.",
+              "- 🚀 **Work on the v5 rewrite has started**, on top of the new Mega-protocol SDK.",
               "",
-              "**ETA:** work on this plugin is not expected to begin before **mid-August 2026**, and only once the underlying library is ready.",
+              "**Follow progress:** [#981 — Homebridge Eufy V5 migration](https://github.com/homebridge-plugins/homebridge-eufy/issues/981). No ETA: v5 ships when it is ready.",
               "",
-              "Because of this, we are automatically closing new issues and pull requests until the migration is complete. This is not a reflection on your report — we simply cannot action it right now.",
+              "Because of this, we are automatically closing new issues and pull requests until the v5 migration is complete. This is not a reflection on your report — we simply cannot action it right now.",
               "",
-              "Please watch the repository and the upstream [deprecation notice](https://github.com/bropat/eufy-security-client) for updates.",
+              "Please subscribe to [#981](https://github.com/homebridge-plugins/homebridge-eufy/issues/981) for updates.",
               "",
               "💬 For questions and discussion, join us on [Discord](https://discord.gg/jc8FSjqQAN).",
               "",
