@@ -157,6 +157,27 @@ const PACKAGED_PLACEHOLDER = readFileSync(new URL('../../media/Snapshot-Unavaila
 const PACKAGED_DISABLED_IMAGE = readFileSync(new URL('../../media/camera-disabled.jpg', import.meta.url));
 const PACKAGED_OFFLINE_IMAGE = readFileSync(new URL('../../media/camera-offline.jpg', import.meta.url));
 
+/**
+ * Every typed refusal an SDK snapshot acquisition can report, and the failure each must be attributed to.
+ *
+ * One case per acquisition and reason, so a refusal that stops being attributed names itself rather than
+ * failing as one slow test that walked all of them.
+ */
+const UNANSWERED_SNAPSHOT_CASES = [
+  ...(['not-observed', 'pending', 'download-failed', 'invalid-image'] as const).map((reason) => ({
+    mode: 'Cloud' as const,
+    member: 'snapshotStored' as const,
+    rejection: new StoredSnapshotUnavailableError(reason, 'synthetic stored refusal'),
+    expected: `stored-${reason}`,
+  })),
+  ...(['no-keyframe', 'source-failed', 'undecodable-burst', 'decoder-unavailable'] as const).map((reason) => ({
+    mode: 'Live' as const,
+    member: 'snapshotLive' as const,
+    rejection: new LiveSnapshotUnavailableError(reason, 'synthetic live refusal'),
+    expected: `live-${reason}`,
+  })),
+];
+
 const SETUP_ENDPOINTS_SUCCESS = 0;
 const SETUP_ENDPOINTS_BUSY = 1;
 const SETUP_ENDPOINTS_ERROR = 2;
@@ -1308,23 +1329,9 @@ describe('camera streaming bundle adapter', () => {
     ]);
   });
 
-  it('attributes an unanswered snapshot to the typed reason the SDK acquisition reports', async () => {
-    const cases = [
-      ...(['not-observed', 'pending', 'download-failed', 'invalid-image'] as const).map((reason) => ({
-        mode: 'Cloud' as const,
-        member: 'snapshotStored' as const,
-        rejection: new StoredSnapshotUnavailableError(reason, 'synthetic stored refusal'),
-        expected: `stored-${reason}`,
-      })),
-      ...(['no-keyframe', 'source-failed', 'undecodable-burst', 'decoder-unavailable'] as const).map((reason) => ({
-        mode: 'Live' as const,
-        member: 'snapshotLive' as const,
-        rejection: new LiveSnapshotUnavailableError(reason, 'synthetic live refusal'),
-        expected: `live-${reason}`,
-      })),
-    ];
-
-    for (const { mode, member, rejection, expected } of cases) {
+  it.each(UNANSWERED_SNAPSHOT_CASES)(
+    'attributes an unanswered snapshot to the typed $expected the SDK acquisition reports',
+    async ({ mode, member, rejection, expected }) => {
       const target = new Accessory(
         `Synthetic ${expected} camera`,
         uuid.generate(`synthetic-${expected}-camera`),
@@ -1350,13 +1357,12 @@ describe('camera streaming bundle adapter', () => {
         delegate: CameraStreamingDelegate;
       };
 
-      await expect(callSnapshot(controller.delegate), expected).resolves.toEqual(PACKAGED_PLACEHOLDER);
-      expect(acquisition, expected).toHaveBeenCalledOnce();
+      await expect(callSnapshot(controller.delegate)).resolves.toEqual(PACKAGED_PLACEHOLDER);
+      expect(acquisition).toHaveBeenCalledOnce();
       expect(
         diagnose.mock.calls
           .map(([condition]) => condition)
           .filter(({ code }) => code === 'camera-snapshot-unavailable'),
-        expected,
       ).toEqual([
         {
           code: 'camera-snapshot-unavailable',
@@ -1366,8 +1372,8 @@ describe('camera streaming bundle adapter', () => {
           reason: expected,
         },
       ]);
-    }
-  });
+    },
+  );
 
   it('attributes an unanswered Refresh snapshot to the stored acquisition that failed', async () => {
     const target = new Accessory(
