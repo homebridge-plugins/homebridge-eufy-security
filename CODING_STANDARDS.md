@@ -16,7 +16,7 @@ Setup, the development workflow, and the pull request process are in
 - Prettier is the formatting gate. There is no ESLint configuration. Vitest exercises hermetic
   contracts without account or network access.
 - `npm run verify` is the repository gate: formatting, the ECS dependency guard, the TypeScript
-  build, and contract tests must all pass.
+  build, and the complete specification suite must all pass.
 
 ## Architecture boundary
 
@@ -209,8 +209,10 @@ Every one of these has already produced a false conclusion, so each is checked r
   its `package.json` version is the local one.
 - **`package.json` must not be committed with the `file:` dependency.** The contract suite passes on a linked
   checkout: the SDK provenance contract skips while the specifier is `file:`, and continuous integration sets
-  `CI`, which refuses that exemption. So a local run is green and a `file:` specifier that reaches a commit
-  fails the gate instead of hiding in it. A failing local suite is a defect. What a linked checkout still
+  `CI`, which refuses that exemption. Publication refuses it too, because `prepublishOnly` builds and
+  qualifies the release before it verifies, and release qualification rejects a `file:` specifier and a
+  symlinked install outright. So a local run is green and a `file:` specifier that reaches a commit fails the
+  gate instead of hiding in it. A failing local suite is a defect. What a linked checkout still
   cannot do is build against the published pin, so while the committed pin names an SDK older than the
   surface `src/` is written against, CI fails at the `build` step and never reaches the tests: `tsc` resolves
   the pinned package and reports every symbol the local SDK has and the published one does not. Confirm those

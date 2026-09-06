@@ -33,9 +33,8 @@
     "docs:dev": "npm -C docs run dev",
     "docs:build": "npm -C docs run build",
     "test": "vitest run",
-    "test:contracts": "vitest run test/contracts",
-    "verify": "npm run lint && npm run guard:no-ecs && npm run build && npm run test:contracts",
-    "prepublishOnly": "npm run verify && npm run qualify:release"
+    "verify": "npm run lint && npm run guard:no-ecs && npm run build && npm test",
+    "prepublishOnly": "npm run build && npm run qualify:release && npm run verify"
   },
   "keywords": [
     "homebridge-plugin",

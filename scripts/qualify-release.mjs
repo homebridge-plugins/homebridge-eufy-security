@@ -3,7 +3,8 @@
  *
  * The contract suite runs on a working checkout, where the SDK is a link to the package being developed
  * beside this one. That link is exactly what must never be published, so the checks that refuse it live here
- * and run from `prepublishOnly` rather than from `npm run verify`.
+ * and run from `prepublishOnly` rather than from `npm run verify`. They run after the build, whose output they
+ * scan, and before the suite, whose linked-checkout exemptions are then unreachable.
  *
  * Real-device data is not detectable by shape. A device serial, a station identifier, and a P2P DID are
  * required to be synthetic *and correctly shaped*, so a pattern that matches a real one matches every fixture

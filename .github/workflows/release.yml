@@ -51,8 +51,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: npm ci --ignore-scripts
 
-      - name: Lint
-        run: npm run lint
+      # The gate reads a real version banner off the binary the plugin ships, and `ffmpeg-for-homebridge`
+      # carries none in its tarball: its install script downloads it. `--ignore-scripts` above is what keeps
+      # every other dependency from running code on this runner.
+      - name: Fetch the bundled FFmpeg binary
+        run: npm rebuild ffmpeg-for-homebridge
+
+      # The gate runs here, at the exact commit being published, before anything touches the registry.
+      # `prepublishOnly` runs it again with release qualification during `npm publish`, which is what covers a
+      # publication that did not come through this workflow.
+      - name: Verify
+        run: npm run verify
 
       - name: Determine release type
         id: release-type
