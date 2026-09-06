@@ -12,6 +12,21 @@ interface PackResult {
   files: Array<{ path: string }>;
 }
 
+/**
+ * Whether this checkout depends on a local SDK build instead of the published one.
+ *
+ * The SDK is developed beside the plugin, so a `file:` specifier resolves a working copy that has no
+ * published version, no lockfile integrity, and no resolution from outside the repository. Continuous
+ * integration refuses the exemption, so a `file:` specifier that reaches a commit still fails the
+ * provenance it is meant to guard.
+ */
+const LINKED_SDK_CHECKOUT: boolean = (() => {
+  const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as {
+    dependencies?: Record<string, string>;
+  };
+  return (manifest.dependencies?.['@mega-yfue/eufy-sdk'] ?? '').startsWith('file:') && process.env.CI === undefined;
+})();
+
 async function renderUi(
   script: string,
   pluginConfig: Array<Record<string, unknown>>,
@@ -610,10 +625,6 @@ describe('packed plugin', () => {
       main?: string;
       dependencies?: Record<string, string>;
     };
-    const packageLock = JSON.parse(readFileSync(join(repository, 'package-lock.json'), 'utf8')) as {
-      packages: Record<string, { version?: string; integrity?: string }>;
-    };
-    const sdk = packageLock.packages['node_modules/@mega-yfue/eufy-sdk'];
 
     expect(packageJson.displayName).toBe('Homebridge Eufy');
     expect(packageJson.name).toBe('@homebridge-plugins/homebridge-eufy-security');
@@ -623,6 +634,22 @@ describe('packed plugin', () => {
       '@mega-yfue/eufy-sdk',
       'ffmpeg-for-homebridge',
     ]);
+  });
+
+  /**
+   * A published plugin resolves one exact SDK build, so the specifier names a version rather than a range and
+   * the lockfile carries the integrity that build hashes to.
+   */
+  it.skipIf(LINKED_SDK_CHECKOUT)('pins one exact published SDK build and the integrity it hashes to', () => {
+    const repository = fileURLToPath(new URL('../..', import.meta.url));
+    const packageJson = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    const packageLock = JSON.parse(readFileSync(join(repository, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; integrity?: string }>;
+    };
+    const sdk = packageLock.packages['node_modules/@mega-yfue/eufy-sdk'];
+
     expect(packageJson.dependencies?.['@mega-yfue/eufy-sdk']).toBe('0.1.0-beta.53');
     expect(sdk).toEqual(
       expect.objectContaining({
@@ -1696,8 +1723,10 @@ describe('packed plugin', () => {
         firstSetup: { hidden: false },
         shell: { lang: 'en' },
       });
-      const plugin = (await import(entryPoint.href)) as { default: unknown };
-      expect(plugin.default).toBeTypeOf('function');
+      if (!LINKED_SDK_CHECKOUT) {
+        const plugin = (await import(entryPoint.href)) as { default: unknown };
+        expect(plugin.default).toBeTypeOf('function');
+      }
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

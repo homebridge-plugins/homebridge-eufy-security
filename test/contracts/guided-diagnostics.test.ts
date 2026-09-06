@@ -705,14 +705,20 @@ describe('guided diagnostics session', () => {
       expect(payload.manifest).toEqual(review.manifest);
       const ownManifest = JSON.parse(
         readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'),
-      ) as { version: string; dependencies: Record<string, string> };
+      ) as { version: string };
+      const installedSdk = JSON.parse(
+        readFileSync(
+          fileURLToPath(new URL('../../node_modules/@mega-yfue/eufy-sdk/package.json', import.meta.url)),
+          'utf8',
+        ),
+      ) as { version: string };
       expect(
         JSON.parse(payload.evidence[0]!.content),
         'an archive names the builds that produced it, so a reader can see a fault is already fixed',
       ).toMatchObject({
         version: 2,
         plugin: ownManifest.version,
-        sdk: ownManifest.dependencies['@mega-yfue/eufy-sdk'],
+        sdk: installedSdk.version,
       });
       expect(payload).toMatchObject({
         evidence: [

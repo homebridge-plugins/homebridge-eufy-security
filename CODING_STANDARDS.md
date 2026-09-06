@@ -207,12 +207,15 @@ Every one of these has already produced a false conclusion, so each is checked r
   that link with the last published version — silently, after which the plugin compiles against a surface
   that lacks the work under test. Check that `node_modules/@mega-yfue/eufy-sdk` is still a symlink and that
   its `package.json` version is the local one.
-- **`package.json` must not be committed with the `file:` dependency.** While the committed pin names an
-  SDK older than the surface `src/` is written against, CI fails at the `build` step and never reaches the
-  tests: `tsc` resolves the pinned package and reports every symbol the local SDK has and the published one
-  does not. Those compile errors, the pin, and the lockfile integrity in `test/contracts/package.test.ts`
-  are all the unpublished dependency, not defects; every other failure is. Confirm it by comparing the
-  failing run's error set against the previous commit's — an unchanged set implicates neither commit.
+- **`package.json` must not be committed with the `file:` dependency.** The contract suite passes on a linked
+  checkout: the SDK provenance contract skips while the specifier is `file:`, and continuous integration sets
+  `CI`, which refuses that exemption. So a local run is green and a `file:` specifier that reaches a commit
+  fails the gate instead of hiding in it. A failing local suite is a defect. What a linked checkout still
+  cannot do is build against the published pin, so while the committed pin names an SDK older than the
+  surface `src/` is written against, CI fails at the `build` step and never reaches the tests: `tsc` resolves
+  the pinned package and reports every symbol the local SDK has and the published one does not. Confirm those
+  by comparing the failing run's error set against the previous commit's — an unchanged set implicates neither
+  commit.
 - **Read the code that actually ran.** Grep the built `dist` for the symbol the change introduces or
   removes. A source tree that typechecks says nothing about what the host loaded.
 - **Turn the host's debug output on before measuring**, so a negotiated selection or a protocol trace is
