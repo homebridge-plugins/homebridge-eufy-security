@@ -129,10 +129,6 @@ dist
 
 .angular
 
-src/plugin/version.ts
-src/version.ts
-homebridge-ui/version.ts
-
 TODO
 
 docker-compose.yml

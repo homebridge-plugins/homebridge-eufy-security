@@ -2,6 +2,8 @@ import { constants, createCipheriv, createHash, publicEncrypt, randomBytes, rand
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { gunzip as gunzipCallback, gzip as gzipCallback } from 'node:zlib';
 
@@ -147,6 +149,54 @@ const FFMPEG_ENVIRONMENT_FILE = 'ffmpeg.json';
 /** How much of an FFmpeg path or version banner is kept, which is more than either needs. */
 const MAX_FFMPEG_IDENTITY_LENGTH = 256;
 const DEBUG_AUTHORIZATION_MS = 72 * 60 * 60 * 1_000;
+
+/**
+ * The version declared by the nearest `package.json` above a resolved file, or `unknown` if none states one.
+ *
+ * The nearest manifest above a module is the one that owns it, which is the same rule Node itself applies, so
+ * this reports the build that is actually loaded rather than a version written down a second time. It walks
+ * rather than joining a fixed number of segments because the plugin's own module is a directory deeper once
+ * built, and an SDK resolved through a link answers from wherever the link points.
+ */
+function loadedVersion(from: string | undefined): string {
+  if (from === undefined) {
+    return 'unknown';
+  }
+  for (let directory = dirname(from); directory !== dirname(directory); directory = dirname(directory)) {
+    try {
+      const declared = (JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { version?: unknown })
+        .version;
+      return typeof declared === 'string' ? declared : 'unknown';
+    } catch {
+      continue;
+    }
+  }
+  return 'unknown';
+}
+
+/**
+ * Where the SDK the plugin loaded resides, or `undefined` when nothing answers the specifier.
+ *
+ * Resolution fails on its own terms and separately from reading: an installation that has not installed its
+ * dependencies resolves nothing, and a version label is not worth refusing to load diagnostics over.
+ */
+function loadedSdkEntry(): string | undefined {
+  try {
+    return createRequire(import.meta.url).resolve('@mega-yfue/eufy-sdk');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The plugin and SDK builds that produced an archive, read once at load.
+ *
+ * A support archive is read to decide whether a fault is already fixed, and without these two an archive
+ * cannot answer that. Every failure degrades to `unknown` rather than a guess, because a wrong version sends
+ * the reader further from the fault than an absent one does.
+ */
+const PLUGIN_VERSION = loadedVersion(fileURLToPath(import.meta.url));
+const SDK_VERSION = loadedVersion(loadedSdkEntry());
 const gzip = promisify(gzipCallback);
 const gunzip = promisify(gunzipCallback);
 const SDK_SUBSYSTEMS = new Set(['device', 'mega', 'mqtt', 'p2p', 'push', 'webrtc', 'sdk']);
@@ -761,14 +811,17 @@ export class GuidedDiagnostics {
         evidence: 'environment',
         privacyClass: 'operational',
         contentType: 'application/json',
-        content: `${JSON.stringify({ version: 1, node: process.version, platform: process.platform, arch: process.arch, ...(ffmpeg ? { ffmpeg } : {}) })}\n`,
+        content: `${JSON.stringify({ version: 2, plugin: PLUGIN_VERSION, sdk: SDK_VERSION, node: process.version, platform: process.platform, arch: process.arch, ...(ffmpeg ? { ffmpeg } : {}) })}\n`,
         /**
          * The record is operational and one field is classified above it: a resolved FFmpeg path is an
          * environment fact, but it can carry the home directory of the account Homebridge runs as, so it is
          * declared as diagnostic rather than presented alongside the host's own architecture.
          */
         fields: [
-          ...['version', 'node', 'platform', 'arch'].map((field) => ({ field, privacyClass: 'operational' as const })),
+          ...['version', 'plugin', 'sdk', 'node', 'platform', 'arch'].map((field) => ({
+            field,
+            privacyClass: 'operational' as const,
+          })),
           ...(ffmpeg ? [{ field: 'ffmpeg', privacyClass: 'diagnostic' as const }] : []),
         ],
       },

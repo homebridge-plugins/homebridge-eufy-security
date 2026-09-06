@@ -614,7 +614,6 @@ describe('packed plugin', () => {
       packages: Record<string, { version?: string; integrity?: string }>;
     };
     const sdk = packageLock.packages['node_modules/@mega-yfue/eufy-sdk'];
-    const generatedVersion = readFileSync(join(repository, 'src', 'version.ts'), 'utf8');
 
     expect(packageJson.displayName).toBe('Homebridge Eufy');
     expect(packageJson.name).toBe('@homebridge-plugins/homebridge-eufy-security');
@@ -631,7 +630,6 @@ describe('packed plugin', () => {
         integrity: 'sha512-7dsi8d9pS3qgqY5y2X+AZ/GRJFccTffdz/k/grarMxAusSodoiyBYzQHal/hNT3pHc0/olJdrpuyCYycaPKeLw==',
       }),
     );
-    expect(generatedVersion).toBe(`export const LIB_VERSION = ${JSON.stringify(packageJson.version)};\n`);
   });
 
   it('contains an importable runtime and production custom UI shell', async () => {

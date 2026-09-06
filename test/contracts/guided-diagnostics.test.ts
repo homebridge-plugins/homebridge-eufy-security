@@ -679,6 +679,8 @@ describe('guided diagnostics session', () => {
       expect(review.manifest.evidence[0]).toMatchObject({
         fields: [
           { field: 'version', privacyClass: 'operational' },
+          { field: 'plugin', privacyClass: 'operational' },
+          { field: 'sdk', privacyClass: 'operational' },
           { field: 'node', privacyClass: 'operational' },
           { field: 'platform', privacyClass: 'operational' },
           { field: 'arch', privacyClass: 'operational' },
@@ -701,6 +703,17 @@ describe('guided diagnostics session', () => {
 
       const payload = decryptSupportArchive(exported.archive, privateKey);
       expect(payload.manifest).toEqual(review.manifest);
+      const ownManifest = JSON.parse(
+        readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'),
+      ) as { version: string; dependencies: Record<string, string> };
+      expect(
+        JSON.parse(payload.evidence[0]!.content),
+        'an archive names the builds that produced it, so a reader can see a fault is already fixed',
+      ).toMatchObject({
+        version: 2,
+        plugin: ownManifest.version,
+        sdk: ownManifest.dependencies['@mega-yfue/eufy-sdk'],
+      });
       expect(payload).toMatchObject({
         evidence: [
           { evidence: 'environment', privacyClass: 'operational', contentType: 'application/json' },
@@ -1223,6 +1236,8 @@ describe('guided diagnostics session', () => {
         status: 'included',
         fields: [
           { field: 'version', privacyClass: 'operational' },
+          { field: 'plugin', privacyClass: 'operational' },
+          { field: 'sdk', privacyClass: 'operational' },
           { field: 'node', privacyClass: 'operational' },
           { field: 'platform', privacyClass: 'operational' },
           { field: 'arch', privacyClass: 'operational' },
@@ -1236,13 +1251,13 @@ describe('guided diagnostics session', () => {
       expect(
         rerecorded.fields,
         'a binary that answered no version banner is reported without one rather than with a guess',
-      ).toHaveLength(5);
+      ).toHaveLength(7);
 
       writeFileSync(join(root, 'diagnostics', 'ffmpeg.json'), '{"version":1,"ffmpeg":{"source":"invented"}}\n');
       expect(
         (await diagnostics.reviewSupportArchive()).manifest.evidence[0]!.fields,
         'a record whose own fields do not narrow is dropped rather than partly reported',
-      ).toHaveLength(4);
+      ).toHaveLength(6);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

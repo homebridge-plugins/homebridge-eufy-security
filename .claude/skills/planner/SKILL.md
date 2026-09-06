@@ -96,5 +96,4 @@ When the user approves the plan (says "go", "looks good", "approved", "do it", e
 
 - Never start editing files during planning
 - Never assume device properties without reading raw data or existing code
-- Never plan changes to `src/version.ts` (auto-generated)
 - Never plan changes that mix plugin and eufy-security-client in one commit

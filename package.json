@@ -29,7 +29,6 @@
     "build": "npm run build-plugin && npm run postbuild",
     "build-plugin": "rimraf ./dist && tsc",
     "postbuild": "cp -r ./media ./dist/media",
-    "prebuild": "node --input-type=module -e \"import{readFileSync}from'fs';const p=JSON.parse(readFileSync('./package.json','utf8'));process.stdout.write('export const LIB_VERSION = '+JSON.stringify(p.version)+';\\n');\" > src/version.ts",
     "guard:no-ecs": "bash scripts/guard-no-ecs.sh",
     "docs:dev": "npm -C docs run dev",
     "docs:build": "npm -C docs run build",
