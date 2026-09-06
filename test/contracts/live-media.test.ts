@@ -773,15 +773,50 @@ describe('live media adaptation', () => {
     vi.useRealTimers();
   });
 
-  it('timestamps live video by arrival and bounds the analysis that precedes a first coded frame', async () => {
-    const session = await liveSession();
-    await session.start();
-    session.stream.video(KEYFRAME);
+  /**
+   * Every adapted input of one session is read on one clock: when its media arrived.
+   *
+   * A pipe carries no timeline, so arrival is the only timeline available, and two outputs of one session can
+   * be presented together only while both resolve to it. The rule is stated over every input format rather
+   * than per argument list, so no single stream can be read on a clock of its own.
+   */
+  it('reads every adapted input on the arrival clock', async () => {
+    const video = await liveSession();
+    await video.start();
+    video.stream.video(KEYFRAME);
+    video.stream.video({ ...KEYFRAME, codec: 'h265', keyframe: true, data: Buffer.from([0, 0, 0, 1, 0x26]) });
+    const aac = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await aac.start();
+    aac.stream.audio({ codec: 'aac-lc', data: Buffer.from([0xff, 0xf1, 1]) });
+    const alaw = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await alaw.start();
+    alaw.stream.audio({ codec: 'g711a', data: Buffer.from([1, 2, 3]) });
 
-    const options = inputOptions(session.spawned[0]!);
-    expect(options).toEqual(
-      expect.arrayContaining(['-use_wallclock_as_timestamps', '1', '-probesize', '32', '-analyzeduration', '1']),
-    );
+    const inputs = [...video.spawned, ...aac.spawned, ...alaw.spawned].map(inputOptions);
+    expect(inputs).toHaveLength(4);
+    for (const options of inputs) {
+      expect(options).toEqual(expect.arrayContaining(['-use_wallclock_as_timestamps', '1']));
+    }
+    video.prepared.stop();
+    aac.prepared.stop();
+    alaw.prepared.stop();
+  });
+
+  /**
+   * A live audio output is resolved against the clock its input is read on, and resolves an excess by
+   * discarding it.
+   *
+   * An encoder advances its output timeline by the samples in each coded frame it is handed, whatever
+   * timestamp arrived with them, so the arrival stamp alone moves only where that timeline starts. The
+   * resampler is what bounds the output to real time however much content a source hands over at once, and it
+   * belongs on every audio input format rather than one.
+   */
+  it.each(['aac-lc', 'g711a'] as const)('resolves a live %s output against arrival', async (codec) => {
+    const session = await liveSession(undefined, { audio: AAC_ELD_16 });
+    await session.start();
+    session.stream.audio({ codec, data: Buffer.from([0xff, 0xf1, 1]) });
+
+    expect(session.spawned[0]!).toEqual(expect.arrayContaining(['-af', 'aresample=async=1']));
     session.prepared.stop();
   });
 

@@ -514,12 +514,57 @@ analysis window is bounded to its minimum instead, because the caller declares t
 analysis has nothing left to discover; that bound is what makes time to first output independent of the
 source keyframe interval, and it is the only part of the window a plugin can shorten without losing media.
 
-Audio keeps its own clock. An ADTS or A-law elementary stream states its rate, so its timeline is real
-without help, and the SDK reports neither a sample rate nor a channel count because a station sends
-neither. Only raw A-law has to be told the 16 kHz mono assumption every Eufy client applies; telling an
-ADTS demuxer the same thing fails the process before it reads a byte. That two-clock arrangement is
-correct per stream and wrong across them when a source hands over a prebuffer in one burst: see
-[#1046](https://github.com/homebridge-plugins/homebridge-eufy-security/issues/1046).
+Audio keeps no clock of its own. An ADTS or A-law elementary stream states its rate, so an encoder given
+one advances its output timeline by the samples it was handed, whatever wall clock those samples arrived
+on. That is a timeline the source controls rather than the session, and it is the one thing on this path
+that could run faster than real time: video is stamped by arrival, so a burst collapses to an instant and
+the picture timeline stays real, while the same burst of audio advances the audio timeline by its whole
+content duration and never comes back. Measured over this plugin's own audio argument list on the bundled
+encoder, feeding 30 s of 16 kHz AAC content inside 2 s and then real time: the output settled 29.5 s ahead
+of arrival and stayed there for the rest of the session.
+
+The arrival clock is therefore an option on every adapted input rather than on video's alone, and the audio
+output is resolved against it by asynchronous resampling rather than by the sample count it was given. The
+stamp alone is not enough — it moves only where a timeline starts — and the resampling alone has nothing to
+resolve against, so the two are one decision stated in one place.
+
+Resolving an excess DISCARDS it. Audio a source hands over faster than real time is lost rather than played
+back late, and that is the policy rather than an accident of the filter: a live view owes its controller the
+newest audio, and audio already seconds stale on arrival cannot be presented beside a picture stamped on
+arrival. A recording is the opposite case and is unaffected, because it is adapted from the SDK's own
+fragmented container rather than from a bare elementary stream, and that container already carries one
+timeline for both tracks.
+
+The two adapted outputs do not share an epoch. Each is a separate process started at its own first frame
+and rebased to its own first packet, so on a source that delivers audio well before a first keyframe the raw
+difference between the two output positions is the acquisition delay, bounded only by the source start
+backstop. That difference is not what a controller presents against: each output emits RTCP sender reports
+mapping its own position to real time, which is the mechanism RTP defines for reconciling two streams, and
+it can only do that truthfully while both advance at the rate of one shared clock. Measured on the fleet,
+both outputs of one session emitted a sender report about every five seconds.
+
+The SDK offers nothing better to inherit. A station timestamp exists on the wire for video and is dropped
+during access-unit reassembly, the audio frame header is stripped unparsed, and the only clock the SDK
+itself keeps is the same `Date.now()` arrival stamp. Nor does a live session consume the source prebuffer:
+the SDK primes a joining live consumer with the single most recent keyframe and drains its retention ring
+only where a caller asks for it, which on this plugin's paths is the fragment recording alone. A live
+session that names a prebuffer window therefore funds retention for a later HKSV attach without ever
+reading it, and pacing is the whole of what a live session owes.
+
+Measured once on each of the six enabled cameras of the private fleet, H.264 and HEVC sources alike: audio
+output tracked arrival at 1.00x and the two output positions stayed within 0.5 s. The reported skew itself
+did not reproduce on any of them — every one delivered audio at 1.00x from the source — so the defect is
+held by the argument-list measurement above rather than by a fleet reproduction. The seventh camera was
+switched off and answers a live start with audio and no video at all, which is a separate fact and remains
+untested here.
+
+The SDK reports neither a sample rate nor a channel count, because a station sends neither. Only raw
+A-law has to be told the 16 kHz mono assumption every Eufy client applies; telling an ADTS demuxer the
+same thing fails the process before it reads a byte.
+
+Return audio is the exception, and deliberately so. It carries an RTP timeline the controller supplied and
+feeds an SDK writable that owns its own 64 ms pacing, so imposing a second clock there would fight the
+one that already governs it.
 
 ### Live adaptation delivery
 

@@ -850,6 +850,10 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
  * format, so that analysis has nothing left to discover and is bounded to its minimum; leaving it at the
  * default delays first output by seconds and scales that delay with the source keyframe interval.
  *
+ * Every such input is read on one clock: when its media arrived. A pipe carries no timeline of its own, so
+ * arrival is the only timeline there is, and two adapted streams of one session can be presented together
+ * only while both are read on it.
+ *
  * Nothing asks FFmpeg to discard or reinterpret what it read. Discarding the analysed packets throws away the
  * leading keyframe the caller waited for, and a raw A-law demuxer stops emitting timestamps entirely, so both
  * cost media that was already in hand.
@@ -869,6 +873,8 @@ function commonArguments(inputFormat: string, inputOptions: readonly string[] = 
     '-f',
     inputFormat,
     ...inputOptions,
+    '-use_wallclock_as_timestamps',
+    '1',
     '-i',
     'pipe:0',
   ];
@@ -899,10 +905,10 @@ function outputArguments(
 /**
  * Raw SDK frames cannot prove profile, level, frame rate, and bitrate, so negotiated video is transcoded.
  *
- * Access units arrive as they are captured and carry no timeline of their own, so the input is timestamped
- * by arrival. Asking FFmpeg to generate presentation timestamps instead makes it interpolate them from a
- * frame rate a bare Annex-B pipe never states, which collapses the whole session onto one instant; the
- * constant-rate output then resolves the collision by discarding almost every frame it was given.
+ * Asking FFmpeg to generate presentation timestamps rather than read the arrival ones every adapted input
+ * carries makes it interpolate them from a frame rate a bare Annex-B pipe never states, which collapses the
+ * whole session onto one instant; the constant-rate output then resolves the collision by discarding almost
+ * every frame it was given.
  *
  * A negotiated frame rate is a CEILING, not a cadence, so the rate is bounded rather than pinned. Pinning it
  * makes the encoder duplicate frames the source never sent, and each duplicate costs a full encode and a share
@@ -932,7 +938,7 @@ function videoArguments(
 ): string[] {
   const budget = videoBudgetInsideCeiling(selection);
   return [
-    ...commonArguments(input.codec === 'h265' ? 'hevc' : input.codec, ['-use_wallclock_as_timestamps', '1']),
+    ...commonArguments(input.codec === 'h265' ? 'hevc' : input.codec),
     '-an',
     '-c:v',
     'libx264',
@@ -974,6 +980,17 @@ function videoArguments(
  * while an ADTS input states its own rate in every frame header and rejects the option outright, which fails
  * the process before it reads a byte.
  *
+ * Asynchronous resampling is what makes this output honour the arrival clock its input is read on. An encoder
+ * advances its output timeline by the samples in each coded frame it is handed, whatever timestamp arrived
+ * with them, so the arrival stamp alone would move only where the timeline starts. The resampler resolves
+ * every frame against that stamp instead, which bounds the output to real time however much content a source
+ * hands over at once.
+ *
+ * It resolves an excess by DISCARDING it, so a source that hands over more audio than it has been running for
+ * loses the excess permanently rather than being played back late. That is this session's policy and not an
+ * accident of the filter: a live view owes its controller the newest audio, and audio which is already
+ * seconds stale by the time it arrives cannot be presented beside a picture timestamped on arrival.
+ *
  * `libfdk_aac` selects its transport from the requested output framing, and AAC-ELD cannot be carried in
  * ADTS, so without an explicit global header the encoder refuses to initialise at all.
  */
@@ -993,6 +1010,8 @@ function audioArguments(
     'aac_eld',
     '-flags',
     '+global_header',
+    '-af',
+    'aresample=async=1',
     '-ar',
     `${selection.sampleRate}k`,
     '-ac',
