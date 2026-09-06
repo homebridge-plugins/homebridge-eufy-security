@@ -62,3 +62,46 @@ jobs:
 
       - name: Verify
         run: npm run verify
+
+      # Release qualification refuses a tree whose SDK resolution or packed contents cannot be shipped. It runs
+      # here as well as from `prepublishOnly`, so the acceptance record's SDK-resolution and security-scan
+      # checks name a run that performed them rather than a run that assumed them.
+      - name: Qualify provenance and contents
+        run: npm run qualify:release
+
+      # The implementation acceptance tier for the exact artifact this run gated. A step cannot run unless every
+      # step above it passed, which is the evidence behind each declared check. Both files are written outside
+      # the checkout, because the record asserts that checkout carries no uncommitted change.
+      - name: Record implementation acceptance evidence
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/acceptance"
+          run="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${evidence}"
+          cat > "${evidence}/declared.json" <<JSON
+          {
+            "tier": "implementation",
+            "checks": [
+              { "check": "hermetic-verification", "status": "pass", "reference": "npm run verify — ${run}" },
+              { "check": "package-inspection", "status": "pass", "reference": "test/contracts/package.test.ts — ${run}" },
+              { "check": "migration-identity-fixtures", "status": "pass", "reference": "test/contracts/configuration.test.ts, test/contracts/storage-root.test.ts — ${run}" },
+              { "check": "sdk-resolution", "status": "pass", "reference": "npm run qualify:release — ${run}" },
+              { "check": "coverage-matrix-completeness", "status": "pass", "reference": "test/contracts/coverage-matrix.test.ts — ${run}" },
+              { "check": "security-scan", "status": "pass", "reference": "npm run qualify:release — ${run}" }
+            ],
+            "knownGaps": [
+              "Every coverage row disposed as blocked by an SDK evidence gap is unrepresented; this record counts them and test/contracts/coverage-matrix.test.ts enumerates them."
+            ],
+            "approver": null
+          }
+          JSON
+          node scripts/acceptance-evidence.mjs --declare "${evidence}/declared.json" --out "${evidence}"
+
+      # Artifact names carry the run and attempt that produced them, so a re-run adds a record and can never
+      # replace one.
+      - name: Upload acceptance evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: acceptance-implementation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/acceptance/acceptance-implementation.*
+          if-no-files-found: error

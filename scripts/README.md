@@ -137,6 +137,7 @@ ownership lease against a live storage root and belongs only to a throwaway inst
 | `sync-device-artwork.mjs` | Regenerates bundled device artwork                                   |
 | `guard-no-ecs.sh`         | Repository gate: fails if `eufy-security-client` reappears           |
 | `qualify-release.mjs`     | Release gate: refuses a tree whose SDK or contents cannot be shipped |
+| `acceptance-evidence.mjs` | Records one acceptance tier for one immutable artifact               |
 
 `qualify-release.mjs` runs from `prepublishOnly`, after `npm run verify`, because it asserts what only a
 publishable tree can satisfy: the SDK resolves to one exact published version from a trusted registry, with
@@ -145,3 +146,16 @@ packed file list and the tracked sources for private keys, bearer tokens, cloud 
 support archives. It cannot detect real device data, because a serial or P2P identifier is required to be
 synthetic and correctly shaped, so a pattern matching a real one matches every fixture; that remains a review
 obligation.
+
+`acceptance-evidence.mjs` records one acceptance tier — implementation, private-pilot, or public-beta — for
+one immutable artifact, as machine-readable JSON and a generated Markdown summary. It measures the artifact
+itself: the packed identity and integrity npm reports, the lockfile digest, the SDK specifier the manifest
+declares beside the version, integrity, and source the lockfile resolves it to, the runtime versions, the
+compiled coverage matrix, and the migration fixture digests. A declaration file supplies
+only the results a measurement cannot answer, the known gaps, and the approver, and any required check that is
+absent or failed refuses the whole claim. A record exists only for a workflow run against a checkout with no
+uncommitted change, is written once, and a higher tier accumulates the tier below it only for the same commit
+and the same packed artifact. Continuous integration produces the implementation tier after the gate and
+release qualification whose results it states, and uploads it under the run and attempt that produced it, so a
+re-run adds a record instead of replacing one. `npm run build` must have run, because it reads the compiled
+coverage matrix.
