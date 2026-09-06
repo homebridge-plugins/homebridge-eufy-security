@@ -15,7 +15,7 @@ for (const family of readdirSync(source, { withFileTypes: true })) {
   const sourceDirectory = join(source, family.name);
   let familyCount = 0;
   for (const file of readdirSync(sourceDirectory, { withFileTypes: true })) {
-    if (!file.isFile() || !file.name.endsWith('.png')) {
+    if (!file.isFile() || !file.name.endsWith('.webp')) {
       throw new TypeError(`unexpected device artwork entry: ${family.name}/${file.name}`);
     }
     familyCount++;

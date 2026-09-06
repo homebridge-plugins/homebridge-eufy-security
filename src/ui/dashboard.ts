@@ -61,7 +61,7 @@ function artworkOf(manifest: DeviceManifest): string | undefined {
   }
   const family =
     manifest.codec === 'vacuum' ? 'clean' : manifest.codec === 'mower' ? 'mower' : categoryOf(manifest.codec);
-  return `assets/devices/${family}/${family}-${model}.png`;
+  return `assets/devices/${family}/${family}-${model}.webp`;
 }
 
 function deviceClassOf(codec: DeviceManifest['codec']): DashboardDevice['deviceClass'] {

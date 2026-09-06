@@ -747,7 +747,7 @@ describe('packed plugin', () => {
       expect(deviceArtworkFiles).toHaveLength(153);
       expect(
         deviceArtworkFiles.every((path) =>
-          /^homebridge-ui\/public\/assets\/devices\/(?:clean|life|mower|security)\/[A-Za-z0-9-]+\.png$/.test(path),
+          /^homebridge-ui\/public\/assets\/devices\/(?:clean|life|mower|security)\/[A-Za-z0-9-]+\.webp$/.test(path),
         ),
       ).toBe(true);
       expect(document).toContain('data-authentication="ready"');
@@ -1586,7 +1586,7 @@ describe('packed plugin', () => {
               serial: 'synthetic-contact',
               name: 'Front contact',
               modelName: 'Synthetic contact sensor',
-              artwork: 'assets/devices/security/security-T8910.png',
+              artwork: 'assets/devices/security/security-T8910.webp',
               category: 'security',
               deviceClass: 'sensor',
               recognized: true,
@@ -1642,7 +1642,7 @@ describe('packed plugin', () => {
       expect(dashboardUi.deviceGroups.innerHTML).toContain('Front contact');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('device-tile-disabled');
       expect(dashboardUi.deviceGroups.innerHTML).toContain('data-requires-representation hidden');
-      expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.png');
+      expect(dashboardUi.deviceGroups.innerHTML).toContain('assets/devices/security/security-T8910.webp');
       expect(dashboardUi.deviceGroups.innerHTML.indexOf('Back contact')).toBeLessThan(
         dashboardUi.deviceGroups.innerHTML.indexOf('Front contact'),
       );

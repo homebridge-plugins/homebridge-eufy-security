@@ -107,9 +107,9 @@ describe('snapshot-driven dashboard', () => {
     expect(dashboard.devices.slice(1).every(({ diagnosticOnly }) => diagnosticOnly)).toBe(true);
     expect(dashboard.devices.slice(1).every(({ preferences }) => preferences.length === 0)).toBe(true);
     expect(dashboard.devices.map(({ artwork }) => artwork)).toEqual([
-      'assets/devices/security/security-T8910.png',
-      'assets/devices/life/life-T8L00.png',
-      'assets/devices/clean/clean-T2351.png',
+      'assets/devices/security/security-T8910.webp',
+      'assets/devices/life/life-T8L00.webp',
+      'assets/devices/clean/clean-T2351.webp',
     ]);
   });
 
