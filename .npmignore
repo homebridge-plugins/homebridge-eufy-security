@@ -34,10 +34,9 @@ homebridge-ui/public/i18n/*
 !homebridge-ui/public/i18n/en.json
 !homebridge-ui/public/i18n/fr.json
 
-# Editable image masters, and the duplicate of media/ that postbuild leaves inside dist/. The runtime
-# resolves its packaged images from media/ at the package root, which is the copy that ships.
+# Editable image masters. The runtime resolves its packaged images from media/ at the package root,
+# which is the copy that ships.
 *.xcf
-dist/media/media
 
 # Maintainer acceptance tooling that writes to a real device, and the scripts that drive it. Every other
 # script here is observation-only; these change camera state or play camera audio, so they stay out of the
