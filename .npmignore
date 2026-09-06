@@ -38,6 +38,11 @@ homebridge-ui/public/i18n/*
 # which is the copy that ships.
 *.xcf
 
+# Source maps. Node resolves them only under `--enable-source-maps`, which neither Homebridge nor the plugin
+# sets, so on an installed host they are read by nothing. They stay in the build for a checkout to debug
+# against and out of the package a user downloads.
+dist/**/*.js.map
+
 # Development material with no role on an installed host: the contract specifications, the documentation
 # site, the maintainer and qualification scripts, the agent skill definitions, and editor and formatter
 # configuration.

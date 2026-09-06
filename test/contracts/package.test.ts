@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,6 +10,9 @@ import { describe, expect, it } from 'vitest';
 interface PackResult {
   filename: string;
   files: Array<{ path: string }>;
+  entryCount: number;
+  size: number;
+  unpackedSize: number;
 }
 
 /**
@@ -616,6 +619,66 @@ function baselineJpeg(image: Buffer): { width: number; height: number } {
 }
 
 describe('packed plugin', () => {
+  /**
+   * The install surface is exactly the runtime, its presentation assets, and the documents a registry page
+   * renders, held inside a declared bound.
+   *
+   * The compiled tree is compared against `src/` rather than against a written list, because a list of every
+   * module is edited by every module that is added and so records what shipped rather than requiring it. The
+   * bound is a release fact of its own: 12.7 MB of the package is device artwork rendered at 56 px, so the
+   * ceiling holds that deliberate cost still and refuses an accidental addition beside it.
+   */
+  it('ships exactly the allowlisted install surface, within a declared bound', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'homebridge-eufy-security-bounds-'));
+    const repository = fileURLToPath(new URL('../..', import.meta.url));
+
+    try {
+      const output = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory], {
+        cwd: repository,
+        encoding: 'utf8',
+      });
+      const [result] = JSON.parse(output) as PackResult[];
+      const paths = result.files.map((file) => file.path);
+      const compiledModules = paths.filter((path) => path.startsWith('dist/')).sort();
+      const sourceModules = readdirSync(join(repository, 'src'), { recursive: true })
+        .map((entry) => entry.toString())
+        .filter((path) => path.endsWith('.ts'))
+        .map((path) => `dist/${path.replace(/\.ts$/, '.js')}`)
+        .sort();
+
+      expect([...new Set(paths.map((path) => path.split('/')[0]))].sort(), 'nothing new appears at the root').toEqual([
+        'AUTHORS',
+        'CHANGELOG.md',
+        'CODE_OF_CONDUCT.md',
+        'CONTRIBUTING.md',
+        'LICENSE',
+        'README.md',
+        'SECURITY.md',
+        'config.schema.json',
+        'dist',
+        'homebridge-ui',
+        'i18n',
+        'media',
+        'package.json',
+      ]);
+      expect(compiledModules, 'every module compiles into the package and nothing else does').toEqual(sourceModules);
+      expect(
+        paths.filter((path) => /(?:^|\/)(?:src|test|scripts|docs|prototypes?|fixtures?|captures?)\//.test(`/${path}`)),
+        'no source, specification, fixture, prototype, or capture directory ships',
+      ).toEqual([]);
+      expect(
+        paths.filter((path) =>
+          /\.(?:map|d\.ts|ts|tsx|tsbuildinfo|xcf|log|mp4|mkv|h264|h265|opus|aac|eufysupport\.gz)$/.test(path),
+        ),
+        'no build byproduct, editable master, or recorded media ships',
+      ).toEqual([]);
+      expect(result.entryCount, 'the package holds a bounded number of files').toBeLessThanOrEqual(280);
+      expect(result.unpackedSize, 'the package holds a bounded number of bytes').toBeLessThanOrEqual(15_000_000);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  }, 15_000);
+
   it('keeps the runtime dependency and entry-point surface closed', () => {
     const repository = fileURLToPath(new URL('../..', import.meta.url));
     const packageJson = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')) as {
