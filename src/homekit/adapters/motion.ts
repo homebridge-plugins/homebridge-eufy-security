@@ -61,18 +61,7 @@ export const MOTION_ADAPTER = {
     id: `${capability}.${eventName}.event`,
     kind: 'event' as const,
   })),
-  coverage: MOTION_EVENT_REQUIREMENTS.map(({ capability, eventName }) => ({
-    id: `${capability}.${eventName}.event`,
-    hapFit: 'Motion Sensor MotionDetected with one retriggerable trailing 10-second hold',
-    identityEffect: 'Primary-purpose service uses stable semantic key motion.sensor',
-    diagnostics: 'Admitted semantic event pulses require no fabricated durable device state',
-    verification: [
-      {
-        file: 'test/contracts/motion-adapter.test.ts',
-        behavior: 'holds motion for 10 seconds after the final admitted detection event',
-      },
-    ],
-  })),
+  coverage: MOTION_EVENT_REQUIREMENTS.map(({ capability, eventName }) => `${capability}.${eventName}.event`),
   attach: attachMotion,
 } as const satisfies HomeKitAdapter;
 

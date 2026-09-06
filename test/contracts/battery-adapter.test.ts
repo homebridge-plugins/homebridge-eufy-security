@@ -20,7 +20,7 @@ const HAP = { Service, Characteristic, HAPStatus, HapStatusError };
  */
 const ANNOUNCED_LEVEL_PROPERTY = 'synthetic_battery_level';
 const LEVEL_EVIDENCE = { ...BATTERY_ADAPTER.requires[0], property: ANNOUNCED_LEVEL_PROPERTY };
-const ALL_BATTERY_EVIDENCE = new Map(BATTERY_ADAPTER.coverage.map(({ id }) => [id, { id, kind: 'event' as const }]));
+const ALL_BATTERY_EVIDENCE = new Map(BATTERY_ADAPTER.coverage.map((id) => [id, { id, kind: 'event' as const }]));
 ALL_BATTERY_EVIDENCE.set('battery.level.read', LEVEL_EVIDENCE);
 ALL_BATTERY_EVIDENCE.set('battery.charging.read', {
   id: 'battery.charging.read',

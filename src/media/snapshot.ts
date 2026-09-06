@@ -164,7 +164,6 @@ export interface LastSuccessfulImages {
   write(serial: string, jpeg: Buffer, provenance: SnapshotProvenance): Promise<void>;
   discard?(serial: string): Promise<void>;
   reconcile?(serials: Iterable<string>): Promise<void>;
-  discardAll?(): Promise<void>;
 }
 
 /** Applies externally distinct stored-only, fresh-live, and retained-image acquisition policies. */
@@ -262,14 +261,6 @@ export class SnapshotAcquisition implements SnapshotMediaAdapter {
       }
     }
     void this.images?.reconcile?.(current);
-  }
-
-  discardAll(): void {
-    for (const serial of this.retentionGenerations.keys()) {
-      this.retentionGenerations.set(serial, this.retentionGeneration(serial) + 1);
-    }
-    this.failedLive.clear();
-    void this.images?.discardAll?.();
   }
 
   /** One packaged image, or nothing when this package does not carry a decodable one under that name. */

@@ -122,7 +122,6 @@ describe('live refresh against a busy station', () => {
    * displace, so the whole set is refused there.
    */
   const stations = (...watched: readonly string[]): StationLiveSessionRegistry => ({
-    heldFor: (stationSn: string) => (watched.includes(stationSn) ? 'live' : undefined),
     admits: (stationSn: string) => !watched.includes(stationSn),
     hold: () => () => undefined,
   });
@@ -189,7 +188,6 @@ describe('a still asked to yield the station', () => {
   const yieldable = () => {
     let abandon: (() => void) | undefined;
     const registry: StationLiveSessionRegistry = {
-      heldFor: () => undefined,
       admits: () => true,
       hold: (_stationSn, _camera, _claim, onAbandon) => {
         abandon = onAbandon;
@@ -223,7 +221,6 @@ describe('a still asked to yield the station', () => {
   it('releases the station once its capture has settled, so nothing stays held', async () => {
     let released = 0;
     const registry: StationLiveSessionRegistry = {
-      heldFor: () => undefined,
       admits: () => true,
       hold: () => () => {
         released += 1;

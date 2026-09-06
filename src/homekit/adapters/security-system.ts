@@ -291,22 +291,7 @@ export interface SecuritySystemDiagnostic extends AdapterDiagnostic {
     | 'recovered';
 }
 
-const COVERAGE = [ARMING_MODE_READ, ARMING_MODE_WRITE, ARMING_MODE_EVENT, ARMING_ALARM_EVENT].map(({ id }) => ({
-  id,
-  hapFit: 'Security System exposes explicit Stay, Away, Disarm, and alarm state',
-  identityEffect: 'Primary-purpose service uses stable semantic key arming.security-system',
-  diagnostics: 'Fail closed for unavailable, unsupported, failed, or unreconciled arming state',
-  verification: [
-    {
-      file: 'test/contracts/security-system-adapter.test.ts',
-      behavior: 'maps authoritative Home, Away, and Disarmed modes and exposes only those targets',
-    },
-    {
-      file: 'test/contracts/homekit-reconciler.test.ts',
-      behavior: 'routes arming events and withdraws the stable Security System service only from complete evidence',
-    },
-  ],
-}));
+const COVERAGE = [ARMING_MODE_READ, ARMING_MODE_WRITE, ARMING_MODE_EVENT, ARMING_ALARM_EVENT].map(({ id }) => id);
 
 /** Complete HomeKit policy for evidenced arming modes and alarm events. */
 export const SECURITY_SYSTEM_ADAPTER = {

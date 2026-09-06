@@ -21,14 +21,6 @@ import {
 } from './live-stream.js';
 
 /**
- * How long the adaptation is given to write out what the source already handed it, once the source has
- * ended and its input is closed.
- *
- * The output backstop is already discharged by then, so without this bound a stalled adaptation would
- * leave a consumer waiting for a recording that had in fact finished. Expiry ends the recording with
- * whatever was flushed rather than failing it, because the media up to that point is complete.
- */
-/**
  * Why a source stopped producing, as this domain's bounded vocabulary.
  *
  * A station serving another of its cameras is not a fault: a base serves one at a time and the SDK refuses a
@@ -40,6 +32,14 @@ function sourceFailure(error: unknown): RecordingFailure {
   return error instanceof Error && error.name === 'StationBusyError' ? 'station-busy' : 'source-error';
 }
 
+/**
+ * How long the adaptation is given to write out what the source already handed it, once the source has
+ * ended and its input is closed.
+ *
+ * The output backstop is already discharged by then, so without this bound a stalled adaptation would
+ * leave a consumer waiting for a recording that had in fact finished. Expiry ends the recording with
+ * whatever was flushed rather than failing it, because the media up to that point is complete.
+ */
 const OUTPUT_FLUSH_DEADLINE_MS = 5_000;
 
 /**

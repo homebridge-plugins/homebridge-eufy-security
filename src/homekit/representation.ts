@@ -32,7 +32,7 @@ export function describeHomeKitRepresentation(manifest: DeviceManifest): {
   return {
     represented: primary.length > 0,
     controllable: primary.some(([, adapter]) =>
-      adapter.coverage.some(({ id }) => id.endsWith('.persistent-operation') || id.endsWith('.momentary-action')),
+      adapter.coverage.some((id) => id.endsWith('.persistent-operation') || id.endsWith('.momentary-action')),
     ),
   };
 }

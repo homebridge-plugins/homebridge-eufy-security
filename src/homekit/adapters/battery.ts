@@ -62,37 +62,7 @@ export const BATTERY_ADAPTER = {
   key: BATTERY_ADAPTER_KEY,
   role: 'supplemental',
   requires: [BATTERY_LEVEL_REQUIREMENT],
-  coverage: [
-    {
-      id: BATTERY_LEVEL_REQUIREMENT.id,
-      hapFit:
-        'Battery Service BatteryLevel and StatusLowBattery at 20 percent or below, followed from the SDK ' +
-        'property announcement for this read as well as answered on demand',
-      identityEffect:
-        'Supplemental service uses stable semantic key battery.status and cannot establish representation',
-      diagnostics: 'Fail closed for missing, malformed, or faulting battery observations',
-    },
-    {
-      id: BATTERY_CHARGING_EVIDENCE,
-      hapFit: 'Battery Service ChargingState from the SDK charging boolean',
-      identityEffect: 'Supplemental characteristic has no accessory identity effect',
-      diagnostics: 'Fail closed for missing, malformed, or faulting charging observations',
-    },
-    {
-      id: BATTERY_ALERT_EVENT_EVIDENCE,
-      hapFit: 'Battery Service StatusLowBattery latches low alerts; hot alerts remain diagnostic-only',
-      identityEffect: 'Supplemental event has no accessory identity effect',
-      diagnostics: 'Emit hot battery alerts as structured diagnostics without HomeKit state mutation',
-    },
-  ].map((coverage) => ({
-    ...coverage,
-    verification: [
-      {
-        file: 'test/contracts/battery-adapter.test.ts',
-        behavior: 'latches a low alert until a later valid level above 20 percent',
-      },
-    ],
-  })),
+  coverage: [BATTERY_LEVEL_REQUIREMENT.id, BATTERY_CHARGING_EVIDENCE, BATTERY_ALERT_EVENT_EVIDENCE],
   attach: attachBattery,
 } as const satisfies HomeKitAdapter;
 

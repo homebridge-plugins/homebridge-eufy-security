@@ -2,6 +2,7 @@ import type { LiveAudioFrame, LiveStreamConsumer, LiveVideoConfig, LiveVideoFram
 import { LiveStreamStartError } from '@mega-yfue/eufy-sdk';
 import { createSocket } from 'node:dgram';
 import { execFile, spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Readable, Writable } from 'node:stream';
 
 import type {
@@ -760,7 +761,7 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
           failTalkback('adaptation-failed');
         });
         child.stdin.end(returnAudioSdp(audioPort.port, selection, transport.audio, transport.addressVersion));
-        await new Promise((resolve) => setTimeout(resolve, RETURN_AUDIO_BIND_GRACE_MS));
+        await delay(RETURN_AUDIO_BIND_GRACE_MS);
       } catch {
         failTalkback('adaptation-failed');
       }

@@ -243,7 +243,7 @@ export class RuntimeOwner {
         this.client.onEvent?.((event) => this.publishEvent(event));
         this.client.onUnconfirmedWrite?.((write) => this.publishUnconfirmedWrite(write));
         this.client.onInventory?.((result) => {
-          void this.applyRuntimeResult(active, result).catch((error: unknown) => this.failRuntime(error));
+          void this.applyRuntimeResult(active, result).catch(() => this.beginCleanup('failed'));
         });
         const result = await this.client.start();
         if (result) {
@@ -253,8 +253,7 @@ export class RuntimeOwner {
       }
       this.client ??= this.clientFactory(config, active ?? undefined, this.log);
       await this.client.start();
-    } catch (error) {
-      void error;
+    } catch {
       await this.beginCleanup('failed');
     }
   }
@@ -278,8 +277,7 @@ export class RuntimeOwner {
   }
 
   private createStatusPublisher(): RuntimeStatusPublisher {
-    return new RuntimeTracker(join(this.storageRoot!, 'tracker.json'), 90_000, Date.now, (error) => {
-      void error;
+    return new RuntimeTracker(join(this.storageRoot!, 'tracker.json'), 90_000, Date.now, () => {
       reportRuntimeNotice(this.log, 'status-publication-failed');
     });
   }
@@ -367,8 +365,7 @@ export class RuntimeOwner {
         reportRuntimeNotice(this.log, 'ownership-release-not-finalized');
         return false;
       }
-    } catch (error) {
-      void error;
+    } catch {
       reportRuntimeNotice(this.log, 'ownership-release-failed');
       return false;
     }
@@ -380,17 +377,11 @@ export class RuntimeOwner {
     this.client = undefined;
     try {
       await client?.stop();
-    } catch (error) {
-      void error;
+    } catch {
       reportRuntimeNotice(this.log, 'shutdown-failed');
       return false;
     }
     return true;
-  }
-
-  private async failRuntime(error: unknown): Promise<void> {
-    void error;
-    await this.beginCleanup('failed');
   }
 
   private beginCleanup(
@@ -476,8 +467,7 @@ export class RuntimeOwner {
         }
         return true;
       })
-      .catch((error: unknown) => {
-        void error;
+      .catch(() => {
         reportRuntimeNotice(this.log, 'ownership-acquisition-failed');
         return false;
       });

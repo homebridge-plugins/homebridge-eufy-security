@@ -1,16 +1,10 @@
 import { CAPABILITY_MODULES, type CapabilityModule, type Member } from '@mega-yfue/eufy-sdk';
 
-import type { AdapterCoverage } from './adapter.js';
 import { INFORMATION_SDK_ROWS } from './adapters/information.js';
 import { ADAPTER_REGISTRY } from './adapters/registry.js';
 
 export type CoverageMemberKind = 'read' | 'event' | 'persistent-operation' | 'momentary-action';
 export type CoverageDisposition = 'required-adapter' | 'diagnostic-only' | 'blocked-sdk-gap';
-
-export interface CoverageVerification {
-  file: string;
-  behavior: string;
-}
 
 export interface CoverageRow {
   id: string;
@@ -18,14 +12,10 @@ export interface CoverageRow {
   member: string;
   memberKind: CoverageMemberKind;
   evidence: string[];
-  hapFit: string;
   disposition: CoverageDisposition;
   adapter: string | null;
   representationStatus: 'represented' | 'not-represented';
   controlStatus: 'controllable' | 'not-controllable' | 'not-represented';
-  identityEffect: string;
-  diagnostics: string;
-  verification: CoverageVerification[];
 }
 
 export interface SdkHapCoverageMatrix {
@@ -34,16 +24,15 @@ export interface SdkHapCoverageMatrix {
   rows: CoverageRow[];
 }
 
-const COVERAGE_BY_ROW = new Map<string, { adapter: string; coverage: AdapterCoverage; productEvidence?: string }>(
+const COVERAGE_BY_ROW = new Map<string, { adapter: string; productEvidence?: string }>(
   Object.entries(ADAPTER_REGISTRY).flatMap(([adapter, registration]) => {
     const requiresProduct = 'requiresProduct' in registration ? registration.requiresProduct : undefined;
     return registration.coverage.map(
-      (coverage) =>
+      (id) =>
         [
-          coverage.id,
+          id,
           {
             adapter,
-            coverage,
             ...(requiresProduct
               ? { productEvidence: `@mega-yfue/eufy-sdk DeviceManifest.model ${requiresProduct.model}` }
               : {}),
@@ -141,11 +130,6 @@ function makeRow(id: string): CoverageRow {
       ...memberEvidence(CAPABILITY_MODULES[capability as keyof typeof CAPABILITY_MODULES], member, memberKind),
       ...(represented?.productEvidence ? [represented.productEvidence] : []),
     ],
-    hapFit:
-      represented?.coverage.hapFit ??
-      (disposition === 'blocked-sdk-gap'
-        ? 'No HAP representation is permitted without verified SDK truth'
-        : 'No selected semantically matching official HAP contract'),
     disposition,
     adapter: represented?.adapter ?? null,
     representationStatus: represented ? 'represented' : 'not-represented',
@@ -154,19 +138,6 @@ function makeRow(id: string): CoverageRow {
         ? 'controllable'
         : 'not-controllable'
       : 'not-represented',
-    identityEffect: represented?.coverage.identityEffect ?? 'No HomeKit service or accessory identity effect',
-    diagnostics:
-      represented?.coverage.diagnostics ??
-      (disposition === 'blocked-sdk-gap'
-        ? 'Report the SDK evidence gap without representation'
-        : 'Report the member as diagnostic-only without representation'),
-    verification: [
-      {
-        file: 'test/contracts/coverage-matrix.test.ts',
-        behavior: 'classifies the complete current SDK member surface',
-      },
-      ...(represented?.coverage.verification ?? []),
-    ],
   };
 }
 

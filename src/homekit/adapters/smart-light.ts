@@ -492,24 +492,7 @@ const COVERAGE = [
   SMART_LIGHT_BRIGHTNESS_WRITE,
   SMART_LIGHT_STATE_EVENT,
   SMART_LIGHT_COLOR_WRITE,
-].map(({ id }) => ({
-  id,
-  hapFit:
-    id === SMART_LIGHT_COLOR_WRITE.id
-      ? 'Lightbulb Hue and Saturation expose the last RGB request acknowledged by the SDK transport'
-      : 'Lightbulb On and Brightness expose authoritative smart-light state and evidenced persistent operations',
-  identityEffect: 'Primary-purpose service uses stable semantic key smart-light.lightbulb',
-  diagnostics: 'Fail closed for unavailable, malformed, failed, or unreconciled smart-light members',
-  verification: [
-    {
-      file: 'test/contracts/smart-light-adapter.test.ts',
-      behavior:
-        id === SMART_LIGHT_COLOR_WRITE.id
-          ? 'acknowledges the sent Hue and Saturation after publication'
-          : 'exposes authoritative power and brightness through one real HAP Lightbulb',
-    },
-  ],
-}));
+].map(({ id }) => id);
 
 /** Complete HomeKit policy for evidenced Life smart-light power, brightness, and acknowledged color. */
 export const SMART_LIGHT_ADAPTER = {

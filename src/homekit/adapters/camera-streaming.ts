@@ -1,5 +1,5 @@
 import type { AnyDeviceEvent, CameraActions } from '@mega-yfue/eufy-sdk';
-import { NightVision, unreflectedMembers } from '@mega-yfue/eufy-sdk';
+import { NightVision } from '@mega-yfue/eufy-sdk';
 import type {
   CameraController,
   CameraRecordingConfiguration,
@@ -22,6 +22,7 @@ import {
   observationReader,
   type DeviceOperationIssuer,
   type DeviceOperationState,
+  untrusted,
 } from '../device-control.js';
 import type {
   AdaptedRecording,
@@ -245,12 +246,6 @@ const CAMERA_ENABLED_WRITE = { id: 'camera.enabled.persistent-operation', kind: 
 const NIGHT_VISION_MODES: ReadonlySet<number> = new Set(Object.values(NightVision));
 
 /**
- * The SDK event names that say this camera's enablement moved: the push one a write of this plugin's own
- * confirmed, and the poll one a change made anywhere else produced. Neither carries the authority — the
- * observation is re-read, because that is the value every other decision here is made on.
- */
-
-/**
  * How often an active live session re-reads the enablement observation.
  *
  * The SDK announces an enablement change, and a session ends on that announcement rather than on this tick,
@@ -315,621 +310,16 @@ export const CAMERA_STREAMING_ADAPTER = {
   role: 'primary-purpose',
   requires: [CAMERA_LIVE],
   coverage: [
-    {
-      id: CAMERA_LIVE.id,
-      hapFit: 'Official Camera RTP Stream Management exposes negotiated live video and optional audio',
-      identityEffect: 'Primary-purpose live media configures one stable camera controller on the accessory container',
-      diagnostics:
-        'Missing typed live media or adaptation fails closed without a raw-stream fallback, a session that ends without usable video latches one bounded reason until a later session streams, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport, including a session such a camera answered with audio and never a video frame, which is named as the camera being off rather than as a transport failure. A live session may be the call that opens the shared source, so it opens it with the pre-event window this camera retains for recordings and with none at all when it retains none, rather than leaving a recording to ask for a window the source it joined was never given',
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'advertises exactly the profile, level, and resolution matrix a live run may select',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'opens a mains-powered camera source with the pre-event window a recording drains',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'retains no pre-event media for a camera with no recording to drain it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'drives negotiated prepare, start, reconfigure, and stop through the media seam',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'traces the identity-free video selection a controller starts and reconfigures',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves a snapshot during an active live session without disturbing its media',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves a retained image during an active live session without waiting for a live acquisition',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'keeps two concurrent negotiated sessions independent on one camera',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'holds a prepared session that never starts until its HAP connection closes',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'forgets a session HomeKit closed after a video failure instead of restarting its media',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'latches one live-session failure reason and clears it when a later session streams',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'refuses a live session while the admitted enabled observation says the camera is disabled',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior:
-            'reports a disabled camera that answered a session with no video as switched off, not as a transport failure',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'gates a live session only on an exactly evidenced boolean enablement observation',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'refuses a start for a camera observed disabled after its session was prepared',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'terminates an active session and stops its media when the camera is later observed disabled',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'transcodes H.264 when passthrough compliance cannot be proven from SDK frames',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'timestamps live video by arrival and bounds the analysis that precedes a first coded frame',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'tells only a raw a-law input the sample rate assumption its format cannot carry',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'requests the global header AAC-ELD needs to leave the encoder at all',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'starts and retains video when source audio is absent or its separate process fails',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'applies a reconfigured selection to adaptation while keeping the negotiated RTP identity',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'keeps the previous selection on the wire until a reconfigured one has a keyframe to start from',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'readapts a changed source codec at its next keyframe without changing negotiated output',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'bounds a deferred reconfiguration even while the superseded selection keeps reporting progress',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'starts adaptation for a first keyframe delivered after the SDK warm-up window',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'fails a session on the SDK warm-up error before the video backstop',
-        },
-      ],
-    },
-    {
-      id: CAMERA_TALKBACK.id,
-      hapFit:
-        'Official camera return audio is decoded from the negotiated HomeKit AAC-ELD SRTP endpoint and adapted to the SDK speaker input only while that controller session consumes it',
-      identityEffect:
-        'Talkback enriches the existing stable camera controller and its speaker service without creating another accessory',
-      diagnostics:
-        'Exact SDK action evidence and enabled camera audio are required; return-audio adaptation and device-audio failures release only the talkback resources, latch one bounded reason, and leave outbound video and audio running',
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'admits one 16 kHz return-audio source only from exact talkback evidence and a bound SDK action',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'does not infer talkback from an SDK action without its exact evidence',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'does not admit talkback when camera audio is disabled',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'opens battery or solar talkback without a pre-event window',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'rebuilds the camera controller when reconciliation changes its audio or talkback advertisement',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'transcodes HomeKit return audio to 16 kHz mono AAC-LC ADTS before opening one SDK handle',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'extends a source budget only while HomeKit return audio is being consumed',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'cleans a device-audio failure without stopping outbound video or audio',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'reports an SDK-stopped talkback path while outbound media continues',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'reports return-audio adaptation failure without coupling it to outbound media',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'stops a talkback handle that resolves after HomeKit cancelled the session',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'finishes whole-session cleanup when the SDK handle throws synchronously on stop',
-        },
-        {
-          file: 'test/contracts/live-media.test.ts',
-          behavior: 'does not report recovery when the SDK rejects the first return-audio write synchronously',
-        },
-      ],
-    },
-    {
-      id: CAMERA_SNAPSHOT_STORED.id,
-      hapFit:
-        'Official camera snapshot requests consume only the passive stored SDK image in Cloud mode and when Refresh has no retained image, and consume nothing at all while an admitted observation reports the camera disabled',
-      identityEffect: 'Stored snapshots use the stable camera controller without creating another service',
-      diagnostics:
-        "Cloud never calls live acquisition; retained real imagery precedes typed offline presentation, while a request with neither serves the packaged unavailable image and latches one bounded reason naming the acquisition that left it unanswered, and the SDK's own refusal reason where it gave one, until a later real or intentional presentation withdraws it",
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves Cloud snapshots only from passive SDK storage',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'acquires a stored-only Refresh image when no last successful image exists',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves the packaged unavailable placeholder when no admitted acquisition can answer',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'attributes an unanswered snapshot to the acquisition its selected mode requires',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'attributes an unanswered snapshot to the typed reason the SDK acquisition reports',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'attributes a refused snapshot request to the snapshot adaptation it never had',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'attributes an unanswered Refresh snapshot to the stored acquisition that failed',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves the packaged disabled image without acquiring or serving a real one while a camera is off',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'never implies a disabled camera from a missing or malformed enablement observation',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents typed offline only when no retained real image exists',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'fails a snapshot request when this package carries no usable placeholder',
-        },
-        {
-          file: 'test/contracts/last-successful-image.test.ts',
-          behavior: 'keeps a live image ahead of stored-only replacement for two minutes',
-        },
-      ],
-    },
-    {
-      id: CAMERA_SNAPSHOT_LIVE.id,
-      hapFit:
-        'Official camera snapshot requests consume a fresh SDK live still in Live mode and one rate-limited refresh in Refresh mode',
-      identityEffect: 'Live snapshots use the stable camera controller without creating another service',
-      diagnostics:
-        "Live never calls stored acquisition and Refresh reports missing live acquisition only when stored acquisition is also unavailable; failed acquisition preserves the last successful real image before selecting a typed placeholder, and a live refresh that fails while nothing is retained is reported with the SDK's own reason as the acquisition that left the camera without an image",
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'coalesces only concurrent Live snapshots and otherwise acquires a fresh image',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves a Refresh snapshot from the last successful image and rate-limits live refresh',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'serves the placeholder for a failed Live acquisition without falling back to stored imagery',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'attributes an unanswered snapshot to the typed reason the SDK acquisition reports',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior:
-            'attributes an intermittent Refresh camera to the live refresh that failed while nothing is retained',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'keeps a retained image authoritative when a background live refresh fails',
-        },
-        {
-          file: 'test/contracts/last-successful-image.test.ts',
-          behavior: 'stores a validated image atomically under an owner-only opaque name',
-        },
-        {
-          file: 'test/contracts/last-successful-image.test.ts',
-          behavior: 'survives restart and full Homebridge backup restoration',
-        },
-      ],
-    },
-    {
-      id: CAMERA_RECORD_FRAGMENTS.id,
-      hapFit:
-        'Official Camera Recording Management transports negotiated fragmented MP4 recordings over a HomeKit Data Stream, honouring the selected profile, level, geometry, frame rate, bit rate, keyframe cadence, fragment length, recorded audio profile and sample rate, and recording-audio state',
-      identityEffect:
-        'Recording adds the official recording management, operating mode, and data stream services to the stable camera controller without creating another accessory or service key',
-      diagnostics:
-        "A camera with no evidenced fragment recording or no recording adaptation is omitted from HomeKit Secure Video with one bounded reason rather than advertising a recording it cannot produce, a reconciliation that withdraws the member refuses later recordings instead of serving them from a withdrawn source, a recording that produces no usable output latches one bounded reason until a later recording produces some, and a camera an admitted observation reports as disabled latches one bounded refusal reason without opening a transport. The advertised pre-event window is HomeKit's own four-second minimum, retained only by a mains-powered camera and only on a source something else already opened, so a battery or solar camera and an unwatched camera alike begin at the trigger",
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'advertises the fragmented MP4 container, prebuffer, and motion trigger a recording may select',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'links the motion sensor that triggers a recording to its recording management service',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'shares one motion service with the detection adapter whichever of them attaches first',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'advertises a press as a recording trigger for a camera whose doorbell press is admitted',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'advertises both triggers for a doorbell that also reports motion',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'omits HomeKit Secure Video for a camera with no detection event to trigger a recording',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'omits HomeKit Secure Video for a camera with no evidenced fragment recording',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'adapts a recording to exactly the configuration a controller selected',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'advertises both recorded audio profiles and every sample rate it can produce',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'records the audio profile and sample rate a controller selected',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'records no audio while HomeKit withdraws recording audio',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'records no audio for a camera whose audio the user turned off',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'keeps a running recording on the configuration it started with',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'stops a recording the controller closed without yielding another packet',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'stops a recording whose abort signal fires',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'refuses a recording while the admitted enabled observation says the camera is disabled',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'latches one recording failure reason and clears it when a later recording produces output',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'reports the recording state HomeKit persists without holding a source warm for it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'opens a mains-powered camera source with the pre-event window a recording drains',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'opens a mains-powered live snapshot with the same pre-event window as live view',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'never retains pre-event media for a battery or solar camera',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'opens a battery or solar live snapshot without a pre-event window',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'retains no pre-event media for a camera with no recording to drain it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'asks for no more pre-event media than the window the camera retains',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'asks for only the shorter pre-event window a controller selected',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'drains the pre-event media window the negotiated recording carries',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'asks for no pre-event media at all for a recording that carries no window',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'refuses a recording after a reconciliation withdraws the camera fragment recording',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'refuses a recording stream before any configuration has been selected',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'transcodes source fragments into the negotiated profile, level, geometry, and bit rate',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'fragments the output on forced keyframes no further apart than the selected fragment length',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'codes a keyframe at the selected i-frame interval when it is shorter than a fragment',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'asks for a keyframe one frame before the fragment a boundary can only land on a frame of',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'bounds the recorded frame rate without duplicating frames the source never sent',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'requests source fragments short enough not to delay output behind captured media',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'emits the initialization segment as its own first output unit',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'emits each moof and mdat pair as one fragment and never a box between recordings',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'marks the final fragment last only once the source has ended',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'ends a recording whose adaptation never flushes what the ended source already gave it',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'degrades to a video-only recording when the source carries no audio track',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'records no audio at all when the negotiated recording carries none',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'codes the recorded audio profile and sample rate the controller selected',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'stops the source and its adaptation promptly when a recording is cancelled',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'stops the source and its adaptation when its consumer stops iterating',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'extends a source media budget only while the recording is being consumed',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'fails a recording that produces no output within the backstop',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'fails a recording whose adaptation exits before its source ends',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'fails a recording whose source reports an error',
-        },
-        {
-          file: 'test/contracts/recording-media.test.ts',
-          behavior: 'fails a recording the source exposes no fragment recording for',
-        },
-      ],
-    },
-    {
-      id: CAMERA_STATUS_LED_READ.id,
-      hapFit:
-        "Camera Operating Mode Indicator carries the camera's own status-light state, which is what the Home app presents as its status light",
-      identityEffect:
-        'The indicator shares the one operating mode service this camera presents on, so no separate switch service is published for it',
-      diagnostics:
-        'A reading that is absent, not a boolean, or faulting answers HomeKit with no response rather than a borrowed value, and a camera that offers the setter without reporting the state publishes no indicator at all',
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents the indicator LED on the operating mode service and moves it through the typed operation',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents no indicator LED without exact evidence and a bound typed operation',
-        },
-        {
-          file: 'test/contracts/camera-controls-adapter.test.ts',
-          behavior: 'withdraws the indicator LED switch an earlier version published for this camera',
-        },
-      ],
-    },
-    {
-      id: CAMERA_STATUS_LED_WRITE.id,
-      hapFit: 'A HomeKit write moves the indicator LED through the typed SDK operation and nothing else',
-      identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
-      diagnostics:
-        'One write is in flight per member at a time, a write is bounded before HomeKit is answered, an operation the camera reports unsupported is latched and asked once, and the characteristic is restored from the authoritative reading rather than from what was asked for',
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents the indicator LED on the operating mode service and moves it through the typed operation',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'blocks later indicator writes once the camera reports the operation unsupported',
-        },
-      ],
-    },
-    {
-      id: CAMERA_NIGHT_VISION_READ.id,
-      hapFit:
-        "Night Vision carries the one boolean HomeKit has for it, projected from the camera's own three-mode reading, where every mode but off reads as on",
-      identityEffect: 'Night vision shares the one operating mode service this camera presents on',
-      diagnostics:
-        'A mode that is absent, of another shape, or faulting answers HomeKit with no response, and a camera that offers the setter without reporting a mode presents no night vision at all',
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'restores the night-vision mode the camera reported rather than one chosen for it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'presents no night vision without exact evidence and a bound typed operation',
-        },
-      ],
-    },
-    {
-      id: CAMERA_NIGHT_VISION_WRITE.id,
-      hapFit:
-        'Turning night vision on restores the mode this camera last reported for itself, because HomeKit carries no mode of its own to state',
-      identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
-      diagnostics:
-        'Full colour is not offered by every model, so a camera whose lit mode was never observed is turned on to infrared rather than to a mode it may refuse, and the characteristic is restored from the authoritative reading',
-      verification: [
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'restores the night-vision mode the camera reported rather than one chosen for it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'turns night vision on to infrared for a camera whose lit mode was never observed',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'restores a night-vision mode observed before a reconciliation replaced the attachment',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'refuses a night-vision mode the SDK does not declare instead of reading it as night vision',
-        },
-      ],
-    },
-    {
-      id: CAMERA_ENABLED_WRITE.id,
-      hapFit:
-        "HomeKit's own camera-active state is carried through to the camera's power, so a camera the user set to off for this mode is off rather than merely unwatched, and the camera controls bundle writes the same member from its Camera Enabled switch, which stays reachable when Apple Home declines to write a disabled camera's operating mode",
-      identityEffect: 'The operation is issued on the operating mode service the camera already presents on',
-      diagnostics:
-        'The camera is written only where a controller wrote the state and the camera disagrees with it, so a state HAP restored cannot reach the device while a value HomeKit re-asserts does, which is what reconciles a camera after a restart; a camera whose power cannot be written still accepts the HomeKit state, and a camera that refuses the change reverts it',
-      verification: [
-        {
-          file: 'test/contracts/camera-controls-adapter.test.ts',
-          behavior: 'switches the camera off and on again when HomeKit writes the enabled state',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'turns the camera off and on again when HomeKit writes its own camera-active state',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'accepts a HomeKit camera-active state it cannot carry to the camera without pretending to',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'reverts the HomeKit camera-active state when the camera refuses the change',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'keeps the HomeKit camera-active state a camera has accepted but not yet converged on',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'writes the camera only for a controller write, never for a state HAP restored',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'carries a camera-active state HomeKit re-asserts to a camera that disagrees with it',
-        },
-        {
-          file: 'test/contracts/camera-streaming-adapter.test.ts',
-          behavior: 'ignores a camera-active write the camera already agrees with',
-        },
-      ],
-    },
+    CAMERA_LIVE.id,
+    CAMERA_TALKBACK.id,
+    CAMERA_SNAPSHOT_STORED.id,
+    CAMERA_SNAPSHOT_LIVE.id,
+    CAMERA_RECORD_FRAGMENTS.id,
+    CAMERA_STATUS_LED_READ.id,
+    CAMERA_STATUS_LED_WRITE.id,
+    CAMERA_NIGHT_VISION_READ.id,
+    CAMERA_NIGHT_VISION_WRITE.id,
+    CAMERA_ENABLED_WRITE.id,
   ],
   attach: attachCameraStreaming,
 } as const satisfies HomeKitAdapter;
@@ -1012,8 +402,8 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
   let detached = false;
   const readBoolean = observationReader(context, 'boolean');
   const readNumber = observationReader(context, 'number');
-  const reportAdmission = cameraLiveCondition(context, CAMERA_LIVE_REFUSED_CONDITION);
-  const reportCapacity = cameraLiveCondition(context, CAMERA_MEDIA_AT_CAPACITY_CONDITION);
+  const reportAdmission = cameraCondition(context, CAMERA_LIVE_REFUSED_CONDITION, 'live');
+  const reportCapacity = cameraCondition(context, CAMERA_MEDIA_AT_CAPACITY_CONDITION, 'live');
   const acquireLiveSnapshot = liveAvailable ? camera.snapshotLive!.bind(camera) : undefined;
   const openTalkback = talkbackConfigured ? camera.talkback!.bind(camera) : undefined;
   const source: CameraMediaSource = {
@@ -1081,7 +471,7 @@ function attachCameraStreaming(context: AdapterAttachmentContext): AttachedAdapt
         prebufferLengthMs,
         enablement: binding.enablement,
         reportRecording: recordingReporter(context),
-        reportAdmission: cameraRecordingCondition(context, CAMERA_RECORDING_REFUSED_CONDITION),
+        reportAdmission: cameraCondition(context, CAMERA_RECORDING_REFUSED_CONDITION, 'recordFragments'),
       }
     : undefined;
   if (existing && existing.audio === binding.audioEnabled && existing.talkback === talkbackConfigured) {
@@ -1330,7 +720,7 @@ function liveSessionReporter(
   context: AdapterAttachmentContext,
   refusal: (reason?: LiveAdmissionRefusal) => void,
 ): (outcome: LiveSessionOutcome, switchedOff?: boolean) => void {
-  const condition = cameraLiveCondition(context, CAMERA_LIVE_SESSION_CONDITION);
+  const condition = cameraCondition(context, CAMERA_LIVE_SESSION_CONDITION, 'live');
   return (outcome, switchedOff) => {
     if (outcome.outcome === 'streaming') {
       condition();
@@ -1361,20 +751,12 @@ function cameraCondition(context: AdapterAttachmentContext, code: string, member
   };
 }
 
-function cameraLiveCondition(context: AdapterAttachmentContext, code: string): (reason?: string) => void {
-  return cameraCondition(context, code, 'live');
-}
-
-function cameraRecordingCondition(context: AdapterAttachmentContext, code: string): (reason?: string) => void {
-  return cameraCondition(context, code, 'recordFragments');
-}
-
 /**
  * Latches why the most recent recording produced no usable output and clears that condition once a later
  * recording produces some.
  */
 function recordingReporter(context: AdapterAttachmentContext): (outcome: RecordingOutcome) => void {
-  const condition = cameraRecordingCondition(context, CAMERA_RECORDING_FAILED_CONDITION);
+  const condition = cameraCondition(context, CAMERA_RECORDING_FAILED_CONDITION, 'recordFragments');
   return (outcome) => condition(outcome.outcome === 'recording' ? undefined : outcome.reason);
 }
 
@@ -1434,22 +816,6 @@ interface OperatingModeControls {
 interface OperatingModePresentation {
   observe(): AdapterEventTrace['observation'];
   remove(): void;
-}
-
-/**
- * Whether the SDK declines to stand behind one of this camera's readings on this device family.
- *
- * A member named there reports a value that does not track its own setter, so it may neither be presented nor
- * written: publishing it would state something the SDK does not, and writing it would leave HomeKit unable to
- * tell whether the write landed. The statement is read off the bound capability surface itself, so a surface
- * that answers that read by throwing has stated nothing this plugin may rely on and is declined too.
- */
-function untrusted(camera: CameraActions, member: string): boolean {
-  try {
-    return unreflectedMembers(camera).includes(member);
-  } catch {
-    return true;
-  }
 }
 
 /**
@@ -2078,8 +1444,8 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
     const prepared = await this.binding.media.prepare({
       addressVersion: request.addressVersion,
       targetAddress: request.targetAddress,
-      video: mediaTarget(request.video, this.hap),
-      ...(this.binding.audioEnabled ? { audio: mediaTarget(request.audio, this.hap) } : {}),
+      video: mediaTarget(request.video),
+      ...(this.binding.audioEnabled ? { audio: mediaTarget(request.audio) } : {}),
       onVideoFailure: () => {
         this.controller?.forceStopStreamingSession(request.sessionID);
         this.release(request.sessionID);
@@ -2338,14 +1704,11 @@ class LiveCameraDelegate implements CameraStreamingDelegate {
   }
 }
 
-function mediaTarget(source: PrepareStreamRequest['video'], hap: AdapterAttachmentContext['hap']) {
-  const suite =
-    source.srtpCryptoSuite === hap.SRTPCryptoSuites.AES_CM_256_HMAC_SHA1_80
-      ? 'AES_CM_256_HMAC_SHA1_80'
-      : 'AES_CM_128_HMAC_SHA1_80';
+/** The one crypto suite this controller advertises, so it is the only one a controller can have selected. */
+function mediaTarget(source: PrepareStreamRequest['video']) {
   return {
     port: source.port,
-    srtpCryptoSuite: suite as 'AES_CM_128_HMAC_SHA1_80' | 'AES_CM_256_HMAC_SHA1_80',
+    srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' as const,
     srtpKey: source.srtp_key,
     srtpSalt: source.srtp_salt,
   };

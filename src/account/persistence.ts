@@ -245,10 +245,6 @@ export class StagedAccountStores implements ActiveAccountStores {
       this.settled = true;
     }
   }
-
-  getGeneration(): string {
-    return this.generation;
-  }
 }
 
 /**
@@ -302,7 +298,7 @@ export class AccountSessionPersistence {
     await mkdir(generationsRoot, { mode: 0o700, recursive: true });
     await chmod(generationsRoot, 0o700);
     const obsoleteGenerations = await readdir(generationsRoot);
-    const generation = staging.getGeneration();
+    const generation = staging.generation;
     const destination = join(generationsRoot, generation);
     this.hooks?.before('generation-publication');
     await rename(staging.directory, destination);
@@ -326,15 +322,9 @@ export class AccountSessionPersistence {
       } catch {}
     }
 
-    void (async () => {
-      try {
-        await Promise.allSettled(
-          obsoleteGenerations.map((candidate) =>
-            rm(join(generationsRoot, candidate), { force: true, recursive: true }),
-          ),
-        );
-      } catch {}
-    })();
+    void Promise.allSettled(
+      obsoleteGenerations.map((candidate) => rm(join(generationsRoot, candidate), { force: true, recursive: true })),
+    );
   }
 
   private stores(account: string, generation: string, directory: string): ActiveAccountStores {

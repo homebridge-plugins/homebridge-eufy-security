@@ -31,7 +31,7 @@ const HAP = { Service, Characteristic, HAPStatus, HapStatusError };
  * had simply hardcoded the accessor.
  */
 const ANNOUNCED_ENABLED_PROPERTY = 'synthetic_camera_enabled';
-const EVIDENCE = new Map(CAMERA_CONTROLS_ADAPTER.coverage.map(({ id }) => [id, requirement(id)]));
+const EVIDENCE = new Map(CAMERA_CONTROLS_ADAPTER.coverage.map((id) => [id, requirement(id)]));
 
 function requirement(id: string) {
   const [capability, member, suffix] = id.split('.');

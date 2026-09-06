@@ -37,18 +37,7 @@ export const INFORMATION_ADAPTER = {
   key: INFORMATION_ADAPTER_KEY,
   role: 'supplemental',
   requires: [],
-  coverage: REPRESENTED_INFORMATION.map(([member]) => ({
-    id: `info.${member}.read`,
-    hapFit: 'Accessory Information characteristic with the matching typed SDK identity field',
-    identityEffect: 'Supplements an existing represented accessory and cannot establish accessory-container identity',
-    diagnostics: 'Omit unavailable optional identity fields without creating an accessory',
-    verification: [
-      {
-        file: 'test/contracts/homekit-reconciler.test.ts',
-        behavior: 'creates and updates one serial-based contact accessory with stable semantic services',
-      },
-    ],
-  })),
+  coverage: REPRESENTED_INFORMATION.map(([member]) => `info.${member}.read`),
   attach: attachInformation,
 } as const satisfies HomeKitAdapter;
 

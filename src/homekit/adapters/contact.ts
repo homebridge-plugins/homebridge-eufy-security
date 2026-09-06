@@ -39,18 +39,7 @@ export const CONTACT_ADAPTER = {
   key: CONTACT_ADAPTER_KEY,
   role: 'primary-purpose',
   requires: [CONTACT_OPEN_REQUIREMENT],
-  coverage: [CONTACT_OPEN_REQUIREMENT.id, 'contact.contactState.event'].map((id) => ({
-    id,
-    hapFit: 'Contact Sensor ContactSensorState; SDK open=true maps to HAP contact not detected',
-    identityEffect: 'Primary-purpose service uses stable semantic key contact.sensor',
-    diagnostics: 'Emit and clear a structured invalid-contact-observation condition',
-    verification: [
-      {
-        file: 'test/contracts/contact-adapter.test.ts',
-        behavior: 'maps authoritative SDK contact polarity through real HAP definitions',
-      },
-    ],
-  })),
+  coverage: [CONTACT_OPEN_REQUIREMENT.id, 'contact.contactState.event'],
   attach: attachContact,
 } as const satisfies HomeKitAdapter;
 

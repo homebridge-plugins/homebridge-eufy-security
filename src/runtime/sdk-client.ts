@@ -12,6 +12,7 @@ import type { EufyConfig } from '../configuration.js';
 import { discoverCompleteDeviceRegistry, type CompleteDeviceSnapshot } from '../device/snapshot.js';
 import { createSdkLogger, type PlatformLogger, type UnconfirmedWrite } from '../diagnostics.js';
 
+/** Tolerates an SDK build that predates realtime readiness, which the pinned dependency may be. */
 interface RealtimeReadyClient {
   waitForRealtime?(): Promise<{ state: string }>;
 }

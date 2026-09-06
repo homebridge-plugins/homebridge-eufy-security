@@ -361,62 +361,7 @@ export interface LockDiagnostic extends AdapterDiagnostic {
     | 'recovered';
 }
 
-const COVERAGE = [
-  ...[LOCK_ACTION, UNLOCK_ACTION].map(({ id }) => ({
-    id,
-    hapFit: 'Lock Mechanism exposes explicit secured and unsecured targets, reconciled by a later announcement',
-    identityEffect: 'Primary-purpose service uses stable semantic key lock.mechanism',
-    diagnostics: 'Fail closed for unavailable, failed, or unreconciled lock targets',
-    verification: [
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'presents no lock state until the SDK announces one, and never from command delivery alone',
-      },
-      {
-        file: 'test/contracts/homekit-reconciler.test.ts',
-        behavior: 'represents lock targets only for the exact evidenced T8531 boundary',
-      },
-    ],
-  })),
-  {
-    id: LOCK_STATE_EVENT_ROW,
-    hapFit:
-      'Lock Mechanism LockCurrentState follows the pushed lockState announcement, translating only the lock push codes the SDK names: the lock codes to secured, the unlock codes to unsecured, and the mechanism faults to jammed; it is pushed rather than only answered, because HomeKit subscribes to notifications and otherwise reads only while the Home app is open',
-    identityEffect: 'Presents state on the same primary-purpose service under the stable semantic key lock.mechanism',
-    diagnostics:
-      'A code this build cannot name, an announcement carrying no code, and a lock whose manifest announces none each present no state rather than a guessed one, and say which under unusable-lock-announcement; a named code that carries no bolt state leaves the presented state untouched',
-    verification: [
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'follows the %s announcement to its HomeKit state',
-      },
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'reads every lock push code the SDK names, so a code it has not is a failure and not a guess',
-      },
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'pushes the announced state to HomeKit rather than only answering the next read',
-      },
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'withdraws the state it can no longer vouch for when %s arrives',
-      },
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'presents no state and says why for a lock whose manifest announces none',
-      },
-      {
-        file: 'test/contracts/lock-adapter.test.ts',
-        behavior: 'keeps the last requested target while presenting a jam',
-      },
-      {
-        file: 'test/contracts/homekit-reconciler.test.ts',
-        behavior: 'the state follows the announcement the SDK pushes',
-      },
-    ],
-  },
-];
+const COVERAGE = [LOCK_ACTION.id, UNLOCK_ACTION.id, LOCK_STATE_EVENT_ROW];
 
 /** Complete HomeKit policy for the exact evidenced T8531 lock-control boundary. */
 export const LOCK_ADAPTER = {

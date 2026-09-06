@@ -45,18 +45,7 @@ export const SIREN_ADAPTER = {
   key: SIREN_ADAPTER_KEY,
   role: 'primary-purpose',
   requires: [SIREN_ACTIVE_REQUIREMENT, SIREN_TEST_REQUIREMENT, SIREN_STOP_REQUIREMENT],
-  coverage: [SIREN_ACTIVE_REQUIREMENT, SIREN_TEST_REQUIREMENT, SIREN_STOP_REQUIREMENT].map(({ id }) => ({
-    id,
-    hapFit: 'Switch On exposes only the evidenced momentary siren test and authoritative active observation',
-    identityEffect: 'Primary-purpose service uses stable semantic key siren.test',
-    diagnostics: 'Fail closed when the typed siren capability or authoritative active observation is unavailable',
-    verification: [
-      {
-        file: 'test/contracts/siren-adapter.test.ts',
-        behavior: 'resets the test control after the momentary action settles without synthesizing alarm state',
-      },
-    ],
-  })),
+  coverage: [SIREN_ACTIVE_REQUIREMENT.id, SIREN_TEST_REQUIREMENT.id, SIREN_STOP_REQUIREMENT.id],
   attach: attachSiren,
 } as const satisfies HomeKitAdapter;
 

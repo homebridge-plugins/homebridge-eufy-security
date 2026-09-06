@@ -374,71 +374,50 @@ export class TemporaryAuthentication {
     return successful;
   }
 
-  private async bounded(operation: Promise<unknown>): Promise<boolean> {
-    let timer: NodeJS.Timeout;
-    const timeout = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), this.remainingCleanupMs());
-      timer.unref();
-    });
-    try {
-      return await Promise.race([operation.then(() => true), timeout]);
-    } catch {
-      return false;
-    } finally {
-      clearTimeout(timer!);
-    }
-  }
-
-  private async boundedRelease(lease: TemporaryLease): Promise<boolean> {
-    let timer: NodeJS.Timeout;
-    const timeout = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), this.remainingCleanupMs());
-      timer.unref();
-    });
-    try {
-      const result = await Promise.race([lease.release(), timeout]);
-      return result !== false && result.state === 'stopped';
-    } catch {
-      return false;
-    } finally {
-      clearTimeout(timer!);
-    }
-  }
-
-  private async boundedStore(operation: Promise<unknown>): Promise<'success' | 'failure' | 'timeout'> {
-    let timer: NodeJS.Timeout;
-    const timeout = new Promise<'timeout'>((resolve) => {
-      timer = setTimeout(() => resolve('timeout'), this.remainingCleanupMs());
-      timer.unref();
-    });
-    try {
-      return await Promise.race([operation.then(() => 'success' as const).catch(() => 'failure' as const), timeout]);
-    } finally {
-      clearTimeout(timer!);
-    }
-  }
-
-  private async boundedCommit(stores: TemporaryStores): Promise<'success' | 'failure' | 'timeout'> {
-    const controller = new AbortController();
+  /**
+   * Races one cleanup operation against the session's remaining window, answering `'timeout'` when it expires.
+   *
+   * `onTimeout` is how a caller withdraws the work it started, for an operation that accepts an abort signal;
+   * the timer is unreferenced so a waiting deadline never holds the process open on its own.
+   */
+  private async withDeadline<T>(operation: Promise<T>, onTimeout?: () => void): Promise<T | 'timeout'> {
     let timer: NodeJS.Timeout;
     const timeout = new Promise<'timeout'>((resolve) => {
       timer = setTimeout(() => {
-        controller.abort();
+        onTimeout?.();
         resolve('timeout');
       }, this.remainingCleanupMs());
       timer.unref();
     });
     try {
-      return await Promise.race([
-        stores
-          .commit(controller.signal)
-          .then(() => 'success' as const)
-          .catch(() => 'failure' as const),
-        timeout,
-      ]);
+      return await Promise.race([operation, timeout]);
     } finally {
       clearTimeout(timer!);
     }
+  }
+
+  private async bounded(operation: Promise<unknown>): Promise<boolean> {
+    return (await this.withDeadline(operation.then(() => true).catch(() => false))) === true;
+  }
+
+  private async boundedRelease(lease: TemporaryLease): Promise<boolean> {
+    const result = await this.withDeadline(lease.release().catch(() => 'timeout' as const));
+    return result !== 'timeout' && result.state === 'stopped';
+  }
+
+  private async boundedStore(operation: Promise<unknown>): Promise<'success' | 'failure' | 'timeout'> {
+    return this.withDeadline(operation.then(() => 'success' as const).catch(() => 'failure' as const));
+  }
+
+  private async boundedCommit(stores: TemporaryStores): Promise<'success' | 'failure' | 'timeout'> {
+    const controller = new AbortController();
+    return this.withDeadline(
+      stores
+        .commit(controller.signal)
+        .then(() => 'success' as const)
+        .catch(() => 'failure' as const),
+      () => controller.abort(),
+    );
   }
 
   private isSettled(): boolean {

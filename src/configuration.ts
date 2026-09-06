@@ -31,41 +31,27 @@ export interface EufyConfig {
   trustedDeviceName: string;
   pollingIntervalMinutes: number;
   maxConcurrentMediaSessions: number;
+  /**
+   * Events whose arrival may open a camera's connection before HomeKit asks for media.
+   *
+   * The names are the SDK's own semantic events, not a vocabulary invented here: the interface offers whatever
+   * the discovered devices report, so an event the SDK gains needs no change in this plugin, and the list is
+   * handed straight back to the SDK. That is also why an unrecognised entry is kept rather than refused — this
+   * plugin cannot know the whole valid set, which depends on the devices and the SDK version, and a stored name
+   * the SDK no longer emits simply never fires.
+   *
+   * Opening a connection early is what makes the media HomeKit asks for straight afterwards start immediately
+   * instead of waiting on a cold one. The list is global and the warming is not: an event opens the connection of
+   * the camera that reported it and no other, so each camera is warmed only by the events it reports itself. It is
+   * not free either — a camera running on its own battery is kept awake for the whole idle window that follows, so
+   * a camera reporting often may never sleep. Which events earn that is the user's call.
+   */
   warmUpEvents: string[];
   ffmpegPath: string | undefined;
   entityPreferences: Record<string, EntityPreference>;
   discardedV4Settings: string[];
   discardedV4Acknowledged: boolean;
 }
-
-/**
- * Events whose arrival may open a camera's connection before HomeKit asks for media.
- *
- * The names are the SDK's own semantic events, not a vocabulary invented here: the interface offers whatever
- * the discovered devices report, so an event the SDK gains needs no change in this plugin, and the list is
- * handed straight back to the SDK. That is also why an unrecognised entry is kept rather than refused — this
- * plugin cannot know the whole valid set, which depends on the devices and the SDK version, and a stored name
- * the SDK no longer emits simply never fires.
- *
- * Opening a connection early is what makes the media HomeKit asks for straight afterwards start immediately
- * instead of waiting on a cold one. The list is global and the warming is not: an event opens the connection of
- * the camera that reported it and no other, so each camera is warmed only by the events it reports itself. It is
- * not free either — a camera running on its own battery is kept awake for the whole idle window that follows, so
- * a camera reporting often may never sleep. Which events earn that is the user's call.
- */
-
-/**
- * How many live sessions and live snapshot acquisitions this host may carry at once, or zero for no ceiling.
- *
- * The count is declared rather than derived, because neither input a plugin could derive it from is sound. A
- * core count is not a capacity: on a containerised eight-core host the readable quota was 2.5 cores, so the
- * core count overstated it more than threefold. A container quota is not a substitute either, because on a
- * host without one the file does not exist. Only the operator knows what else that host is for.
- *
- * One count covers both kinds of work because both are one SDK pull and at least one adaptation process, so
- * counting them apart would leave the operator adding two numbers to predict what the host carries. Zero is
- * the default and means unlimited, so an installation that never sets it behaves exactly as before.
- */
 
 const ENTITY_PREFERENCE_KEYS = new Set<keyof EntityPreference>(['represented', 'audio', 'snapshotMode']);
 const SNAPSHOT_MODES = new Set<SnapshotMode>(['Cloud', 'Live', 'Refresh']);
@@ -194,7 +180,6 @@ export function ffmpegPathSource(path: string): 'bundled' | 'configured' {
   return path === bundledFfmpegPath ? 'bundled' : 'configured';
 }
 
-/** Produces a synthetic-safe Homebridge block without discovering or filtering entities. */
 /**
  * The chosen warm-up events, refusing anything unrecognised rather than dropping it.
  *

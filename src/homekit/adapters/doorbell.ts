@@ -41,20 +41,7 @@ export const DOORBELL_ADAPTER = {
   key: DOORBELL_ADAPTER_KEY,
   role: 'primary-purpose',
   requires: [DOORBELL_PRESS_REQUIREMENT],
-  coverage: [
-    {
-      id: DOORBELL_PRESS_REQUIREMENT.id,
-      hapFit: 'Doorbell ProgrammableSwitchEvent emits one SINGLE_PRESS notification per SDK press',
-      identityEffect: 'Primary-purpose service uses stable semantic key doorbell.press',
-      diagnostics: 'Presses remain stateless and require no fabricated durable device state',
-      verification: [
-        {
-          file: 'test/contracts/doorbell-adapter.test.ts',
-          behavior: 'emits every admitted press as a stateless single-press notification',
-        },
-      ],
-    },
-  ],
+  coverage: [DOORBELL_PRESS_REQUIREMENT.id],
   attach: attachDoorbell,
 } as const satisfies HomeKitAdapter;
 

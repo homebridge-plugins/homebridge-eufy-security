@@ -122,7 +122,6 @@ const HOMEKIT_LIVE_REQUEST_EVENTS = new Set([
 const MAX_SDK_DETAILS = 16;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
 const MAX_CURRENT_LOG_BYTES = 50 * 1024 * 1024;
-const MAX_TOTAL_LOG_BYTES = 200 * 1024 * 1024;
 const MAX_QUEUED_LOG_BYTES = 1024 * 1024;
 /**
  * How much of one evidence class a support archive carries, applied to each class on its own.
@@ -192,8 +191,16 @@ export type DiagnosticsProfile =
 
 export type DiagnosticsReproductionMode = 'now' | 'intermittent';
 
-export type DiagnosticsUiEvent =
-  'background-started' | 'dashboard-opened' | 'authentication-opened' | 'request-failed' | 'issue-observed';
+/** The bounded UI events a support session may record, and the only vocabulary the sink accepts. */
+const DIAGNOSTICS_UI_EVENTS = [
+  'background-started',
+  'dashboard-opened',
+  'authentication-opened',
+  'request-failed',
+  'issue-observed',
+] as const;
+
+export type DiagnosticsUiEvent = (typeof DIAGNOSTICS_UI_EVENTS)[number];
 
 export type DiagnosticEvidence = 'plugin-log' | 'sdk-log' | 'homekit-log' | 'ffmpeg-log' | 'ui-log';
 
@@ -311,17 +318,9 @@ export function isDiagnosticsReproductionMode(value: unknown): value is Diagnost
   return value === 'now' || value === 'intermittent';
 }
 
-const DIAGNOSTICS_UI_EVENTS: ReadonlySet<DiagnosticsUiEvent> = new Set([
-  'background-started',
-  'dashboard-opened',
-  'authentication-opened',
-  'request-failed',
-  'issue-observed',
-]);
-
 /** Narrows external event input to the diagnostics-owned UI vocabulary. */
 export function isDiagnosticsUiEvent(value: unknown): value is DiagnosticsUiEvent {
-  return typeof value === 'string' && DIAGNOSTICS_UI_EVENTS.has(value as DiagnosticsUiEvent);
+  return DIAGNOSTICS_UI_EVENTS.includes(value as DiagnosticsUiEvent);
 }
 
 interface PersistedDiagnosticsSession {
@@ -1103,7 +1102,6 @@ class JsonLineLog {
   private queuedBytes = 0;
   private droppedRecords = 0;
   private droppedAt?: string;
-  private totalBytes?: number;
 
   constructor(
     storageRoot: string,
@@ -1191,10 +1189,7 @@ class JsonLineLog {
     await mkdir(this.directory, { mode: 0o700, recursive: true });
     await chmod(this.directory, 0o700);
     const bytes = Buffer.byteLength(record);
-    const rotated = await this.prepare(bytes);
-    if (this.totalBytes === undefined || rotated) {
-      this.totalBytes = await this.measureTotal();
-    }
+    await this.prepare(bytes);
     try {
       await chmod(this.path, 0o600);
     } catch (error) {
@@ -1204,25 +1199,21 @@ class JsonLineLog {
     }
     await appendFile(this.path, record, { encoding: 'utf8', flag: 'a', mode: 0o600 });
     await chmod(this.path, 0o600);
-    this.totalBytes += bytes;
-    await this.enforceTotalLimit();
   }
 
-  private async prepare(recordBytes: number): Promise<boolean> {
+  private async prepare(recordBytes: number): Promise<void> {
     try {
       const current = await stat(this.path);
       const today = new Date().toISOString().slice(0, 10);
       const currentDay = current.mtime.toISOString().slice(0, 10);
       if (currentDay !== today || current.size + recordBytes > MAX_CURRENT_LOG_BYTES) {
         await this.rotate();
-        return true;
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error;
       }
     }
-    return false;
   }
 
   private async rotate(): Promise<void> {
@@ -1242,38 +1233,6 @@ class JsonLineLog {
     await writeFile(`${this.path}.1.gz`, compressed, { flag: 'w', mode: 0o600 });
     await chmod(`${this.path}.1.gz`, 0o600);
     await rm(this.path, { force: true });
-  }
-
-  private async measureTotal(): Promise<number> {
-    const files = [this.path, ...Array.from({ length: LOG_ROTATIONS }, (_, index) => `${this.path}.${index + 1}.gz`)];
-    const sizes = await Promise.all(
-      files.map(async (path) => {
-        try {
-          return (await stat(path)).size;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            return 0;
-          }
-          throw error;
-        }
-      }),
-    );
-    return sizes.reduce((sum, size) => sum + size, 0);
-  }
-
-  private async enforceTotalLimit(): Promise<void> {
-    for (let index = LOG_ROTATIONS; index >= 1 && this.totalBytes! > MAX_TOTAL_LOG_BYTES; index -= 1) {
-      const path = `${this.path}.${index}.gz`;
-      try {
-        const size = (await stat(path)).size;
-        await rm(path, { force: true });
-        this.totalBytes! -= size;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw error;
-        }
-      }
-    }
   }
 }
 
@@ -1391,10 +1350,13 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 }
 
-/** A non-negative integer no larger than `max`, or nothing — a data-type id, a sign code, an exit status. */
-function boundedInteger(value: unknown, max: number): number | undefined {
+/**
+ * A whole number within an inclusive range, or nothing — a data-type id, a sign code, an exit status, or a
+ * negotiated geometry or frame rate a controller chose.
+ */
+function boundedInteger(value: unknown, max: number, min = 0): number | undefined {
   const integer = nonNegativeInteger(value);
-  return integer !== undefined && integer <= max ? integer : undefined;
+  return integer !== undefined && integer <= max && integer >= min ? integer : undefined;
 }
 
 /**
@@ -1419,6 +1381,14 @@ const MAX_STARTUP_WINDOW_MS = 60_000;
 /** The three phases whose only field is the action they report, which the union fixes at `start`. */
 const retainedStart = (candidate: Record<string, unknown>): Record<string, unknown> | undefined =>
   candidate.action === 'start' ? { action: 'start' } : undefined;
+
+/** A phase whose only field is one bounded integer, retained under the name the SDK declares for it. */
+const retainedInteger =
+  (field: string, max: number) =>
+  (candidate: Record<string, unknown>): Record<string, unknown> | undefined => {
+    const value = boundedInteger(candidate[field], max);
+    return value === undefined ? undefined : { [field]: value };
+  };
 
 /**
  * What each phase of the SDK's live trace vocabulary retains, keyed by the phase itself.
@@ -1453,40 +1423,19 @@ const LIVE_TRACE_PHASES = {
     const media = allowlistedLabel(c.media, ['audio', 'video']);
     return media ? { media } : undefined;
   },
-  'video-decode-empty': (c) => {
-    const signCode = boundedInteger(c.signCode, 255);
-    return signCode === undefined ? undefined : { signCode };
-  },
-  'datagram-gap': (c) => {
-    const dataType = boundedInteger(c.dataType, 3);
-    return dataType === undefined ? undefined : { dataType };
-  },
-  'sequence-restart': (c) => {
-    const dataType = boundedInteger(c.dataType, 3);
-    return dataType === undefined ? undefined : { dataType };
-  },
-  'level2-wait': (c) => {
-    const waitMs = boundedInteger(c.waitMs, MAX_STARTUP_WINDOW_MS);
-    return waitMs === undefined ? undefined : { waitMs };
-  },
-  'level2-ready': (c) => {
-    const cipherId = boundedInteger(c.cipherId, 65535);
-    return cipherId === undefined ? undefined : { cipherId };
-  },
-  'level2-absent': (c) => {
-    const waitedMs = boundedInteger(c.waitedMs, MAX_STARTUP_WINDOW_MS);
-    return waitedMs === undefined ? undefined : { waitedMs };
-  },
+  'video-decode-empty': retainedInteger('signCode', 255),
+  'datagram-gap': retainedInteger('dataType', 3),
+  'sequence-restart': retainedInteger('dataType', 3),
+  'level2-wait': retainedInteger('waitMs', MAX_STARTUP_WINDOW_MS),
+  'level2-ready': retainedInteger('cipherId', 65535),
+  'level2-absent': retainedInteger('waitedMs', MAX_STARTUP_WINDOW_MS),
   /**
    * How long a connection's path has answered nothing, which is the station stating the path is gone.
    *
    * A duration, so it is retained as a bounded tally. Its bound is the warm-up window a start is given: a
    * silence longer than that belongs to a session nothing is waiting on.
    */
-  'path-stale': (c) => {
-    const silentMs = boundedInteger(c.silentMs, MAX_STARTUP_WINDOW_MS);
-    return silentMs === undefined ? undefined : { silentMs };
-  },
+  'path-stale': retainedInteger('silentMs', MAX_STARTUP_WINDOW_MS),
   'media-command-unsent': (c) => {
     const reason = allowlistedLabel(c.reason, ['level2-key', 'address']);
     return reason ? { reason } : undefined;
@@ -1589,16 +1538,19 @@ export function createSdkLogger(target: Partial<PlatformLogger> | undefined): Lo
   };
 }
 
-export type RuntimeState =
-  | 'stopped'
-  | 'acquiring-ownership'
-  | 'starting'
-  | 'ready'
-  | 'degraded'
-  | 'authentication-required'
-  | 'owner-conflict'
-  | 'failed'
-  | 'stopping';
+const RUNTIME_STATES = [
+  'stopped',
+  'acquiring-ownership',
+  'starting',
+  'ready',
+  'degraded',
+  'authentication-required',
+  'owner-conflict',
+  'failed',
+  'stopping',
+] as const;
+
+export type RuntimeState = (typeof RUNTIME_STATES)[number];
 
 const CAPABILITIES = new Set([
   'arming',
@@ -1691,18 +1643,8 @@ const REASONS = new Set([
   'unsupported-selection',
   'device-audio-failed',
 ]);
-const RUNTIME_CONDITION_REASONS = new Set([
-  'stopped',
-  'acquiring-ownership',
-  'starting',
-  'ready',
-  'degraded',
-  'authentication-required',
-  'owner-conflict',
-  'failed',
-  'stopping',
-  'recovered',
-]);
+/** Every runtime state, plus the withdrawal a recovered condition reports. */
+const RUNTIME_CONDITION_REASONS: ReadonlySet<string> = new Set<string>([...RUNTIME_STATES, 'recovered']);
 const MAX_ACCESSORY_ALIASES = 32;
 const HOMEKIT_EVENT_ROUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   'battery.status': new Set(['battery-alert', 'battery-level']),
@@ -1882,142 +1824,52 @@ const RUNTIME_CONDITIONS = {
   },
 } as const;
 const HOMEKIT_CONDITIONS = {
-  'recognized-device-not-represented': {
-    summaryKey: 'log.homekit.recognizedNotRepresented',
-    actionKey: 'log.action.openDashboard',
-  },
-  'battery-capability-unavailable': {
-    summaryKey: 'log.homekit.batteryCapabilityUnavailable',
-    actionKey: 'log.action.waitBattery',
-  },
-  'invalid-battery-observation': {
-    summaryKey: 'log.homekit.invalidBatteryObservation',
-    actionKey: 'log.action.waitBatteryObservation',
-  },
-  'battery-temperature-alert': {
-    summaryKey: 'log.homekit.batteryTemperatureAlert',
-    actionKey: 'log.action.allowBatteryCooling',
-  },
-  'contact-capability-unavailable': {
-    summaryKey: 'log.homekit.contactCapabilityUnavailable',
-    actionKey: 'log.action.waitContact',
-  },
-  'invalid-contact-observation': {
-    summaryKey: 'log.homekit.invalidContactObservation',
-    actionKey: 'log.action.waitContactObservation',
-  },
-  'siren-capability-unavailable': {
-    summaryKey: 'log.homekit.sirenCapabilityUnavailable',
-    actionKey: 'log.action.waitSiren',
-  },
-  'invalid-siren-active-observation': {
-    summaryKey: 'log.homekit.invalidSirenObservation',
-    actionKey: 'log.action.waitSirenObservation',
-  },
-  'smart-light-capability-unavailable': {
-    summaryKey: 'log.homekit.lightCapabilityUnavailable',
-    actionKey: 'log.action.waitLight',
-  },
-  'invalid-smart-light-observation': {
-    summaryKey: 'log.homekit.invalidLightObservation',
-    actionKey: 'log.action.waitLightObservation',
-  },
-  'smart-light-operation-failed': {
-    summaryKey: 'log.homekit.lightOperationFailed',
-    actionKey: 'log.action.retryLight',
-  },
-  'smart-light-reconciliation-expired': {
-    summaryKey: 'log.homekit.lightReconciliationExpired',
-    actionKey: 'log.action.checkPhysicalLight',
-  },
-  'arming-capability-unavailable': {
-    summaryKey: 'log.homekit.armingCapabilityUnavailable',
-    actionKey: 'log.action.waitArming',
-  },
-  'unsupported-arming-mode': {
-    summaryKey: 'log.homekit.unsupportedArmingMode',
-    actionKey: 'log.action.selectSupportedArmingMode',
-  },
-  'arming-operation-failed': {
-    summaryKey: 'log.homekit.armingOperationFailed',
-    actionKey: 'log.action.retryArming',
-  },
-  'arming-reconciliation-expired': {
-    summaryKey: 'log.homekit.armingReconciliationExpired',
-    actionKey: 'log.action.checkPhysicalArmingMode',
-  },
-  'lock-capability-unavailable': {
-    summaryKey: 'log.homekit.lockCapabilityUnavailable',
-    actionKey: 'log.action.waitLock',
-  },
-  'lock-operation-failed': {
-    summaryKey: 'log.homekit.lockOperationFailed',
-    actionKey: 'log.action.retryLock',
-  },
-  'lock-reconciliation-expired': {
-    summaryKey: 'log.homekit.lockReconciliationExpired',
-    actionKey: 'log.action.checkPhysicalLock',
-  },
-  'unusable-lock-announcement': {
-    summaryKey: 'log.homekit.unusableLockAnnouncement',
-    actionKey: 'log.action.checkPhysicalLock',
-  },
-  'camera-live-session-failed': {
-    summaryKey: 'log.homekit.cameraLiveSessionFailed',
-    actionKey: 'log.action.retryLiveView',
-  },
-  'camera-live-session-refused': {
-    summaryKey: 'log.homekit.cameraLiveSessionRefused',
-    actionKey: 'log.action.enableCamera',
-  },
-  'camera-media-at-capacity': {
-    summaryKey: 'log.homekit.cameraMediaAtCapacity',
-    actionKey: 'log.action.reduceConcurrentMedia',
-  },
-  'camera-recording-unavailable': {
-    summaryKey: 'log.homekit.cameraRecordingUnavailable',
-    actionKey: 'log.action.checkCameraRecording',
-  },
-  'camera-recording-failed': {
-    summaryKey: 'log.homekit.cameraRecordingFailed',
-    actionKey: 'log.action.retryRecording',
-  },
-  'camera-recording-refused': {
-    summaryKey: 'log.homekit.cameraRecordingRefused',
-    actionKey: 'log.action.enableCamera',
-  },
-  'camera-controls-capability-unavailable': {
-    summaryKey: 'log.homekit.cameraControlsCapabilityUnavailable',
-    actionKey: 'log.action.waitCameraControl',
-  },
-  'camera-control-operation-failed': {
-    summaryKey: 'log.homekit.cameraControlOperationFailed',
-    actionKey: 'log.action.retryCameraControl',
-  },
-  'invalid-camera-control-observation': {
-    summaryKey: 'log.homekit.invalidCameraControlObservation',
-    actionKey: 'log.action.checkCameraControl',
-  },
-  'camera-snapshot-unavailable': {
-    summaryKey: 'log.homekit.cameraSnapshotUnavailable',
-    actionKey: 'log.action.checkCameraSnapshot',
-  },
-  'camera-snapshot-capability-unavailable': {
-    summaryKey: 'log.homekit.cameraSnapshotCapabilityUnavailable',
-    actionKey: 'log.action.waitCameraSnapshot',
-  },
-  'camera-streaming-capability-unavailable': {
-    summaryKey: 'log.homekit.cameraStreamingCapabilityUnavailable',
-    actionKey: 'log.action.waitCameraLive',
-  },
-  'camera-talkback-failed': {
-    summaryKey: 'log.homekit.cameraTalkbackFailed',
-    actionKey: 'log.action.retryTalkback',
-  },
-  'camera-talkback-capability-unavailable': {
-    summaryKey: 'log.homekit.cameraTalkbackUnavailable',
-    actionKey: 'log.action.waitTalkback',
-  },
+  'recognized-device-not-represented': ['log.homekit.recognizedNotRepresented', 'log.action.openDashboard'],
+  'battery-capability-unavailable': ['log.homekit.batteryCapabilityUnavailable', 'log.action.waitBattery'],
+  'invalid-battery-observation': ['log.homekit.invalidBatteryObservation', 'log.action.waitBatteryObservation'],
+  'battery-temperature-alert': ['log.homekit.batteryTemperatureAlert', 'log.action.allowBatteryCooling'],
+  'contact-capability-unavailable': ['log.homekit.contactCapabilityUnavailable', 'log.action.waitContact'],
+  'invalid-contact-observation': ['log.homekit.invalidContactObservation', 'log.action.waitContactObservation'],
+  'siren-capability-unavailable': ['log.homekit.sirenCapabilityUnavailable', 'log.action.waitSiren'],
+  'invalid-siren-active-observation': ['log.homekit.invalidSirenObservation', 'log.action.waitSirenObservation'],
+  'smart-light-capability-unavailable': ['log.homekit.lightCapabilityUnavailable', 'log.action.waitLight'],
+  'invalid-smart-light-observation': ['log.homekit.invalidLightObservation', 'log.action.waitLightObservation'],
+  'smart-light-operation-failed': ['log.homekit.lightOperationFailed', 'log.action.retryLight'],
+  'smart-light-reconciliation-expired': ['log.homekit.lightReconciliationExpired', 'log.action.checkPhysicalLight'],
+  'arming-capability-unavailable': ['log.homekit.armingCapabilityUnavailable', 'log.action.waitArming'],
+  'unsupported-arming-mode': ['log.homekit.unsupportedArmingMode', 'log.action.selectSupportedArmingMode'],
+  'arming-operation-failed': ['log.homekit.armingOperationFailed', 'log.action.retryArming'],
+  'arming-reconciliation-expired': ['log.homekit.armingReconciliationExpired', 'log.action.checkPhysicalArmingMode'],
+  'lock-capability-unavailable': ['log.homekit.lockCapabilityUnavailable', 'log.action.waitLock'],
+  'lock-operation-failed': ['log.homekit.lockOperationFailed', 'log.action.retryLock'],
+  'lock-reconciliation-expired': ['log.homekit.lockReconciliationExpired', 'log.action.checkPhysicalLock'],
+  'unusable-lock-announcement': ['log.homekit.unusableLockAnnouncement', 'log.action.checkPhysicalLock'],
+  'camera-live-session-failed': ['log.homekit.cameraLiveSessionFailed', 'log.action.retryLiveView'],
+  'camera-live-session-refused': ['log.homekit.cameraLiveSessionRefused', 'log.action.enableCamera'],
+  'camera-media-at-capacity': ['log.homekit.cameraMediaAtCapacity', 'log.action.reduceConcurrentMedia'],
+  'camera-recording-unavailable': ['log.homekit.cameraRecordingUnavailable', 'log.action.checkCameraRecording'],
+  'camera-recording-failed': ['log.homekit.cameraRecordingFailed', 'log.action.retryRecording'],
+  'camera-recording-refused': ['log.homekit.cameraRecordingRefused', 'log.action.enableCamera'],
+  'camera-controls-capability-unavailable': [
+    'log.homekit.cameraControlsCapabilityUnavailable',
+    'log.action.waitCameraControl',
+  ],
+  'camera-control-operation-failed': ['log.homekit.cameraControlOperationFailed', 'log.action.retryCameraControl'],
+  'invalid-camera-control-observation': [
+    'log.homekit.invalidCameraControlObservation',
+    'log.action.checkCameraControl',
+  ],
+  'camera-snapshot-unavailable': ['log.homekit.cameraSnapshotUnavailable', 'log.action.checkCameraSnapshot'],
+  'camera-snapshot-capability-unavailable': [
+    'log.homekit.cameraSnapshotCapabilityUnavailable',
+    'log.action.waitCameraSnapshot',
+  ],
+  'camera-streaming-capability-unavailable': [
+    'log.homekit.cameraStreamingCapabilityUnavailable',
+    'log.action.waitCameraLive',
+  ],
+  'camera-talkback-failed': ['log.homekit.cameraTalkbackFailed', 'log.action.retryTalkback'],
+  'camera-talkback-capability-unavailable': ['log.homekit.cameraTalkbackUnavailable', 'log.action.waitTalkback'],
 } as const;
 
 type HomeKitConditionCode = keyof typeof HOMEKIT_CONDITIONS;
@@ -2190,8 +2042,8 @@ function sanitizeStructuredEvent(message: string): Record<string, unknown> | und
       code: value.code,
       active: value.active,
       reason: value.reason,
-      summaryKey: homeKitDefinition!.summaryKey,
-      actionKey: homeKitDefinition!.actionKey,
+      summaryKey: homeKitDefinition![0],
+      actionKey: homeKitDefinition![1],
       ...(typeof value.capability === 'string' && CAPABILITIES.has(value.capability)
         ? { capability: value.capability }
         : {}),
@@ -2454,20 +2306,14 @@ function sanitizeLiveSessionTrace(value: Record<string, unknown>): Record<string
   };
 }
 
-/** A whole number within an inclusive range, or nothing — a negotiated geometry or frame rate a controller chose. */
-function integerWithin(value: unknown, min: number, max: number): number | undefined {
-  const integer = boundedInteger(value, max);
-  return integer !== undefined && integer >= min ? integer : undefined;
-}
-
 function sanitizeLiveVideoSelection(value: Record<string, unknown>): Record<string, unknown> | undefined {
   const operation = typeof value.operation === 'string' ? value.operation : undefined;
   const profile = typeof value.profile === 'string' ? value.profile : undefined;
   const codecLevel =
     typeof value.levelName === 'string' ? value.levelName : typeof value.level === 'string' ? value.level : undefined;
-  const width = integerWithin(value.width, MIN_LIVE_VIDEO_DIMENSION, MAX_LIVE_VIDEO_DIMENSION);
-  const height = integerWithin(value.height, MIN_LIVE_VIDEO_DIMENSION, MAX_LIVE_VIDEO_DIMENSION);
-  const fps = integerWithin(value.fps, MIN_LIVE_VIDEO_FRAME_RATE, MAX_LIVE_VIDEO_FRAME_RATE);
+  const width = boundedInteger(value.width, MAX_LIVE_VIDEO_DIMENSION, MIN_LIVE_VIDEO_DIMENSION);
+  const height = boundedInteger(value.height, MAX_LIVE_VIDEO_DIMENSION, MIN_LIVE_VIDEO_DIMENSION);
+  const fps = boundedInteger(value.fps, MAX_LIVE_VIDEO_FRAME_RATE, MIN_LIVE_VIDEO_FRAME_RATE);
   if (
     !operation ||
     !HOMEKIT_LIVE_VIDEO_OPERATIONS.has(operation) ||
@@ -2563,8 +2409,8 @@ export class DiagnosticConditions {
       condition.code,
       condition.active,
       condition.reason,
-      definition.summaryKey,
-      definition.actionKey,
+      definition[0],
+      definition[1],
       condition.active ? 'warn' : 'info',
       {
         ...(condition.capability === undefined ? {} : { capability: condition.capability }),

@@ -300,7 +300,7 @@ export class AccountOwnership {
       }
       return value as LeaseRecord;
     } catch (error) {
-      if (this.hasCode(error, 'ENOENT')) {
+      if (hasCode(error, 'ENOENT')) {
         return null;
       }
       throw error;
@@ -325,7 +325,7 @@ export class AccountOwnership {
       }
       return value as OperationRecord;
     } catch (error) {
-      if (this.hasCode(error, 'ENOENT')) {
+      if (hasCode(error, 'ENOENT')) {
         return null;
       }
       throw error;
@@ -338,9 +338,5 @@ export class AccountOwnership {
 
   private isValidProcessIdentity(value: unknown): value is string | undefined {
     return value === undefined || (typeof value === 'string' && /^(?:proc:\d+|ps:[0-9a-f]{64})$/.test(value));
-  }
-
-  private hasCode(error: unknown, code: string): boolean {
-    return hasCode(error, code);
   }
 }

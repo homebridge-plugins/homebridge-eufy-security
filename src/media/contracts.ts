@@ -11,7 +11,7 @@ export interface LiveMediaSource {
 
 export interface LiveMediaTarget {
   readonly port: number;
-  readonly srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80' | 'AES_CM_256_HMAC_SHA1_80';
+  readonly srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80';
   readonly srtpKey: Buffer;
   readonly srtpSalt: Buffer;
 }
@@ -185,6 +185,15 @@ export interface MediaSessionBudget {
 }
 
 /**
+ * What a caller holds a station's one live channel for.
+ *
+ * The order between them is this plugin's product policy and lives with the registry that applies it. The SDK
+ * reports only that a station serves one camera at a time; it does not rank the callers, because the ranking
+ * depends on what a host shows at once.
+ */
+export type StationLiveClaim = 'live' | 'recording' | 'snapshot';
+
+/**
  * Which stations are serving a live session, asked before opportunistic live work is started elsewhere on one.
  *
  * A HomeBase fans several cameras over one session and serves them one at a time, so a live burst opened on
@@ -195,18 +204,7 @@ export interface MediaSessionBudget {
  * declared and refuses what exceeds it. This answers where the work would land, and it refuses nothing: a
  * caller decides whether its own work is worth deferring.
  */
-/**
- * What a caller holds a station's one live channel for.
- *
- * The order between them is this plugin's product policy and lives with the registry that applies it. The SDK
- * reports only that a station serves one camera at a time; it does not rank the callers, because the ranking
- * depends on what a host shows at once.
- */
-export type StationLiveClaim = 'live' | 'recording' | 'snapshot';
-
 export interface StationLiveSessionRegistry {
-  /** The strongest claim currently held on `stationSn`, or `undefined` where nothing holds it. */
-  heldFor(stationSn: string): StationLiveClaim | undefined;
   /**
    * Whether `camera` may take `stationSn` for `claim` now.
    *
@@ -420,5 +418,4 @@ export interface SnapshotMediaAdapter {
   captureFromWarmLive?(scope: SnapshotAcquisitionScope, source: SnapshotMediaSource): Promise<void>;
   discard?(serial: string): void;
   reconcile?(serials: Iterable<string>): void;
-  discardAll?(): void;
 }

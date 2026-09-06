@@ -49,6 +49,7 @@ export class StationLiveSessions implements StationLiveSessionRegistry {
     return this.sessions.size;
   }
 
+  /** The strongest claim currently held on `stationSn`, or `undefined` where nothing holds it. */
   heldFor(stationSn: string): StationLiveClaim | undefined {
     let strongest: StationLiveClaim | undefined;
     for (const session of this.sessions.get(stationSn) ?? []) {

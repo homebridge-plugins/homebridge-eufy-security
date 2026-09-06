@@ -1,6 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
 import { ADAPTER_REGISTRY } from '../../src/homekit/adapters/registry.js';
@@ -17,22 +14,11 @@ describe('SDK/HAP coverage matrix', () => {
     for (const row of SDK_HAP_COVERAGE_MATRIX.rows) {
       expect(row.memberKind).toMatch(/^(read|event|persistent-operation|momentary-action)$/);
       expect(row.evidence.length, row.id).toBeGreaterThan(0);
-      expect(row.hapFit.length, row.id).toBeGreaterThan(0);
       expect(row).toHaveProperty('adapter');
       expect(row.representationStatus).toMatch(/^(represented|not-represented)$/);
       expect(row.controlStatus).toMatch(/^(controllable|not-controllable|not-represented)$/);
-      expect(row.identityEffect.length, row.id).toBeGreaterThan(0);
-      expect(row.diagnostics.length, row.id).toBeGreaterThan(0);
-      expect(row.verification.length, row.id).toBeGreaterThan(0);
-      for (const verification of row.verification) {
-        const file = resolve(verification.file);
-        expect(existsSync(file), `${row.id}: ${verification.file}`).toBe(true);
-        expect(readFileSync(file, 'utf8'), `${row.id}: ${verification.behavior}`).toContain(verification.behavior);
-      }
-
       if (row.disposition === 'required-adapter') {
         expect(row.adapter, row.id).toBeTruthy();
-        expect(row.verification.length, row.id).toBeGreaterThan(1);
         expect(row.representationStatus).toBe('represented');
       }
     }
@@ -48,7 +34,7 @@ describe('SDK/HAP coverage matrix', () => {
     expect(Object.keys(ADAPTER_REGISTRY).sort()).toEqual(represented.sort());
     expect(
       Object.values(ADAPTER_REGISTRY)
-        .flatMap((adapter) => adapter.coverage.map(({ id }) => id))
+        .flatMap((adapter) => adapter.coverage)
         .sort(),
     ).toEqual(
       SDK_HAP_COVERAGE_MATRIX.rows
@@ -68,7 +54,7 @@ describe('SDK/HAP coverage matrix', () => {
     expect(ADAPTER_REGISTRY['accessory.information']).toMatchObject({ role: 'supplemental' });
     expect(ADAPTER_REGISTRY['battery.status']).toMatchObject({ role: 'supplemental' });
     for (const adapter of Object.values(ADAPTER_REGISTRY)) {
-      const coverage = new Set(adapter.coverage.map(({ id }) => id));
+      const coverage = new Set(adapter.coverage);
       expect(adapter.requires.every(({ id }) => coverage.has(id))).toBe(true);
       expect(adapter.requiresAny?.every(({ id }) => coverage.has(id)) ?? true).toBe(true);
       if (adapter.role === 'primary-purpose') {
@@ -77,13 +63,7 @@ describe('SDK/HAP coverage matrix', () => {
     }
 
     const informationRows = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ capability }) => capability === 'info');
-    const representedInformation = informationRows.filter(({ adapter }) => adapter === 'accessory.information');
-    expect(representedInformation).toHaveLength(6);
-    expect(
-      representedInformation.every(({ verification }) =>
-        verification.some(({ file }) => file === 'test/contracts/homekit-reconciler.test.ts'),
-      ),
-    ).toBe(true);
+    expect(informationRows.filter(({ adapter }) => adapter === 'accessory.information')).toHaveLength(6);
 
     const representedBattery = SDK_HAP_COVERAGE_MATRIX.rows.filter(({ adapter }) => adapter === 'battery.status');
     expect(representedBattery.map(({ id }) => id).sort()).toEqual(

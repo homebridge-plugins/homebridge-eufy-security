@@ -153,15 +153,6 @@ export interface AttachedAdapter {
   detach?(reason?: AdapterDetachmentReason): void;
 }
 
-/** HomeKit policy and executable evidence owned by one represented SDK member. */
-export interface AdapterCoverage {
-  readonly id: string;
-  readonly hapFit: string;
-  readonly identityEffect: string;
-  readonly diagnostics: string;
-  readonly verification: readonly { file: string; behavior: string }[];
-}
-
 /** The complete interface presented by one self-hosted capability adapter. */
 export interface HomeKitAdapter {
   readonly key: string;
@@ -169,6 +160,7 @@ export interface HomeKitAdapter {
   readonly requiresProduct?: DeviceProductRequirement;
   readonly requires: readonly DeviceMemberRequirement[];
   readonly requiresAny?: readonly DeviceMemberRequirement[];
-  readonly coverage: readonly AdapterCoverage[];
+  /** The stable evidence ids of every SDK member this adapter represents. */
+  readonly coverage: readonly string[];
   attach(context: AdapterAttachmentContext): AttachedAdapter | undefined;
 }

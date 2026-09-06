@@ -1,4 +1,4 @@
-import { unreflectedMembers, type AudioActions, type CameraActions, type LightActions } from '@mega-yfue/eufy-sdk';
+import type { AudioActions, CameraActions, LightActions } from '@mega-yfue/eufy-sdk';
 
 import type { AdapterAttachmentContext, AdapterEventTrace, AttachedAdapter, HomeKitAdapter } from '../adapter.js';
 import {
@@ -8,6 +8,7 @@ import {
   observationReader,
   OPERATION_FAILED_CONDITION,
   type DeviceOperationState,
+  untrusted,
 } from '../device-control.js';
 
 export const CAMERA_CONTROLS_ADAPTER_KEY = 'camera.controls';
@@ -97,83 +98,9 @@ const CAMERA_ENABLED_WRITE = { id: 'camera.enabled.persistent-operation', kind: 
 const CAMERA_CONTROL_REQUIREMENTS = [...CAMERA_CONTROL_ROWS, CAMERA_ENABLED_WRITE] as const;
 type CameraControlRequirement = (typeof CAMERA_CONTROL_REQUIREMENTS)[number];
 
-/**
- * What the camera's power reading owes HomeKit beyond answering a read, and who proves it.
- *
- * Stated on the read rather than on an event row of its own because the SDK announces this member moving
- * through its one generic property announcement, which is not a capability event and so has no row in the
- * member surface: following it is part of how this read is presented, not a second member. Both camera bundles
- * follow it — this one keeps its switch honest, the streaming bundle ends a session watching a camera that just
- * went off — so the row names both, since a member two bundles present from cannot be evidenced by one.
- */
-const CAMERA_ENABLED_READ_COVERAGE = {
-  hapFit:
-    'The enablement observation is answered on demand and pushed when the SDK announces the property moved, so a camera switched off in the vendor app or by a physical switch is shown as off rather than left showing the old state; the camera streaming bundle follows the same announcement to end a session watching a camera that just went off, and falls back to a supervision read where nothing announced the change; it is deliberately published as no HomeKit state on the operating mode service, because Apple Home stops writing the operating mode of a camera reporting itself manually disabled and that made a recoverable failure permanent',
-  identityEffect:
-    "Presented on the switch under the stable semantic key camera.enabled, and for session lifetime on the recording controller's own operating mode service where HomeKit Secure Video created one, otherwise one service under the stable semantic key camera.operating-mode, so an accessory carries exactly one",
-  diagnostics:
-    'An absent, non-boolean, faulting, or SDK-declined enablement reading withdraws no camera and refuses no session; each announced change records one identity-free trace naming whether the observation answered and whether a write or the generic announcement carried it',
-  verification: [
-    {
-      file: 'test/contracts/camera-controls-adapter.test.ts',
-      behavior: 'announces the camera power to HomeKit when something else changed it',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'withdraws the disabled state an earlier version published, and the record it kept for it',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'ends the session from the supervision read when nothing announced the change',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'follows the enablement change event rather than a timer',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'ends an active session on the enablement change event instead of waiting for the next read',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'presents no operating mode state without an exactly evidenced boolean enablement observation',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'declines an enablement observation the SDK names as unreflected',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'withdraws a published disabled state when a reconciliation leaves no observation to act on',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'presents on an operating mode service the accessory restored from a run that configured recording',
-    },
-    {
-      file: 'test/contracts/camera-streaming-adapter.test.ts',
-      behavior: 'withdraws a stale operating mode service before the recording controller attaches its own',
-    },
-  ],
-} as const;
 const CAMERA_CONTROL_OWNERS = new WeakMap<object, symbol>();
 
 const CAMERA_CONTROL_STATES = new WeakMap<object, DeviceOperationState>();
-
-/**
- * Whether the SDK declines to stand behind one of this camera's readings on this device family.
- *
- * A member named there reports a value that does not track its own setter, so writing it would leave HomeKit
- * unable to tell whether the write landed. The statement is read off the bound capability surface itself, so a
- * surface that answers that read by throwing has stated nothing this plugin may rely on and is declined too.
- */
-function declined(camera: CameraActions, member: string): boolean {
-  try {
-    return unreflectedMembers(camera).includes(member);
-  } catch {
-    return true;
-  }
-}
 
 /** The typed SDK camera, physical-light, and audio accessors consumed by HomeKit. */
 export interface CameraControlsSdkDevice {
@@ -182,40 +109,12 @@ export interface CameraControlsSdkDevice {
   audio?: () => AudioActions | undefined;
 }
 
-/** The shared policy every camera-control row states, which the enablement read then specialises. */
-const CAMERA_CONTROL_COVERAGE_DEFAULTS = {
-  hapFit: 'Official camera, light, microphone, and speaker services expose only matching SDK semantics',
-  identityEffect: 'Primary-purpose camera controls use stable service-specific semantic keys',
-  diagnostics: 'Missing or malformed typed members fail closed without shape-driven fallback mappings',
-  verification: [
-    {
-      file: 'test/contracts/camera-controls-adapter.test.ts',
-      behavior: 'keeps the physical camera light distinct from the enabled state and from mute',
-    },
-    {
-      file: 'test/contracts/homekit-reconciler.test.ts',
-      behavior: 'admits camera controls only from exact enabled-member evidence',
-    },
-  ],
-} as const;
-
 /** Complete HomeKit policy for the independent controls attached to an evidenced camera. */
 export const CAMERA_CONTROLS_ADAPTER = {
   key: CAMERA_CONTROLS_ADAPTER_KEY,
   role: 'primary-purpose',
   requires: [CAMERA_ENABLED_READ],
-  coverage: CAMERA_CONTROL_ROWS.map(({ id }) =>
-    id === CAMERA_ENABLED_READ.id
-      ? {
-          id,
-          ...CAMERA_ENABLED_READ_COVERAGE,
-          verification: [
-            ...CAMERA_CONTROL_COVERAGE_DEFAULTS.verification,
-            ...CAMERA_ENABLED_READ_COVERAGE.verification,
-          ],
-        }
-      : { id, ...CAMERA_CONTROL_COVERAGE_DEFAULTS },
-  ),
+  coverage: CAMERA_CONTROL_ROWS.map(({ id }) => id),
   attach: attachCameraControls,
 } as const satisfies HomeKitAdapter;
 
@@ -365,7 +264,7 @@ function attachCameraControls(context: AdapterAttachmentContext): AttachedAdapte
   const enablementWritable =
     evidenceState(CAMERA_ENABLED_WRITE) === 'valid' &&
     typeof camera.setEnabled === 'function' &&
-    !declined(camera, 'enabled');
+    !untrusted(camera, 'enabled');
   if (enablementWritable) {
     unavailable('camera', 'enabled', false, 'recovered');
   }

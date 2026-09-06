@@ -1,4 +1,9 @@
-import { CapabilityNotSupportedError, type AnyDeviceEvent } from '@mega-yfue/eufy-sdk';
+import {
+  CapabilityNotSupportedError,
+  unreflectedMembers,
+  type AnyDeviceEvent,
+  type CameraActions,
+} from '@mega-yfue/eufy-sdk';
 
 import type { AdapterAttachmentContext } from './adapter.js';
 
@@ -228,4 +233,20 @@ export function observationReader<T extends 'boolean' | 'number'>(
     });
     return value as T extends 'boolean' ? boolean : number;
   };
+}
+
+/**
+ * Whether the SDK declines to stand behind one of this camera's readings on this device family.
+ *
+ * A member named there reports a value that does not track its own setter, so it may neither be presented nor
+ * written: publishing it would state something the SDK does not, and writing it would leave HomeKit unable to
+ * tell whether the write landed. The statement is read off the bound capability surface itself, so a surface
+ * that answers that read by throwing has stated nothing this plugin may rely on and is declined too.
+ */
+export function untrusted(camera: CameraActions, member: string): boolean {
+  try {
+    return unreflectedMembers(camera).includes(member);
+  } catch {
+    return true;
+  }
 }
