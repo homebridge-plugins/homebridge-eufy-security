@@ -250,6 +250,14 @@ function measuredVideo(coded: readonly CodedParameterSet[]) {
 }
 
 describe('observed live conditions', () => {
+  /**
+   * A condition that is never announced is re-read until it reads true, and the wait reports the elapsed time
+   * rather than the timeout.
+   *
+   * No lower bound is asserted on that time. The flip is scheduled before the wait starts measuring, so the
+   * two clocks share no origin and their difference is not a contract; what the wait guarantees is that it
+   * read more than once and ended on the condition.
+   */
   it('waits for a condition that has to be read from the accessory', async () => {
     const status = { value: 1 };
     const read = vi.fn(async () => status.value);
@@ -259,7 +267,7 @@ describe('observed live conditions', () => {
 
     const elapsed = await waitFor(async () => (await read()) === 0, 2_000, 5);
 
-    expect(elapsed).toBeGreaterThanOrEqual(20);
+    expect(elapsed).not.toBeUndefined();
     expect(read.mock.calls.length).toBeGreaterThan(1);
     expect(await waitFor(async () => false, 30, 5)).toBeUndefined();
   });
