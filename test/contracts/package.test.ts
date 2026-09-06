@@ -44,6 +44,7 @@ async function renderUi(
   }
 
   const shell = { dataset: {} as Record<string, string>, lang: '' };
+  const documentElement = { lang: '' };
   const masthead = { hidden: false };
   const firstSetup = interactiveElement({ hidden: true });
   const setupContent = { hidden: true };
@@ -73,6 +74,7 @@ async function renderUi(
   const legacySettings = { textContent: '' };
   const legacyAcknowledge = interactiveElement({});
   const menuDiagnostics = interactiveElement({});
+  const mastheadDiagnostics = interactiveElement({});
   const menuAdvanced = interactiveElement({});
   const diagnosticsPanel = { hidden: true, scrollIntoView() {} };
   const diagnosticsClose = interactiveElement({ focus() {} });
@@ -234,6 +236,7 @@ async function renderUi(
 
   runInNewContext(script, {
     document: {
+      documentElement,
       querySelector(selector: string) {
         return {
           '[data-first-setup]': firstSetup,
@@ -266,6 +269,7 @@ async function renderUi(
           '[data-legacy-settings]': legacySettings,
           '[data-legacy-acknowledge]': legacyAcknowledge,
           '[data-menu-diagnostics]': menuDiagnostics,
+          '[data-masthead-diagnostics]': mastheadDiagnostics,
           '[data-menu-advanced]': menuAdvanced,
           '[data-diagnostics]': diagnosticsPanel,
           '[data-diagnostics-close]': diagnosticsClose,
@@ -620,11 +624,11 @@ describe('packed plugin', () => {
       '@mega-yfue/eufy-sdk',
       'ffmpeg-for-homebridge',
     ]);
-    expect(packageJson.dependencies?.['@mega-yfue/eufy-sdk']).toBe('0.1.0-beta.41');
+    expect(packageJson.dependencies?.['@mega-yfue/eufy-sdk']).toBe('0.1.0-beta.53');
     expect(sdk).toEqual(
       expect.objectContaining({
-        version: '0.1.0-beta.41',
-        integrity: 'sha512-r8c8s4tIkkdUwbT07zLQdi5WebbC0/uUoCELKBW50gLnf/vBxk+qLlobJXUFw622fv/nkUnHEDwlOP+yituvmg==',
+        version: '0.1.0-beta.53',
+        integrity: 'sha512-7dsi8d9pS3qgqY5y2X+AZ/GRJFccTffdz/k/grarMxAusSodoiyBYzQHal/hNT3pHc0/olJdrpuyCYycaPKeLw==',
       }),
     );
     expect(generatedVersion).toBe(`export const LIB_VERSION = ${JSON.stringify(packageJson.version)};\n`);
@@ -675,9 +679,9 @@ describe('packed plugin', () => {
       const translationKeys = [
         ...new Set([...document.matchAll(/data-i18n="([^"]+)"/g)].map((match) => match[1])),
       ].sort();
-      const translatedLabelKeys = [...document.matchAll(/data-i18n-aria-label="([^"]+)"/g)]
-        .map((match) => match[1])
-        .sort();
+      const translatedLabelKeys = [
+        ...new Set([...document.matchAll(/data-i18n-aria-label="([^"]+)"/g)].map((match) => match[1])),
+      ].sort();
       const uiFiles = result.files
         .map((file) => file.path)
         .filter((path) => path.startsWith('homebridge-ui/'))
@@ -1127,9 +1131,7 @@ describe('packed plugin', () => {
 
       await menuUi.menuDiagnostics.dispatch('click');
       expect(menuUi).toMatchObject({
-        dashboardState: { hidden: true },
-        dashboardSummary: { hidden: true },
-        deviceGroups: { hidden: true },
+        dashboard: { hidden: true },
         diagnosticsPanel: { hidden: false },
         diagnosticsIssue: { hidden: true },
         diagnosticsResult: { hidden: true },
@@ -1338,7 +1340,7 @@ describe('packed plugin', () => {
         body: { event: 'issue-observed' },
       });
       expect(dashboardBackgroundUi).toMatchObject({
-        dashboard: { hidden: false },
+        dashboard: { hidden: true },
         diagnosticsPanel: { hidden: false },
         diagnosticsBackgroundAction: { disabled: false, hidden: true },
         diagnosticsResult: { hidden: false },
