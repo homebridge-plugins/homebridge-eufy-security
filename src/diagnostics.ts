@@ -1685,6 +1685,7 @@ const REASONS = new Set([
   'source-acquisition-timeout',
   'source-audio-only',
   'source-error',
+  'source-input-unstable',
   'source-stopped',
   'source-unavailable',
   'stored-download-failed',

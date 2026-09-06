@@ -44,6 +44,18 @@ function canCode(running: LiveVideoConfig, announced: LiveVideoConfig): boolean 
   return running.codec === announced.codec;
 }
 
+/**
+ * How many times one live session replaces its adaptation because the source's input changed, before it
+ * fails the session instead.
+ *
+ * A replacement costs a process, FFmpeg's stream analysis, the encoder's state, and the wait for another
+ * source keyframe, withholding every access unit in between. A source alternating between two inputs pays
+ * that at every keyframe and produces nothing watchable, so this bound sits above the changes a source
+ * settling on one input makes and below an alternation. Only a changed codec reaches it: {@link canCode}
+ * absorbs a changed geometry.
+ */
+const MAX_SOURCE_INPUT_REPLACEMENTS = 3;
+
 const INITIAL_RTCP_GRACE_MS = 15_000;
 const SOURCE_ACQUISITION_DEADLINE_MS = 10_000;
 const RETURN_AUDIO_BIND_GRACE_MS = 250;
@@ -273,6 +285,8 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
      */
     let videoConfig: LiveVideoConfig | undefined;
     let adaptationConfig: LiveVideoConfig | undefined;
+    /** How many adaptation replacements the source's own changes have asked this session for. */
+    let sourceInputReplacements = 0;
     let audioInputCodec: LiveAudioFrame['codec'] | undefined;
     let rtcpDeadline: ReturnType<typeof setTimeout> | undefined;
     let initialRtcpGrace: ReturnType<typeof setTimeout> | undefined;
@@ -488,6 +502,9 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
      * only the output, so the current process keeps coding and keeps the previous selection on the wire until
      * that same keyframe arrives; a controller reconfigures precisely when it is unhappy with what it
      * receives, and the source is then often the very thing not producing keyframes.
+     *
+     * Source-driven replacement is bounded by {@link MAX_SOURCE_INPUT_REPLACEMENTS}, past which the session
+     * fails rather than spawn again. A controller-driven one is not: the controller bounds how often it asks.
      */
     const writeVideo = (frame: LiveVideoFrame): void => {
       if (stopped || !negotiated || !videoConfig) {
@@ -504,6 +521,13 @@ export class FfmpegLiveMedia implements LiveMediaAdapter {
         return;
       }
       if (videoProcess && frame.keyframe && (inputChanged || reconfigurationPending)) {
+        if (inputChanged) {
+          sourceInputReplacements += 1;
+        }
+        if (sourceInputReplacements > MAX_SOURCE_INPUT_REPLACEMENTS) {
+          failVideo('source-input-unstable');
+          return;
+        }
         reconfigurationPending = false;
         stopProcess(videoProcess);
         videoProcess = undefined;

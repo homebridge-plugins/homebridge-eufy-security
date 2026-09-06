@@ -576,8 +576,16 @@ two places that can hold each half of it.
 The hermetic contract holds the half that needs no encoder. No adapted input — video of either codec, ADTS
 audio, or raw A-law — may carry an option that discards what it analysed or fabricates a timeline, and every
 one bounds its analysis window; and every access unit a session accepts reaches the process that codes it,
-byte for byte and in order. Access units between a source geometry change and the keyframe a replacement
+byte for byte and in order. Access units between a source codec change and the keyframe a replacement
 process can start from are the only ones a session may withhold, because no running process can code them.
+
+A replacement is bounded per session. It costs a process, an analysis window, the encoder's state and the
+wait for another keyframe, so a source alternating between two inputs would ask for one at every keyframe and
+serve nothing while reporting `streaming` from each short-lived process in turn. Three replacements is above
+what a source settling on one input asks for and below an alternation, and the session fails as
+`source-input-unstable` beyond it, which reports the condition and lets the controller start a fresh session
+against a source that may since have settled. Only a codec change reaches the bound: a geometry change is
+absorbed by the running adaptation.
 
 The other half needs a real encoder, so `scripts/live-adaptation-delivery-check.mjs` measures it. It is an
 accounting identity rather than an equality: the negotiated output is constant rate, so a source delivering

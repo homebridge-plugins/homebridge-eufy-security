@@ -882,11 +882,6 @@ describe('live media adaptation', () => {
   );
 
   /**
-   * A source that changes geometry cannot be coded by the running process, so the access units between the
-   * change and the keyframe a replacement can start from are the only ones a session may withhold. Every
-   * other unit still reaches an adaptation, and each process receives only the units it can code.
-   */
-  /**
    * A camera ramps its source up and down a resolution ladder, and it does so in the first seconds of a
    * session: measured on the fleet, a mains-powered camera announced four geometries within 3.9 s of the
    * pull opening, having delivered a decodable keyframe at 525 ms. Replacing the adaptation on each one cost
@@ -1008,14 +1003,6 @@ describe('live media adaptation', () => {
   });
 
   /**
-   * A configuration that returns to the one the running adaptation was opened for leaves nothing to replace,
-   * however many announcements it took to get back. Rebuilding would spend an encoder lifetime, and discard
-   * the frames in flight, to arrive at the encoder already running.
-   *
-   * The access units announced under the other configuration are still withheld, because that is media the
-   * running process cannot code — not rebuilding is separate from feeding it anything.
-   */
-  /**
    * A codec that moves away and back before any keyframe leaves the running adaptation still able to code
    * what follows, so it is kept. Counting announcements rather than comparing them replaced it here, for a
    * codec it was already opened for.
@@ -1045,6 +1032,42 @@ describe('live media adaptation', () => {
       Buffer.concat([first, ...resumed].map(({ data }) => data)),
     );
     session.prepared.stop();
+  });
+
+  /**
+   * A session replaces its adaptation for input the running process cannot code at most three times, and
+   * fails as `source-input-unstable` rather than replace it a fourth. A source alternating between two inputs
+   * asks for a replacement at every keyframe, which produces no watchable output and reports `streaming`
+   * throughout, because each short-lived process reports its own progress.
+   *
+   * Only the source's own changes count against the bound. A HomeKit reconfiguration also replaces the
+   * process, and the controller bounds how often it asks.
+   */
+  it('bounds how often one session replaces its adaptation for changed source input', async () => {
+    const session = await liveSession();
+    await session.start();
+    const alternating = (index: number): LiveVideoFrame =>
+      index % 2 === 0
+        ? { ...KEYFRAME, data: Buffer.from([0, 0, 0, 1, 0x65, index]) }
+        : { ...KEYFRAME, codec: 'h265' as const, data: Buffer.from([0, 0, 0, 1, 0x26, index]) };
+
+    session.stream.video(alternating(0));
+    session.children[0]!.stderr.push('progress=continue\n');
+    await settle();
+    for (let index = 1; index <= 4; index += 1) {
+      session.stream.video(alternating(index));
+    }
+    await settle();
+
+    expect(session.children).toHaveLength(4);
+    expect(session.outcomes).toEqual([
+      { outcome: 'streaming' },
+      { outcome: 'failed', reason: 'source-input-unstable', stage: 'first-adapted-output' },
+    ]);
+    expect(session.onVideoFailure).toHaveBeenCalledOnce();
+    expect(session.stream.stop).toHaveBeenCalledOnce();
+    expect(session.released).toHaveBeenCalledOnce();
+    expect(session.children.at(-1)!.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
   it('transcodes H.264 when passthrough compliance cannot be proven from SDK frames', async () => {

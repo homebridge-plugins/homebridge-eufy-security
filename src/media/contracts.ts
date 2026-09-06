@@ -56,6 +56,10 @@ export interface NegotiatedLiveMedia {
  * producing output names an encoder, argument or format the resolved build does not have; one that exited
  * mid-session names a run that was working and stopped. `adaptation-failed` is what remains when none of
  * those describes it, which is the output pipe failing while the process itself is still reported as alive.
+ *
+ * `source-input-unstable` is the source changing what it delivers more often than one session will follow it.
+ * It names the source rather than the adaptation because every process involved worked; what failed is that
+ * no single one of them could code the stream.
  */
 export type LiveSessionFailure =
   /**
@@ -71,6 +75,7 @@ export type LiveSessionFailure =
   | 'source-audio-only'
   | 'source-error'
   | 'source-stopped'
+  | 'source-input-unstable'
   | 'rtcp-timeout'
   | 'adaptation-spawn-failed'
   | 'adaptation-exited-before-output'
