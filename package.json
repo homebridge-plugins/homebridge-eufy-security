@@ -53,7 +53,7 @@
     "ffmpeg-for-homebridge": "2.2.2"
   },
   "devDependencies": {
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "homebridge": "^2.4.0",
     "prettier": "^3.9.6",
     "rimraf": "^6.1.3",
