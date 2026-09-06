@@ -53,5 +53,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: npm ci --ignore-scripts
 
+      # `--ignore-scripts` above is what keeps an arbitrary dependency from running code on this runner, but
+      # `ffmpeg-for-homebridge` carries no binary in its tarball: its install script downloads the one the
+      # plugin ships and hands to every media session. Without this the gate runs against a path that names a
+      # file which is not there, so the one suite that reads a real banner off the shipped binary cannot.
+      - name: Fetch the bundled FFmpeg binary
+        run: npm rebuild ffmpeg-for-homebridge
+
       - name: Verify
         run: npm run verify
