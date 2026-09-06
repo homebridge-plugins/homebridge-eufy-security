@@ -490,6 +490,39 @@ describe('guided diagnostics session', () => {
     }
   });
 
+  /**
+   * The reproduction markers on disk are the current support case's own, so no earlier case's interval
+   * survives the case it belonged to.
+   */
+  it('retains reproduction markers for the current support case only', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
+    let now = Date.parse('2026-08-16T08:00:00.000Z');
+    const diagnostics = new GuidedDiagnostics(root, () => now);
+    const markers = (): string[] =>
+      readFileSync(join(root, 'diagnostics', 'reproduction-markers.jsonl'), 'utf8')
+        .trim()
+        .split('\n');
+
+    try {
+      const first = await diagnostics.authorize('control-state', 'now');
+      await diagnostics.startReproduction();
+      now += 5_000;
+      await diagnostics.endReproduction();
+
+      expect(markers()).toHaveLength(2);
+      expect(markers().every((line) => line.includes(first.supportCaseId!))).toBe(true);
+
+      now += 5_000;
+      const second = await diagnostics.startReproduction();
+
+      expect(second.supportCaseId).not.toBe(first.supportCaseId);
+      expect(markers()).toEqual([expect.stringContaining(second.supportCaseId!)]);
+      expect(markers().join('\n')).not.toContain(first.supportCaseId!);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it('marks a bounded reproduction and reports exact missing evidence with issue context', async () => {
     const root = mkdtempSync(join(tmpdir(), 'homebridge-eufy-guided-'));
     let now = Date.parse('2026-08-16T08:00:00.000Z');

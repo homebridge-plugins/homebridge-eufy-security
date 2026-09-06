@@ -139,7 +139,10 @@ The completeness a session reports before export is that same collection read on
 acts on and the manifest a maintainer receives cannot disagree about which class is missing. A second
 per-session record of what was observed would be both a rival answer and durable state outliving the
 session that produced it, so there is none: writing a session drops the whole `diagnostics/evidence`
-tree, and retention applies to the rotating log and to the reviewed snapshot one export consumes.
+tree, and recording a reproduction edge keeps the markers file to the current support case. What remains
+under the storage root is therefore one rotating log, one session, and one case's interval — retention
+applies to those and to the reviewed snapshot one export consumes, and nothing accumulates per support
+case for the life of the install.
 
 ### FFmpeg attribution
 

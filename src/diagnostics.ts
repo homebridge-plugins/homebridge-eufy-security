@@ -1066,56 +1066,47 @@ export class GuidedDiagnostics {
   }
 
   /**
-   * Replaces the persisted session atomically, and drops the `diagnostics/evidence` tree with it.
+   * Replaces the persisted session, and drops the `diagnostics/evidence` tree with it.
    *
    * Nothing reads that tree: a session's completeness is one read of the evidence an archive would carry, so
    * the only diagnostics state that outlives a session is the rotating log and the persisted session itself.
    */
   private async writeSession(session: PersistedDiagnosticsSession): Promise<void> {
     const directory = join(this.storageRoot, DIAGNOSTICS_DIRECTORY);
-    const path = diagnosticsSessionPath(this.storageRoot);
-    const temporary = `${path}.${randomUUID()}.tmp`;
     await mkdir(directory, { mode: 0o700, recursive: true });
     await chmod(directory, 0o700);
     await rm(join(directory, 'evidence'), { force: true, recursive: true });
-    await writeFile(temporary, `${JSON.stringify(session)}\n`, { mode: 0o600 });
+    await this.replaceOwnedFile(diagnosticsSessionPath(this.storageRoot), `${JSON.stringify(session)}\n`);
+  }
+
+  /** Replaces one file this module owns in a single step, readable only by the account Homebridge runs as. */
+  private async replaceOwnedFile(path: string, content: string): Promise<void> {
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    await writeFile(temporary, content, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, path);
   }
 
+  /**
+   * Records one bounded reproduction edge, keeping the markers file to the current support case.
+   *
+   * The interval a maintainer receives is the one being reproduced now, so an earlier case's markers are
+   * dropped here rather than accumulating one durable record per support session for the life of the install.
+   * Recording the same edge twice is a no-op, which is what lets a restart re-record an interval it already had.
+   */
   private async ensureMarker(
     session: PersistedDiagnosticsSession,
     event: 'reproduction-started' | 'reproduction-ended',
     timestamp: string,
   ): Promise<void> {
     const directory = join(this.storageRoot, DIAGNOSTICS_DIRECTORY);
-    const path = join(directory, REPRODUCTION_MARKERS_FILE);
     await mkdir(directory, { mode: 0o700, recursive: true });
-    try {
-      const markers = (await readFile(path, 'utf8'))
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as Partial<{ supportCaseId: string; event: string; timestamp: string }>);
-      if (
-        markers.some(
-          (marker) =>
-            marker.supportCaseId === session.supportCaseId && marker.event === event && marker.timestamp === timestamp,
-        )
-      ) {
-        return;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const retained = await this.readReproductionMarkers(session.supportCaseId);
+    const marker = `${JSON.stringify({ version: 1, supportCaseId: session.supportCaseId, event, timestamp })}\n`;
+    if (retained.includes(marker)) {
+      return;
     }
-    await appendFile(
-      path,
-      `${JSON.stringify({ version: 1, supportCaseId: session.supportCaseId, event, timestamp })}\n`,
-      {
-        encoding: 'utf8',
-        mode: 0o600,
-      },
-    );
-    await chmod(path, 0o600);
+    await this.replaceOwnedFile(join(directory, REPRODUCTION_MARKERS_FILE), `${retained}${marker}`);
   }
 }
 
