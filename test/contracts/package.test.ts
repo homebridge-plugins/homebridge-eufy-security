@@ -640,7 +640,7 @@ describe('packed plugin', () => {
       const sourceModules = readdirSync(join(repository, 'src'), { recursive: true })
         .map((entry) => entry.toString())
         .filter((path) => path.endsWith('.ts'))
-        .map((path) => `dist/${path.replace(/\.ts$/, '.js')}`)
+        .flatMap((path) => [`dist/${path.replace(/\.ts$/, '.js')}`, `dist/${path.replace(/\.ts$/, '.js.map')}`])
         .sort();
 
       expect([...new Set(paths.map((path) => path.split('/')[0]))].sort(), 'nothing new appears at the root').toEqual([
@@ -658,18 +658,21 @@ describe('packed plugin', () => {
         'media',
         'package.json',
       ]);
-      expect(compiledModules, 'every module compiles into the package and nothing else does').toEqual(sourceModules);
+      expect(
+        compiledModules,
+        'every module compiles into the package with the map its stack traces resolve through, and nothing else does',
+      ).toEqual(sourceModules);
       expect(
         paths.filter((path) => /(?:^|\/)(?:src|test|scripts|docs|prototypes?|fixtures?|captures?)\//.test(`/${path}`)),
         'no source, specification, fixture, prototype, or capture directory ships',
       ).toEqual([]);
       expect(
         paths.filter((path) =>
-          /\.(?:map|d\.ts|ts|tsx|tsbuildinfo|xcf|log|mp4|mkv|h264|h265|opus|aac|eufysupport\.gz)$/.test(path),
+          /\.(?:d\.ts|ts|tsx|tsbuildinfo|xcf|log|mp4|mkv|h264|h265|opus|aac|eufysupport\.gz)$/.test(path),
         ),
         'no build byproduct, editable master, or recorded media ships',
       ).toEqual([]);
-      expect(result.entryCount, 'the package holds a bounded number of files').toBeLessThanOrEqual(240);
+      expect(result.entryCount, 'the package holds a bounded number of files').toBeLessThanOrEqual(280);
       expect(result.unpackedSize, 'the package holds a bounded number of bytes').toBeLessThanOrEqual(14_000_000);
     } finally {
       rmSync(directory, { force: true, recursive: true });
